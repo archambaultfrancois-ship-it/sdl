@@ -2,6 +2,8 @@
 #define SDL_TYPE_PRIVATE_H
 
 #include "type_engine.h"
+#include "type_descriptors.h"
+#include <stdbool.h>
 
 const SdlTypeDesc *sdl_lookup_type(const char *name);
 const SdlTypeDesc *sdl_lookup_hash(uint32_t hash);
