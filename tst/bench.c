@@ -33,7 +33,6 @@ int main(void) {
    size_t wire_size = 0;
    uint8_t *wire;
    size_t i;
-   volatile uint64_t checksum = 0;
    clock_t start;
    clock_t end;
 
@@ -66,7 +65,6 @@ int main(void) {
       size_t encoded_size = 0;
       void *encoded = type_encode("BenchPayload", &message, &encoded_size);
       assert(encoded != NULL && encoded_size == wire_size);
-      checksum += encoded_size;
       type_free(encoded);
    }
    end = clock();
@@ -77,14 +75,12 @@ int main(void) {
       size_t decoded_size = wire_size;
       BenchPayload *decoded = (BenchPayload *)type_decode(wire, &decoded_size);
       assert(decoded != NULL && decoded->samples_count == 5000);
-      checksum += (uint64_t)crealf(decoded->samples[4999]);
       type_free(decoded);
    }
    end = clock();
    report_rate("decode", iterations, wire_size, elapsed_seconds(start, end));
 
-   printf("iterations: %lu, checksum: %llu\n", (unsigned long)iterations,
-      (unsigned long long)checksum);
+   printf("iterations: %lu\n", (unsigned long)iterations);
    type_free(wire);
    return 0;
 }

@@ -31,6 +31,7 @@ fn main() {
    let start = Instant::now();
    for _ in 0..iterations {
       let encoded = encode(black_box(&message)).expect("encode message");
+      assert_eq!(encoded.len(), wire.len());
       black_box(encoded);
    }
    report_rate("encode", iterations, wire.len(), start.elapsed().as_secs_f64());
