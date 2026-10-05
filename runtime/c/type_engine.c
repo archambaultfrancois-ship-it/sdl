@@ -67,6 +67,7 @@ static size_t encoded_value_size(const SdlTypeDesc *type, const void *value) {
       return n;
    }
    if (type->kind == SDL_TYPE_STRUCT) return encoded_struct_size(type, value);
+   if (type->kind == SDL_TYPE_ARRAY) return sdl_fixed_wire_size(type);
    if (type->kind == SDL_TYPE_ENUM) return 4;
    if (type->kind == SDL_TYPE_COMPLEX32) return 8;
    if (type->kind == SDL_TYPE_COMPLEX64) return 16;

@@ -30,6 +30,12 @@ class RustBackend:
       }
       return mapping.get(name, c_identifier(name))
 
+   def _rust_field_type(self, field):
+      value_type = self._rust_type(field.type_name)
+      for dimension in reversed(field.array_dimensions):
+         value_type = '[' + value_type + '; ' + str(dimension) + ']'
+      return value_type
+
    def generate(self):
       used_types = {field.type_name for message in self.schema.messages.values()
          for field in message.fields}
@@ -40,7 +46,7 @@ class RustBackend:
          for name in self.schema.message_order)
       if has_packed_fields:
          imports.extend(['read_packed_field', 'write_packed_field'])
-      if has_packed_fields or has_fixed_messages or (self.schema.enums and not has_packed_fields):
+      if has_fixed_messages or self.schema.enums:
          imports.append('FixedWire')
       if 'c32' in used_types:
          imports.append('Complex32')
@@ -91,7 +97,7 @@ class RustBackend:
          output.append('pub struct ' + rust_name + ' {\n')
          for field in fields:
             rust_field = c_identifier(field.name)
-            value_type = self._rust_type(field.type_name)
+            value_type = self._rust_field_type(field)
             if field.modifier == 'optional':
                value_type = 'Option<' + value_type + '>'
             elif field.modifier in ('repeated', 'packed'):
@@ -130,7 +136,7 @@ class RustBackend:
          output.append('      match id {\n')
          for field in fields:
             rust_field = c_identifier(field.name)
-            value_type = self._rust_type(field.type_name)
+            value_type = self._rust_field_type(field)
             if field.modifier == 'optional':
                decoded = 'Some(<' + value_type + ' as WireValue>::decode_payload(payload)?)'
             elif field.modifier == 'packed':
@@ -163,7 +169,7 @@ class RustBackend:
             output.append('      if payload.len() != Self::WIRE_SIZE { return Err(CodecError::TypeMismatch); }\n')
             for index, field in enumerate(fields):
                rust_field = c_identifier(field.name)
-               value_type = self._rust_type(field.type_name)
+               value_type = self._rust_field_type(field)
                output.append('      let ' + rust_field + ' = <' + value_type +
                   ' as FixedWire>::decode_fixed(&payload[' +
                   ('0' if index == 0 else 'offset') + '..' +

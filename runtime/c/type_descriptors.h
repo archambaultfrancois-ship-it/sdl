@@ -46,6 +46,7 @@ struct SdlTypeDesc {
       } structure;
       struct {
          const SdlTypeDesc *element;
+         size_t count;
       } array;
    } detail;
 };

@@ -13,3 +13,17 @@ message RootPayload {
    2: packed FixedItem fixed_array;
    3: repeated VarItem var_array;
 }
+
+message FixedVector {
+   1: required fl32[2] coords;
+   2: required int16[2][3] grid;
+}
+
+message FixedRow {
+   1: required FixedVector[2] vectors;
+}
+
+message FixedBoard {
+   1: required FixedRow[2] rows;
+   2: packed FixedRow packed_rows;
+}

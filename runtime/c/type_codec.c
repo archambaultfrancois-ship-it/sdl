@@ -41,6 +41,11 @@ static size_t fixed_wire_size_depth(const SdlTypeDesc *type,
    size_t size;
    size_t i;
    if (depth >= 64) return 0;
+   if (type->kind == SDL_TYPE_STRUCT || type->kind == SDL_TYPE_ARRAY) {
+      for (i = 0; i < depth; ++i)
+         if (active[i] == type) return 0;
+      active[depth] = type;
+   }
    switch (type->kind) {
       case SDL_TYPE_BOOL:
       case SDL_TYPE_INT8: return 1;
@@ -53,11 +58,13 @@ static size_t fixed_wire_size_depth(const SdlTypeDesc *type,
       case SDL_TYPE_COMPLEX64: return 16;
       case SDL_TYPE_ENUM: return 4;
       case SDL_TYPE_STRUCT: break;
+      case SDL_TYPE_ARRAY:
+         size = fixed_wire_size_depth(type->detail.array.element, active, depth + 1);
+         if (size == 0 || type->detail.array.count > SIZE_MAX / size)
+            return 0;
+         return size * type->detail.array.count;
       default: return 0;
    }
-   for (i = 0; i < depth; ++i)
-      if (active[i] == type) return 0;
-   active[depth] = type;
    size = 0;
    for (i = 0; i < type->detail.structure.field_count; ++i) {
       const SdlFieldDesc *field = &type->detail.structure.fields[i];
@@ -91,6 +98,16 @@ bool sdl_value_encode_fixed(const SdlTypeDesc *type, const void *value,
                capacity - offset)) return false;
          offset += field_size;
       }
+      return true;
+   }
+   if (type->kind == SDL_TYPE_ARRAY) {
+      const SdlTypeDesc *element = type->detail.array.element;
+      size_t element_wire_size = sdl_fixed_wire_size(element);
+      for (i = 0; i < type->detail.array.count; ++i)
+         if (!sdl_value_encode_fixed(element,
+               (const uint8_t *)value + i * element->size,
+               buffer + i * element_wire_size, capacity - i * element_wire_size))
+            return false;
       return true;
    }
    if (type->kind == SDL_TYPE_ENUM) {
@@ -149,6 +166,17 @@ bool sdl_value_decode_fixed(const SdlTypeDesc *type, const uint8_t *buffer,
          if (!sdl_value_decode_fixed(field->type, buffer + offset,
                (uint8_t *)value + field->offset)) return false;
          offset += field_size;
+      }
+      return true;
+   }
+   if (type->kind == SDL_TYPE_ARRAY) {
+      const SdlTypeDesc *element = type->detail.array.element;
+      size_t element_wire_size = sdl_fixed_wire_size(element);
+      for (i = 0; i < type->detail.array.count; ++i) {
+         if (!sdl_value_decode_fixed(element,
+               buffer + i * element_wire_size,
+               (uint8_t *)value + i * element->size))
+            return false;
       }
       return true;
    }
@@ -250,6 +278,8 @@ static size_t value_measure(const SdlTypeDesc *type, const void *value) {
    }
    if (type->kind == SDL_TYPE_STRUCT)
       return struct_measure(type, value);
+   if (type->kind == SDL_TYPE_ARRAY)
+      return 0;
    return 0;
 }
 
@@ -357,8 +387,9 @@ static size_t encode_struct(const SdlTypeDesc *type, const void *value,
             for (item = 0; item < count; ++item) {
                if (!sdl_value_encode_fixed(field->type,
                      (const uint8_t *)field_data + item * field->type->size,
-                     buffer + offset + 8 + item * fixed_size, fixed_size))
+                     buffer + offset + 8 + item * fixed_size, fixed_size)) {
                   return SIZE_MAX;
+               }
             }
             offset += 8 + payload_size;
             continue;
@@ -396,6 +427,13 @@ static size_t encode_value(const SdlTypeDesc *type, const void *value,
    }
    if (type->kind == SDL_TYPE_STRUCT)
       return encode_struct(type, value, buffer, capacity);
+   if (type->kind == SDL_TYPE_ARRAY) {
+      size_t wire_size = sdl_fixed_wire_size(type);
+      if (wire_size == 0 || !sdl_value_encode_fixed(type, value, buffer, capacity)) {
+         return SIZE_MAX;
+      }
+      return wire_size;
+   }
    if (type->kind == SDL_TYPE_BOOL) {
       if (capacity < 1) return SIZE_MAX;
       buffer[0] = *(const bool *)value ? 1U : 0U;
@@ -463,6 +501,8 @@ size_t sdl_value_decode_measure(const SdlTypeDesc *type,
       type->detail.structure.field_count : 1];
    if (type->kind == SDL_TYPE_STRING)
       return size == SIZE_MAX ? SIZE_MAX : size + 1;
+   if (type->kind == SDL_TYPE_ARRAY)
+      return size == sdl_fixed_wire_size(type) ? 0 : SIZE_MAX;
    if (type->kind == SDL_TYPE_ENUM)
       return size == 4 ? 0 : SIZE_MAX;
    if (type->kind == SDL_TYPE_COMPLEX32)
@@ -547,6 +587,9 @@ bool sdl_value_decode(const SdlTypeDesc *type, const uint8_t *buffer,
       return true;
    }
    if (type->kind != SDL_TYPE_STRUCT) {
+      if (type->kind == SDL_TYPE_ARRAY)
+         return sdl_fixed_wire_size(type) == size &&
+            sdl_value_decode_fixed(type, buffer, value);
       if (type->kind == SDL_TYPE_BOOL) {
          if (size != 1 || buffer[0] > 1) return false;
          *(bool *)value = buffer[0] != 0;

@@ -367,3 +367,37 @@ impl WireValue for String {
       String::from_utf8(payload.to_vec()).map_err(|_| CodecError::InvalidUtf8)
    }
 }
+
+impl<T: FixedWire, const N: usize> FixedWire for [T; N] {
+   const WIRE_SIZE: usize = T::WIRE_SIZE * N;
+
+   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
+      for value in self {
+         value.encode_fixed(output)?;
+      }
+      Ok(())
+   }
+
+   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
+      if T::WIRE_SIZE == 0 || payload.len() != Self::WIRE_SIZE {
+         return Err(CodecError::TypeMismatch);
+      }
+      let mut values = Vec::with_capacity(N);
+      for item in payload.chunks_exact(T::WIRE_SIZE) {
+         values.push(T::decode_fixed(item)?);
+      }
+      values.try_into().map_err(|_| CodecError::TypeMismatch)
+   }
+}
+
+impl<T: FixedWire, const N: usize> WireValue for [T; N] {
+   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+      let mut output = Vec::with_capacity(Self::WIRE_SIZE);
+      self.encode_fixed(&mut output)?;
+      Ok(output)
+   }
+
+   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
+      <Self as FixedWire>::decode_fixed(payload)
+   }
+}

@@ -178,6 +178,47 @@ static void test_codec_cases(void) {
    type_free(encoded);
 }
 
+static void test_fixed_nested_arrays(void) {
+   FixedBoard input;
+   FixedRow packed_rows[2];
+   FixedBoard *decoded;
+   uint8_t *wire;
+   size_t wire_size = 0;
+   size_t decode_size;
+   size_t row, vector, coordinate, grid_row, grid_column;
+   memset(&input, 0, sizeof(input));
+   memset(packed_rows, 0, sizeof(packed_rows));
+   for (row = 0; row < 2; ++row) {
+      for (vector = 0; vector < 2; ++vector) {
+         for (coordinate = 0; coordinate < 2; ++coordinate) {
+            input.rows[row].vectors[vector].coords[coordinate] =
+               (float)(row * 100 + vector * 10 + coordinate);
+            packed_rows[row].vectors[vector].coords[coordinate] =
+               (float)(500 + row * 100 + vector * 10 + coordinate);
+         }
+         for (grid_row = 0; grid_row < 2; ++grid_row)
+            for (grid_column = 0; grid_column < 3; ++grid_column) {
+               input.rows[row].vectors[vector].grid[grid_row][grid_column] =
+                  (int16_t)(row * 100 + vector * 10 + grid_row * 3 + grid_column);
+               packed_rows[row].vectors[vector].grid[grid_row][grid_column] =
+                  (int16_t)(500 + row * 100 + vector * 10 + grid_row * 3 + grid_column);
+            }
+      }
+   }
+   input.packed_rows_count = 2;
+   input.packed_rows = packed_rows;
+   wire = (uint8_t *)type_encode("FixedBoard", &input, &wire_size);
+   assert(wire != NULL);
+   decode_size = wire_size;
+   decoded = (FixedBoard *)type_decode(wire, &decode_size);
+   assert(decoded != NULL);
+   assert(memcmp(decoded->rows, input.rows, sizeof(input.rows)) == 0);
+   assert(decoded->packed_rows_count == 2);
+   assert(memcmp(decoded->packed_rows, packed_rows, sizeof(packed_rows)) == 0);
+   type_free(decoded);
+   type_free(wire);
+}
+
 static void assert_root_wire_fixture(const void *wire, size_t wire_size) {
    uint8_t expected[512];
    size_t expected_size;
@@ -210,6 +251,7 @@ int main(void) {
    /* 1. Startup registry initialization */
    register_all_types();
    test_codec_cases();
+   test_fixed_nested_arrays();
    printf(" [Tests] Scalar, optional, array and malformed-wire cases... OK\n");
    printf(" [Boot] Schema dynamic registration completed\n");
    printf(" [Info] ROOTPAYLOAD_HASH is: 0x%08X\n\n", ROOTPAYLOAD_HASH);
