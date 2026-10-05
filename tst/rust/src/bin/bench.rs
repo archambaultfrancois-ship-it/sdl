@@ -26,6 +26,7 @@ fn main() {
       }).collect(),
    };
    let wire = encode(&message).expect("encode benchmark message");
+   assert_eq!(wire.len(), 40220);
 
    let start = Instant::now();
    for _ in 0..iterations {

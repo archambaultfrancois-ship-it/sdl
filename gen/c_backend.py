@@ -59,7 +59,7 @@ class CBackend:
             c_type = self._c_type(field.type_name)
             if field.modifier == 'optional':
                header.append('   bool has_' + field.name + ';\n')
-            if field.modifier == 'repeated':
+            if field.modifier in ('repeated', 'packed'):
                header.append('   uint32_t ' + field.name + '_count;\n')
                header.append('   ' + c_type + ' *' + field.name + ';\n')
             else:
@@ -79,10 +79,12 @@ class CBackend:
             presence = ('offsetof(' + name + ', has_' + field.name + ')'
                if field.modifier == 'optional' else 'SDL_NO_OFFSET')
             count = ('offsetof(' + name + ', ' + field.name + '_count)'
-               if field.modifier == 'repeated' else 'SDL_NO_OFFSET')
+               if field.modifier in ('repeated', 'packed') else 'SDL_NO_OFFSET')
             flags = 'SDL_FIELD_OPTIONAL' if field.modifier == 'optional' else '0'
-            if field.modifier == 'repeated':
+            if field.modifier in ('repeated', 'packed'):
                flags += ' | SDL_FIELD_REPEATED'
+            if field.modifier == 'packed':
+               flags += ' | SDL_FIELD_PACKED'
             source.append('   { ' + str(field.index) + 'U, "' + field.name + '", ' +
                self._type_desc(field.type_name) + ', offsetof(' + name + ', ' + field.name +
                '), ' + presence + ', ' + count + ', ' + flags + ' },\n')

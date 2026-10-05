@@ -32,6 +32,19 @@ static size_t encoded_struct_size(const SdlTypeDesc *type, const void *value) {
          count = *(const uint32_t *)((const uint8_t *)value + field->count_offset);
          data = *(const void * const *)data;
          if (count != 0 && data == NULL) return 0;
+         if ((field->flags & SDL_FIELD_PACKED) != 0) {
+            size_t fixed_size = sdl_fixed_wire_size(field->type);
+            size_t payload_size;
+            if (count == 0) continue;
+            if (fixed_size == 0 || count > SIZE_MAX / fixed_size)
+               return 0;
+            payload_size = (size_t)count * fixed_size;
+            if (payload_size > UINT32_MAX || total > SIZE_MAX - 8 ||
+                payload_size > SIZE_MAX - total - 8)
+               return 0;
+            total += 8 + payload_size;
+            continue;
+         }
       }
       for (item = 0; item < count; ++item) {
          const void *element = (field->flags & SDL_FIELD_REPEATED) != 0 ?

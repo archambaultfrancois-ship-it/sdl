@@ -34,6 +34,14 @@ class RustBackend:
       used_types = {field.type_name for message in self.schema.messages.values()
          for field in message.fields}
       imports = ['CodecError', 'SdlMessage', 'WireValue', 'write_field']
+      has_packed_fields = any(field.modifier == 'packed'
+         for message in self.schema.messages.values() for field in message.fields)
+      has_fixed_messages = any(self.schema.fixed_wire_size(name) is not None
+         for name in self.schema.message_order)
+      if has_packed_fields:
+         imports.extend(['read_packed_field', 'write_packed_field'])
+      if has_packed_fields or has_fixed_messages or (self.schema.enums and not has_packed_fields):
+         imports.append('FixedWire')
       if 'c32' in used_types:
          imports.append('Complex32')
       if 'c64' in used_types:
@@ -68,6 +76,12 @@ class RustBackend:
             output.append('         ' + value + ' => Ok(Self::' + variant + '),\n')
          output.append('         _ => Err(CodecError::InvalidEnum),\n')
          output.append('      }\n   }\n}\n\n')
+         output.append('impl FixedWire for ' + c_identifier(enum.name) + ' {\n')
+         output.append('   const WIRE_SIZE: usize = 4;\n')
+         output.append('   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {\n')
+         output.append('      (*self as i32).encode_fixed(output)\n   }\n')
+         output.append('   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {\n')
+         output.append('      <Self as WireValue>::decode_payload(payload)\n   }\n}\n\n')
 
       for message_name in self.schema.message_order:
          message = self.schema.messages[message_name]
@@ -80,7 +94,7 @@ class RustBackend:
             value_type = self._rust_type(field.type_name)
             if field.modifier == 'optional':
                value_type = 'Option<' + value_type + '>'
-            elif field.modifier == 'repeated':
+            elif field.modifier in ('repeated', 'packed'):
                value_type = 'Vec<' + value_type + '>'
             output.append('   pub ' + rust_field + ': ' + value_type + ',\n')
          output.append('}\n')
@@ -100,6 +114,9 @@ class RustBackend:
                output.append('      if let Some(value) = &self.' + rust_field + ' {\n')
                output.append('         write_field(' + str(field.index) + ', value, output)?;\n')
                output.append('      }\n')
+            elif field.modifier == 'packed':
+               output.append('      write_packed_field(' + str(field.index) +
+                  ', &self.' + rust_field + ', output)?;\n')
             elif field.modifier == 'repeated':
                output.append('      for value in &self.' + rust_field + ' {\n')
                output.append('         write_field(' + str(field.index) + ', value, output)?;\n')
@@ -116,18 +133,52 @@ class RustBackend:
             value_type = self._rust_type(field.type_name)
             if field.modifier == 'optional':
                decoded = 'Some(<' + value_type + ' as WireValue>::decode_payload(payload)?)'
+            elif field.modifier == 'packed':
+               decoded = 'read_packed_field::<' + value_type + '>(payload)?'
             elif field.modifier == 'repeated':
                decoded = '<' + value_type + ' as WireValue>::decode_payload(payload)?'
             else:
                decoded = '<' + value_type + ' as WireValue>::decode_payload(payload)?'
             output.append('         ' + str(field.index) + ' => {\n')
-            if field.modifier == 'repeated':
+            if field.modifier in ('repeated', 'packed'):
+               if field.modifier == 'packed':
+                  output.append('            self.' + rust_field + '.extend(' + decoded + ');\n')
+                  output.append('            Ok(())\n         }\n')
+                  continue
                output.append('            self.' + rust_field + '.push(' + decoded + ');\n')
             else:
                output.append('            self.' + rust_field + ' = ' + decoded + ';\n')
             output.append('            Ok(())\n         }\n')
          output.append('         _ => Ok(()),\n')
          output.append('      }\n   }\n}\n\n')
+         fixed_size = self.schema.fixed_wire_size(message_name)
+         if fixed_size is not None:
+            output.append('impl FixedWire for ' + rust_name + ' {\n')
+            output.append('   const WIRE_SIZE: usize = ' + str(fixed_size) + ';\n')
+            output.append('   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {\n')
+            for field in fields:
+               output.append('      self.' + c_identifier(field.name) + '.encode_fixed(output)?;\n')
+            output.append('      Ok(())\n   }\n')
+            output.append('   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {\n')
+            output.append('      if payload.len() != Self::WIRE_SIZE { return Err(CodecError::TypeMismatch); }\n')
+            for index, field in enumerate(fields):
+               rust_field = c_identifier(field.name)
+               value_type = self._rust_type(field.type_name)
+               output.append('      let ' + rust_field + ' = <' + value_type +
+                  ' as FixedWire>::decode_fixed(&payload[' +
+                  ('0' if index == 0 else 'offset') + '..' +
+                  ('<'+value_type+' as FixedWire>::WIRE_SIZE' if index == 0 else
+                   'offset + <' + value_type + ' as FixedWire>::WIRE_SIZE') +
+                  '])?;\n')
+               if index + 1 < len(fields):
+                  output.append('      let offset = ' +
+                     ('<'+value_type+' as FixedWire>::WIRE_SIZE' if index == 0 else
+                      'offset + <' + value_type + ' as FixedWire>::WIRE_SIZE') + ';\n')
+            output.append('      Ok(Self {\n')
+            for field in fields:
+               rust_field = c_identifier(field.name)
+               output.append('         ' + rust_field + ': ' + rust_field + ',\n')
+            output.append('      })\n   }\n}\n\n')
       return ''.join(output)
 
    @staticmethod

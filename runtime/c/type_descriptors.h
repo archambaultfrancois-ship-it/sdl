@@ -65,5 +65,6 @@ extern const SdlTypeDesc SDL_STRING_DESC;
 #define SDL_NO_OFFSET ((size_t)-1)
 #define SDL_FIELD_OPTIONAL 0x01u
 #define SDL_FIELD_REPEATED 0x02u
+#define SDL_FIELD_PACKED 0x04u
 
 #endif /* SDL_TYPE_DESCRIPTORS_H */

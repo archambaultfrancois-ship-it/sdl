@@ -134,6 +134,72 @@ def _unpack_value(type_name, payload, namespace):
    raise CodecError('unknown SDL type: ' + type_name)
 
 
+def _fixed_wire_size(type_name, namespace):
+   sizes = {
+      'bool': 1, 'int8': 1, 'int16': 2, 'int32': 4, 'int64': 8,
+      'fl32': 4, 'fl64': 8, 'c32': 8, 'c64': 16,
+   }
+   if type_name in sizes:
+      return sizes[type_name]
+   value_type = namespace.get(type_name)
+   if value_type is not None and hasattr(value_type, '__members__'):
+      return 4
+   if value_type is not None:
+      return getattr(value_type, '_SDL_FIXED_SIZE', None)
+   return None
+
+
+def _pack_fixed(type_name, value, namespace):
+   value_type = namespace.get(type_name)
+   if value_type is not None and hasattr(value_type, '_SDL_FIXED_SIZE'):
+      output = bytearray()
+      for unused_id, name, modifier, field_type in value_type._SDL_FIELDS:
+         if modifier != 'required':
+            raise CodecError('fixed-size struct contains a non-required field')
+         output.extend(_pack_fixed(field_type, getattr(value, name), namespace))
+      if len(output) != value_type._SDL_FIXED_SIZE:
+         raise CodecError('fixed-size struct payload has an invalid size')
+      return bytes(output)
+   return _pack_value(type_name, value)
+
+
+def _unpack_fixed(type_name, payload, namespace):
+   value_type = namespace.get(type_name)
+   if value_type is not None and hasattr(value_type, '_SDL_FIXED_SIZE'):
+      if len(payload) != value_type._SDL_FIXED_SIZE:
+         raise CodecError('invalid fixed-size struct length')
+      value = value_type()
+      offset = 0
+      for unused_id, name, modifier, field_type in value_type._SDL_FIELDS:
+         if modifier != 'required':
+            raise CodecError('fixed-size struct contains a non-required field')
+         field_size = _fixed_wire_size(field_type, namespace)
+         if field_size is None or field_size > len(payload) - offset:
+            raise CodecError('invalid fixed-size struct field')
+         setattr(value, name, _unpack_fixed(field_type,
+            payload[offset:offset + field_size], namespace))
+         offset += field_size
+      return value
+   return _unpack_value(type_name, payload, namespace)
+
+
+def _pack_array_fixed(type_name, values, namespace):
+   item_size = _fixed_wire_size(type_name, namespace)
+   if item_size is None:
+      raise CodecError('packed field type has no fixed wire size')
+   if len(values) > 0xFFFFFFFF // item_size:
+      raise CodecError('packed field exceeds uint32 length')
+   return b''.join(_pack_fixed(type_name, value, namespace) for value in values)
+
+
+def _unpack_array_fixed(type_name, payload, namespace):
+   item_size = _fixed_wire_size(type_name, namespace)
+   if item_size is None or len(payload) % item_size != 0:
+      raise CodecError('invalid packed field length')
+   return [_unpack_fixed(type_name, payload[offset:offset + item_size], namespace)
+      for offset in range(0, len(payload), item_size)]
+
+
 class SdlMessage:
    """Base class used by generated SDL message dataclasses."""
 
@@ -153,7 +219,7 @@ class SdlMessage:
             value = kwargs.pop(name)
          elif modifier == 'optional':
             value = None
-         elif modifier == 'repeated':
+         elif modifier in ('repeated', 'packed'):
             value = []
          else:
             value = default_value(type_name, self.__class__.__module__ and
@@ -174,8 +240,16 @@ class SdlMessage:
 
    def encode_payload(self):
       output = bytearray()
+      namespace = __import__(self.__class__.__module__, fromlist=['*']).__dict__
       for field_id, name, modifier, type_name in self._SDL_FIELDS:
          value = getattr(self, name)
+         if modifier == 'packed':
+            if not value:
+               continue
+            payload = _pack_array_fixed(type_name, value, namespace)
+            output.extend(struct.pack(_WIRE_PREFIX + 'II', field_id, len(payload)))
+            output.extend(payload)
+            continue
          if modifier == 'optional':
             if value is None:
                continue
@@ -208,10 +282,14 @@ class SdlMessage:
          if field is not None:
             unused_id, name, modifier, type_name = field
             namespace = __import__(cls.__module__, fromlist=['*']).__dict__
-            item = _unpack_value(type_name, payload[offset:offset + length], namespace)
-            if modifier == 'repeated':
+            if modifier == 'packed':
+               setattr(value, name, _unpack_array_fixed(type_name,
+                  payload[offset:offset + length], namespace))
+            elif modifier == 'repeated':
+               item = _unpack_value(type_name, payload[offset:offset + length], namespace)
                getattr(value, name).append(item)
             else:
+               item = _unpack_value(type_name, payload[offset:offset + length], namespace)
                setattr(value, name, item)
          offset += length
       return value
