@@ -27,3 +27,16 @@ message FixedBoard {
    1: required FixedRow[2] rows;
    2: packed FixedRow packed_rows;
 }
+
+message AnonymousEnvelope {
+   1: required struct {
+      1: required int32 code;
+      2: optional struct {
+         1: required string text;
+      } detail;
+   } metadata;
+   2: repeated struct {
+      1: required fl32 x;
+      2: required fl32 y;
+   } points;
+}

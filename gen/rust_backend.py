@@ -11,6 +11,13 @@ def rust_variant(name):
    return ''.join(part[:1].upper() + part[1:].lower() for part in parts)
 
 
+def rust_type_name(name):
+   if '$' in name:
+      parent, sequence = name.split('$', 1)
+      return c_identifier(parent) + sequence
+   return c_identifier(name)
+
+
 class RustBackend:
    def __init__(self, schema):
       self.schema = schema
@@ -28,7 +35,7 @@ class RustBackend:
          'c64': 'Complex64',
          'string': 'String',
       }
-      return mapping.get(name, c_identifier(name))
+      return mapping.get(name, rust_type_name(name))
 
    def _rust_field_type(self, field):
       value_type = self._rust_type(field.type_name)
@@ -92,7 +99,7 @@ class RustBackend:
       for message_name in self.schema.message_order:
          message = self.schema.messages[message_name]
          fields = sorted(message.fields, key=lambda field: field.index)
-         rust_name = c_identifier(message_name)
+         rust_name = rust_type_name(message_name)
          output.append('#[derive(Clone, Debug, Default, PartialEq)]\n')
          output.append('pub struct ' + rust_name + ' {\n')
          for field in fields:

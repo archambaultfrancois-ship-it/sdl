@@ -1,6 +1,7 @@
 use sdl_runtime::{decode, encode, CodecError, Complex32, Complex64};
 use sdl_schema_tests::codec_cases::{CodecCases, State};
 use sdl_schema_tests::schema::{
+   AnonymousEnvelope, AnonymousEnvelope1, AnonymousEnvelope2, AnonymousEnvelope3,
    FixedBoard, FixedItem, FixedRow, FixedVector, RootPayload, VarItem,
 };
 
@@ -66,6 +67,25 @@ fn nested_fixed_arrays_round_trip() {
    malformed.extend_from_slice(&wire_u32(1));
    malformed.push(0);
    assert_eq!(decode::<FixedBoard>(&malformed), Err(CodecError::TypeMismatch));
+}
+
+#[test]
+fn anonymous_nested_structs_round_trip() {
+   let input = AnonymousEnvelope {
+      metadata: AnonymousEnvelope1 {
+         code: 42,
+         detail: Some(AnonymousEnvelope2 {
+            text: "anonymous detail".to_owned(),
+         }),
+      },
+      points: vec![
+         AnonymousEnvelope3 { x: 1.25, y: -2.5 },
+         AnonymousEnvelope3 { x: 3.0, y: 4.5 },
+      ],
+   };
+   let wire = encode(&input).unwrap();
+   let decoded: AnonymousEnvelope = decode(&wire).unwrap();
+   assert_eq!(decoded, input);
 }
 
 fn codec_cases() -> CodecCases {

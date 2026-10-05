@@ -219,6 +219,35 @@ static void test_fixed_nested_arrays(void) {
    type_free(wire);
 }
 
+static void test_anonymous_nested_structs(void) {
+   AnonymousEnvelope input;
+   AnonymousEnvelope_3 points[2] = { { .x = 1.25f, .y = -2.5f },
+      { .x = 3.0f, .y = 4.5f } };
+   AnonymousEnvelope *decoded;
+   uint8_t *wire;
+   size_t wire_size = 0;
+   size_t decode_size;
+   memset(&input, 0, sizeof(input));
+   input.metadata.code = 42;
+   input.metadata.has_detail = true;
+   input.metadata.detail.text = "anonymous detail";
+   input.points_count = 2;
+   input.points = points;
+   wire = (uint8_t *)type_encode("AnonymousEnvelope", &input, &wire_size);
+   assert(wire != NULL);
+   decode_size = wire_size;
+   decoded = (AnonymousEnvelope *)type_decode(wire, &decode_size);
+   assert(decoded != NULL);
+   assert(decoded->metadata.code == 42);
+   assert(decoded->metadata.has_detail);
+   assert(strcmp(decoded->metadata.detail.text, "anonymous detail") == 0);
+   assert(decoded->points_count == 2);
+   assert(decoded->points[0].x == points[0].x && decoded->points[0].y == points[0].y);
+   assert(decoded->points[1].x == points[1].x && decoded->points[1].y == points[1].y);
+   type_free(decoded);
+   type_free(wire);
+}
+
 static void assert_root_wire_fixture(const void *wire, size_t wire_size) {
    uint8_t expected[512];
    size_t expected_size;
@@ -252,6 +281,7 @@ int main(void) {
    register_all_types();
    test_codec_cases();
    test_fixed_nested_arrays();
+   test_anonymous_nested_structs();
    printf(" [Tests] Scalar, optional, array and malformed-wire cases... OK\n");
    printf(" [Boot] Schema dynamic registration completed\n");
    printf(" [Info] ROOTPAYLOAD_HASH is: 0x%08X\n\n", ROOTPAYLOAD_HASH);
