@@ -4,12 +4,135 @@
 
 #include "type_engine.h"
 #include "generated_messages.h"
+#include <assert.h>
 #include <inttypes.h>
+#include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static void test_codec_cases(void) {
+   CodecCases input;
+   CodecCases absent;
+   CodecCases *decoded;
+   uint8_t *encoded;
+   uint8_t *extended;
+   size_t encoded_size = 0;
+   size_t extended_size;
+   size_t decode_size;
+   float point_parts[2] = { 1.25f, -2.5f };
+   double position_parts[2] = { -3.125, 4.75 };
+   float points[2][2] = { { 5.5f, -6.25f }, { 0.0f, 9.0f } };
+   int16_t samples[3] = { -32768, -1, 32767 };
+   double measurements[2] = { 0.125, -1024.5 };
+   const char *labels[3] = { "", "alpha", "omega" };
+   float complex point_values[2];
+   uint8_t unknown_field[8] = { 0xE7, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00 };
+   const uint8_t unknown_payload[3] = { 0xA1, 0xB2, 0xC3 };
+
+   memset(&input, 0, sizeof(input));
+   input.has_tiny = true;
+   input.tiny = INT8_MIN;
+   input.has_small = true;
+   input.small = INT16_MIN;
+   input.has_signed_value = true;
+   input.signed_value = INT32_MIN;
+   input.has_wide = true;
+   input.wide = INT64_MAX;
+   input.has_ratio = true;
+   input.ratio = -0.0f;
+   input.has_precise = true;
+   input.precise = 1.0 / 3.0;
+   input.has_point = true;
+   memcpy(&input.point, point_parts, sizeof(input.point));
+   input.has_position = true;
+   memcpy(&input.position, position_parts, sizeof(input.position));
+   input.has_state = true;
+   input.state = STATE_READY;
+   input.has_empty_text = true;
+   input.empty_text = "";
+   input.required_zero = 0;
+   input.samples_count = 3;
+   input.samples = samples;
+   input.measurements_count = 2;
+   input.measurements = measurements;
+   input.labels_count = 3;
+   input.labels = labels;
+   input.points_count = 2;
+   memcpy(&point_values[0], points[0], sizeof(points[0]));
+   memcpy(&point_values[1], points[1], sizeof(points[1]));
+   input.points = point_values;
+
+   encoded = (uint8_t *)type_encode("CodecCases", &input, &encoded_size);
+   assert(encoded != NULL);
+   assert(encoded_size > 4);
+   assert(type_decode_size(encoded, encoded_size - 1) == 0);
+
+   extended_size = encoded_size + sizeof(unknown_field) + sizeof(unknown_payload);
+   extended = (uint8_t *)malloc(extended_size);
+   assert(extended != NULL);
+   memcpy(extended, encoded, encoded_size);
+   memcpy(extended + encoded_size, unknown_field, sizeof(unknown_field));
+   memcpy(extended + encoded_size + sizeof(unknown_field), unknown_payload,
+      sizeof(unknown_payload));
+   decode_size = extended_size;
+   decoded = (CodecCases *)type_decode(extended, &decode_size);
+   assert(decoded != NULL);
+
+   assert(decoded->has_tiny && decoded->tiny == input.tiny);
+   assert(decoded->has_small && decoded->small == input.small);
+   assert(decoded->has_signed_value && decoded->signed_value == input.signed_value);
+   assert(decoded->has_wide && decoded->wide == input.wide);
+   assert(decoded->has_ratio && signbit(decoded->ratio));
+   assert(decoded->has_precise && decoded->precise == input.precise);
+   assert(decoded->has_point && memcmp(&decoded->point, &input.point, sizeof(input.point)) == 0);
+   assert(decoded->has_position && memcmp(&decoded->position, &input.position, sizeof(input.position)) == 0);
+   assert(decoded->has_state && decoded->state == input.state);
+   assert(decoded->has_empty_text && strcmp(decoded->empty_text, "") == 0);
+   assert(decoded->required_zero == 0);
+   assert(decoded->samples_count == 3);
+   assert(memcmp(decoded->samples, samples, sizeof(samples)) == 0);
+   assert(decoded->measurements_count == 2);
+   assert(memcmp(decoded->measurements, measurements, sizeof(measurements)) == 0);
+   assert(decoded->labels_count == 3);
+   assert(strcmp(decoded->labels[0], "") == 0);
+   assert(strcmp(decoded->labels[1], "alpha") == 0);
+   assert(strcmp(decoded->labels[2], "omega") == 0);
+   assert(decoded->points_count == 2);
+   assert(memcmp(decoded->points, point_values, sizeof(point_values)) == 0);
+   assert(decoded->empty_values_count == 0);
+   assert(decoded->empty_values == NULL);
+   type_free(decoded);
+   type_free(extended);
+   type_free(encoded);
+
+   memset(&absent, 0, sizeof(absent));
+   encoded_size = 0;
+   encoded = (uint8_t *)type_encode("CodecCases", &absent, &encoded_size);
+   assert(encoded != NULL);
+   decode_size = encoded_size;
+   decoded = (CodecCases *)type_decode(encoded, &decode_size);
+   assert(decoded != NULL);
+   assert(!decoded->has_tiny && !decoded->has_small);
+   assert(!decoded->has_signed_value && !decoded->has_wide);
+   assert(!decoded->has_ratio && !decoded->has_precise);
+   assert(!decoded->has_point && !decoded->has_position);
+   assert(!decoded->has_state && !decoded->has_empty_text);
+   assert(decoded->required_zero == 0);
+   assert(decoded->samples_count == 0 && decoded->samples == NULL);
+   assert(decoded->measurements_count == 0 && decoded->measurements == NULL);
+   assert(decoded->labels_count == 0 && decoded->labels == NULL);
+   assert(decoded->points_count == 0 && decoded->points == NULL);
+   assert(decoded->empty_values_count == 0 && decoded->empty_values == NULL);
+   type_free(decoded);
+   type_free(encoded);
+}
 
 int main(void) {
    /* 1. Startup registry initialization */
    register_all_types();
+   test_codec_cases();
+   printf(" [Tests] Scalar, optional, array and malformed-wire cases... OK\n");
    printf(" [Boot] Schema dynamic registration completed\n");
    printf(" [Info] ROOTPAYLOAD_HASH is: 0x%08X\n\n", ROOTPAYLOAD_HASH);
 
@@ -36,6 +159,17 @@ int main(void) {
    /* 3. Execute Deep Clone */
    RootPayload* cloned = (RootPayload*)type_clone("RootPayload", &original);
    if (!cloned) { printf("Error: Cloning step failed\n"); return 1; }
+   assert(cloned->has_header);
+   assert(strcmp(cloned->header, original.header) == 0);
+   assert(cloned->header != original.header);
+   assert(cloned->fixed_array_count == original.fixed_array_count);
+   assert(cloned->fixed_array != original.fixed_array);
+   assert(cloned->var_array_count == original.var_array_count);
+   assert(cloned->var_array != original.var_array);
+   assert(cloned->var_array[0].name != original.var_array[0].name);
+   assert(strcmp(cloned->var_array[0].name, original.var_array[0].name) == 0);
+   assert(cloned->var_array[1].name != original.var_array[1].name);
+   assert(strcmp(cloned->var_array[1].name, original.var_array[1].name) == 0);
    printf(" 1. Deep Copy Cloning system........ OK (Header: %s)\n", cloned->header);
 
    /* 4. Encode to Binary Stream Buffer */
@@ -55,8 +189,23 @@ int main(void) {
    uint32_t stream_hash = (uint32_t)wire_bytes[0] |
       ((uint32_t)wire_bytes[1] << 8) | ((uint32_t)wire_bytes[2] << 16) |
       ((uint32_t)wire_bytes[3] << 24);
-   if (stream_hash == ROOTPAYLOAD_HASH) {
+   assert(stream_hash == ROOTPAYLOAD_HASH);
+   {
       RootPayload* res = (RootPayload*)generic_output;
+      assert(res->has_header);
+      assert(strcmp(res->header, original.header) == 0);
+      assert(res->fixed_array_count == 2);
+      assert(res->fixed_array[0].x == mock_fixed[0].x);
+      assert(res->fixed_array[0].y == mock_fixed[0].y);
+      assert(res->fixed_array[1].x == mock_fixed[1].x);
+      assert(res->fixed_array[1].y == mock_fixed[1].y);
+      assert(res->var_array_count == 2);
+      assert(res->var_array[0].has_name);
+      assert(strcmp(res->var_array[0].name, mock_var[0].name) == 0);
+      assert(res->var_array[0].id == mock_var[0].id);
+      assert(res->var_array[1].has_name);
+      assert(strcmp(res->var_array[1].name, mock_var[1].name) == 0);
+      assert(res->var_array[1].id == mock_var[1].id);
       printf("\n============================================\n");
       printf(" INTEGRITY VERIFICATION REPORT\n");
       printf("============================================\n");
@@ -68,8 +217,6 @@ int main(void) {
       printf("   -> Item[0]        : Name='%s', ID=%" PRId64 "\n", res->var_array[0].name, res->var_array[0].id);
       printf("   -> Item[1]        : Name='%s', ID=%" PRId64 "\n", res->var_array[1].name, res->var_array[1].id);
       printf("============================================\n");
-   } else {
-      printf("Error: Mismatched signature hash\n");
    }
 
    /* 7. Graceful memory block cleanups */
