@@ -2,7 +2,18 @@ use sdl_runtime::{decode, encode, CodecError, Complex32, Complex64};
 use sdl_schema_tests::codec_cases::{CodecCases, State};
 use sdl_schema_tests::schema::{FixedItem, RootPayload, VarItem};
 
+#[cfg(feature = "wire-little-endian")]
 const C_ROOT_PAYLOAD_WIRE: &[u8] = include_bytes!("../../fixtures/root_payload.bin");
+#[cfg(not(feature = "wire-little-endian"))]
+const C_ROOT_PAYLOAD_WIRE: &[u8] = include_bytes!("../../fixtures/root_payload_be.bin");
+
+fn wire_u32(value: u32) -> [u8; 4] {
+   if cfg!(feature = "wire-little-endian") {
+      value.to_le_bytes()
+   } else {
+      value.to_be_bytes()
+   }
+}
 
 #[test]
 fn root_payload_deep_clone_and_wire_round_trip() {
@@ -81,8 +92,8 @@ fn absent_optionals_and_empty_arrays_round_trip() {
 fn unknown_fields_are_skipped_and_truncated_fields_fail() {
    let wire = encode(&codec_cases()).unwrap();
    let mut extended = wire.clone();
-   extended.extend_from_slice(&999_u32.to_le_bytes());
-   extended.extend_from_slice(&3_u32.to_le_bytes());
+   extended.extend_from_slice(&wire_u32(999));
+   extended.extend_from_slice(&wire_u32(3));
    extended.extend_from_slice(&[0xA1, 0xB2, 0xC3]);
    let decoded: CodecCases = decode(&extended).unwrap();
    assert_eq!(decoded, codec_cases());
@@ -92,8 +103,8 @@ fn unknown_fields_are_skipped_and_truncated_fields_fail() {
 #[test]
 fn noncanonical_boolean_payload_is_rejected() {
    let mut wire = encode(&codec_cases()).unwrap();
-   wire.extend_from_slice(&17_u32.to_le_bytes());
-   wire.extend_from_slice(&1_u32.to_le_bytes());
+   wire.extend_from_slice(&wire_u32(17));
+   wire.extend_from_slice(&wire_u32(1));
    wire.push(2);
    assert_eq!(decode::<CodecCases>(&wire), Err(CodecError::InvalidBoolean));
 }

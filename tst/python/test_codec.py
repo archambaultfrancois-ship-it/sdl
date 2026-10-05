@@ -1,5 +1,6 @@
 import pathlib
 import math
+import os
 import struct
 import unittest
 
@@ -8,11 +9,17 @@ from schema import FixedItem, RootPayload, VarItem
 from sdl_runtime import CodecError, Complex32, Complex64, decode, encode
 
 
-FIXTURE = pathlib.Path(__file__).resolve().parents[1] / 'fixtures' / 'root_payload.bin'
+WIRE_ENDIAN = os.environ.get('SDL_WIRE_ENDIAN', 'big').lower()
+FIXTURE_NAME = 'root_payload.bin' if WIRE_ENDIAN == 'little' else 'root_payload_be.bin'
+FIXTURE = pathlib.Path(__file__).resolve().parents[1] / 'fixtures' / FIXTURE_NAME
 
 
 def fl32(value):
    return struct.unpack('<f', struct.pack('<f', value))[0]
+
+
+def wire_u32(value):
+   return value.to_bytes(4, WIRE_ENDIAN)
 
 
 def codec_cases():
@@ -74,13 +81,13 @@ class CodecTests(unittest.TestCase):
 
    def test_unknown_fields_are_skipped_and_truncation_fails(self):
       wire = encode(codec_cases())
-      extended = wire + (999).to_bytes(4, 'little') + (3).to_bytes(4, 'little') + b'\xa1\xb2\xc3'
+      extended = wire + wire_u32(999) + wire_u32(3) + b'\xa1\xb2\xc3'
       self.assertEqual(decode(extended, CodecCases), codec_cases())
       with self.assertRaises(CodecError):
          decode(wire[:-1], CodecCases)
 
    def test_invalid_boolean_and_wrong_hash_are_rejected(self):
-      malformed_bool = encode(codec_cases()) + (17).to_bytes(4, 'little') + (1).to_bytes(4, 'little') + b'\x02'
+      malformed_bool = encode(codec_cases()) + wire_u32(17) + wire_u32(1) + b'\x02'
       with self.assertRaisesRegex(CodecError, 'boolean'):
          decode(malformed_bool, CodecCases)
       wrong_hash = bytearray(encode(codec_cases()))

@@ -1,4 +1,5 @@
 #include "type_private.h"
+#include "sdl_wire.h"
 
 #include <complex.h>
 #include <stdlib.h>
@@ -79,10 +80,7 @@ void *type_encode(const char *name, const void *decoded, size_t *size) {
    if (capacity == 0) return NULL;
    buffer = (uint8_t *)malloc(capacity);
    if (buffer == NULL) return NULL;
-   buffer[0] = (uint8_t)type->hash;
-   buffer[1] = (uint8_t)(type->hash >> 8);
-   buffer[2] = (uint8_t)(type->hash >> 16);
-   buffer[3] = (uint8_t)(type->hash >> 24);
+   sdl_wire_write_u32(buffer, type->hash);
    written = sdl_value_encode(type, decoded, buffer + 4, capacity - 4);
    if (written == SIZE_MAX || written + 4 != capacity) { free(buffer); return NULL; }
    *size = capacity;
@@ -95,8 +93,7 @@ size_t type_decode_size(const void *encoded, size_t size) {
    size_t extra;
    uint32_t hash;
    if (buffer == NULL || size < 4) return 0;
-   hash = (uint32_t)buffer[0] | ((uint32_t)buffer[1] << 8) |
-      ((uint32_t)buffer[2] << 16) | ((uint32_t)buffer[3] << 24);
+   hash = sdl_wire_read_u32(buffer);
    type = sdl_lookup_hash(hash);
    if (type == NULL) return 0;
    extra = sdl_value_decode_measure(type, buffer + 4, size - 4);
@@ -111,8 +108,7 @@ void *type_decode(const void *encoded, size_t *size) {
    size_t total, offset = 0;
    uint32_t hash;
    if (buffer == NULL || size == NULL || *size < 4) return NULL;
-   hash = (uint32_t)buffer[0] | ((uint32_t)buffer[1] << 8) |
-      ((uint32_t)buffer[2] << 16) | ((uint32_t)buffer[3] << 24);
+   hash = sdl_wire_read_u32(buffer);
    type = sdl_lookup_hash(hash);
    total = type_decode_size(encoded, *size);
    if (type == NULL || total == 0) return NULL;

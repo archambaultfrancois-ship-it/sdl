@@ -231,15 +231,11 @@ static size_t encode_value(const SdlTypeDesc *type, const void *value,
    }
    if (type->kind == SDL_TYPE_COMPLEX64) {
       double complex z;
-      uint64_t parts[2];
       double real_part, imag_part;
       if (capacity < 16) return SIZE_MAX;
       memcpy(&z, value, sizeof(z)); real_part = creal(z); imag_part = cimag(z);
-      memcpy(&parts[0], &real_part, 8); memcpy(&parts[1], &imag_part, 8);
-      for (i = 0; i < 2; ++i) {
-         unsigned int j;
-         for (j = 0; j < 8; ++j) buffer[i * 8 + j] = (uint8_t)(parts[i] >> (j * 8));
-      }
+      sdl_wire_encode_native(buffer, &real_part, 8);
+      sdl_wire_encode_native(buffer + 8, &imag_part, 8);
       return 16;
    }
    if (type->kind == SDL_TYPE_ENUM) {
@@ -391,15 +387,10 @@ bool sdl_value_decode(const SdlTypeDesc *type, const uint8_t *buffer,
          memcpy(&result, components, sizeof(result));
          memcpy(value, &result, sizeof(result));
       } else if (type->kind == SDL_TYPE_COMPLEX64) {
-         uint64_t bits[2];
          double components[2];
          double complex result;
-         size_t j;
-         for (i = 0; i < 2; ++i) {
-            bits[i] = 0;
-            for (j = 0; j < 8; ++j) bits[i] |= (uint64_t)buffer[i * 8 + j] << (j * 8);
-         }
-         memcpy(&components[0], &bits[0], 8); memcpy(&components[1], &bits[1], 8);
+         sdl_wire_decode_native(&components[0], buffer, 8);
+         sdl_wire_decode_native(&components[1], buffer + 8, 8);
          memcpy(&result, components, sizeof(result));
          memcpy(value, &result, sizeof(result));
       } else {
