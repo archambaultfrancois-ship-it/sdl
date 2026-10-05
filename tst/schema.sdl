@@ -36,4 +36,7 @@ message CodecCases {
    14: repeated string labels;
    15: repeated c32 points;
    16: repeated int64 empty_values;
+   17: required bool required_enabled;
+   18: optional bool optional_enabled;
+   19: repeated bool bool_flags;
 }

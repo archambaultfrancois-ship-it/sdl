@@ -214,6 +214,11 @@ static size_t encode_value(const SdlTypeDesc *type, const void *value,
    }
    if (type->kind == SDL_TYPE_STRUCT)
       return encode_struct(type, value, buffer, capacity);
+   if (type->kind == SDL_TYPE_BOOL) {
+      if (capacity < 1) return SIZE_MAX;
+      buffer[0] = *(const bool *)value ? 1U : 0U;
+      return 1;
+   }
    if (type->kind == SDL_TYPE_COMPLEX32) {
       float complex z;
       uint32_t part;
@@ -351,6 +356,11 @@ bool sdl_value_decode(const SdlTypeDesc *type, const uint8_t *buffer,
       return true;
    }
    if (type->kind != SDL_TYPE_STRUCT) {
+      if (type->kind == SDL_TYPE_BOOL) {
+         if (size != 1 || buffer[0] > 1) return false;
+         *(bool *)value = buffer[0] != 0;
+         return true;
+      }
       if (type->kind == SDL_TYPE_ENUM) {
          int32_t enum_value = (int32_t)sdl_wire_read_u32(buffer);
          if (size != 4) return false;
