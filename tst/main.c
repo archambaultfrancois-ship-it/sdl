@@ -3,7 +3,7 @@
    ============================================================================ */
 
 #include "type_engine.h"
-#include "generated_messages.h"
+#include "schema.h"
 #include <assert.h>
 #include <inttypes.h>
 #include <math.h>
