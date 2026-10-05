@@ -1,33 +1,81 @@
-/* ============================================================================
-   AUTO-DESCRIPTIVE TYPE RUNTIME ENGINE (API)
-   ============================================================================ */
+/* Public SDL runtime API. */
+#ifndef SDL_TYPE_ENGINE_H
+#define SDL_TYPE_ENGINE_H
 
-#ifndef TYPE_ENGINE_H
-#define TYPE_ENGINE_H
-
-#include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
-/* Register a new schema descriptor into the runtime database */
-bool type_register(const char* name, uint32_t hash, const char* format, size_t struct_size);
+typedef enum {
+   SDL_TYPE_BOOL,
+   SDL_TYPE_INT8,
+   SDL_TYPE_INT16,
+   SDL_TYPE_INT32,
+   SDL_TYPE_INT64,
+   SDL_TYPE_FLOAT32,
+   SDL_TYPE_FLOAT64,
+   SDL_TYPE_COMPLEX32,
+   SDL_TYPE_COMPLEX64,
+   SDL_TYPE_ENUM,
+   SDL_TYPE_STRING,
+   SDL_TYPE_STRUCT,
+   SDL_TYPE_ARRAY
+} SdlTypeKind;
 
-/* Calculate conservative maximum binary encoded size */
-size_t type_encode_size(const char* type, const void* decoded);
+typedef struct SdlTypeDesc SdlTypeDesc;
+typedef struct SdlFieldDesc SdlFieldDesc;
 
-/* Encode structure. Returns allocated buffer and exports its size */
-void* type_encode(const char* type, const void* decoded, size_t* size);
+struct SdlFieldDesc {
+   uint32_t id;
+   const char *name;
+   const SdlTypeDesc *type;
+   size_t offset;
+   size_t presence_offset;
+   size_t count_offset;
+   uint32_t flags;
+};
 
-/* Calculate required memory block size for decoding */
-size_t type_decode_size(const void* encoded, size_t size);
+extern const SdlTypeDesc SDL_BOOL_DESC;
+extern const SdlTypeDesc SDL_INT8_DESC;
+extern const SdlTypeDesc SDL_INT16_DESC;
+extern const SdlTypeDesc SDL_INT32_DESC;
+extern const SdlTypeDesc SDL_INT64_DESC;
+extern const SdlTypeDesc SDL_FLOAT32_DESC;
+extern const SdlTypeDesc SDL_FLOAT64_DESC;
+extern const SdlTypeDesc SDL_COMPLEX32_DESC;
+extern const SdlTypeDesc SDL_COMPLEX64_DESC;
+extern const SdlTypeDesc SDL_ENUM_DESC;
+extern const SdlTypeDesc SDL_STRING_DESC;
 
-/* Decode binary stream without needing the type name argument */
-void* type_decode(const void* encoded, size_t* size);
+struct SdlTypeDesc {
+   SdlTypeKind kind;
+   size_t size;
+   size_t alignment;
+   const char *name;
+   uint32_t hash;
+   union {
+      struct {
+         size_t field_count;
+         const SdlFieldDesc *fields;
+      } structure;
+      struct {
+         const SdlTypeDesc *element;
+      } array;
+   } detail;
+};
 
-/* Create an exact deep copy of any structured message */
-void* type_clone(const char* type, const void* decoded);
+#define SDL_NO_OFFSET ((size_t)-1)
+#define SDL_FIELD_OPTIONAL 0x01u
+#define SDL_FIELD_REPEATED 0x02u
 
-/* Free any single-block allocated message or binary buffer */
-void type_free(void* ptr);
+/* Registers a static, generated type descriptor. */
+bool sdl_register_type(const SdlTypeDesc *type);
 
-#endif /* TYPE_ENGINE_H */
+size_t type_encode_size(const char *type, const void *decoded);
+void *type_encode(const char *type, const void *decoded, size_t *size);
+size_t type_decode_size(const void *encoded, size_t size);
+void *type_decode(const void *encoded, size_t *size);
+void *type_clone(const char *type, const void *decoded);
+void type_free(void *ptr);
+
+#endif /* SDL_TYPE_ENGINE_H */

@@ -1,80 +1,143 @@
-/* ============================================================================
-   TOP-LEVEL TYPE ENGINE API ROUTINES
-   ============================================================================ */
-
-#include "type_engine.h"
 #include "type_private.h"
+
+#include <complex.h>
 #include <stdlib.h>
 #include <string.h>
 
-size_t type_encode_size(const char* type, const void* decoded) {
-   const TypeNode* desc = lookup_by_name(type);
-   if (!desc || !decoded) return 0;
-   return 4 + desc->struct_size + internal_measure_struct(decoded, desc->format) + 64;
+const SdlTypeDesc SDL_BOOL_DESC = { SDL_TYPE_BOOL, sizeof(bool), sizeof(bool), "bool", 0, { { 0, NULL } } };
+const SdlTypeDesc SDL_INT8_DESC = { SDL_TYPE_INT8, sizeof(int8_t), sizeof(int8_t), "int8", 0, { { 0, NULL } } };
+const SdlTypeDesc SDL_INT16_DESC = { SDL_TYPE_INT16, sizeof(int16_t), sizeof(int16_t), "int16", 0, { { 0, NULL } } };
+const SdlTypeDesc SDL_INT32_DESC = { SDL_TYPE_INT32, sizeof(int32_t), sizeof(int32_t), "int32", 0, { { 0, NULL } } };
+const SdlTypeDesc SDL_INT64_DESC = { SDL_TYPE_INT64, sizeof(int64_t), sizeof(int64_t), "int64", 0, { { 0, NULL } } };
+const SdlTypeDesc SDL_FLOAT32_DESC = { SDL_TYPE_FLOAT32, sizeof(float), sizeof(float), "float32", 0, { { 0, NULL } } };
+const SdlTypeDesc SDL_FLOAT64_DESC = { SDL_TYPE_FLOAT64, sizeof(double), sizeof(double), "float64", 0, { { 0, NULL } } };
+const SdlTypeDesc SDL_COMPLEX32_DESC = { SDL_TYPE_COMPLEX32, sizeof(float complex), sizeof(float complex), "complex32", 0, { { 0, NULL } } };
+const SdlTypeDesc SDL_COMPLEX64_DESC = { SDL_TYPE_COMPLEX64, sizeof(double complex), sizeof(double complex), "complex64", 0, { { 0, NULL } } };
+const SdlTypeDesc SDL_ENUM_DESC = { SDL_TYPE_ENUM, sizeof(int32_t), sizeof(int32_t), "enum", 0, { { 0, NULL } } };
+const SdlTypeDesc SDL_STRING_DESC = { SDL_TYPE_STRING, sizeof(char *), sizeof(char *), "string", 0, { { 0, NULL } } };
+
+static size_t encoded_value_size(const SdlTypeDesc *type, const void *value);
+
+static size_t encoded_struct_size(const SdlTypeDesc *type, const void *value) {
+   size_t total = 0, i;
+   for (i = 0; i < type->detail.structure.field_count; ++i) {
+      const SdlFieldDesc *field = &type->detail.structure.fields[i];
+      size_t count = 1, item;
+      const void *data = (const uint8_t *)value + field->offset;
+      if (field->presence_offset != SDL_NO_OFFSET &&
+          !*((const bool *)((const uint8_t *)value + field->presence_offset)))
+         continue;
+      if ((field->flags & SDL_FIELD_REPEATED) != 0) {
+         count = *(const uint32_t *)((const uint8_t *)value + field->count_offset);
+         data = *(const void * const *)data;
+         if (count != 0 && data == NULL) return 0;
+      }
+      for (item = 0; item < count; ++item) {
+         const void *element = (field->flags & SDL_FIELD_REPEATED) != 0 ?
+            (const uint8_t *)data + item * field->type->size : data;
+         size_t payload = encoded_value_size(field->type, element);
+         if (payload == SIZE_MAX || payload > SIZE_MAX - total - 8)
+            return 0;
+         total += 8 + payload;
+      }
+   }
+   return total;
 }
 
-void* type_encode(const char* type, const void* decoded, size_t* size) {
-   if (!size) return NULL; *size = 0;
-   const TypeNode* desc = lookup_by_name(type);
-   if (!desc) return NULL;
-
-   size_t max_buffer_needed = type_encode_size(type, decoded);
-   uint8_t* encoded_buffer = (uint8_t*)malloc(max_buffer_needed);
-   if (!encoded_buffer) return NULL;
-
-   *(uint32_t*)&encoded_buffer = desc->hash;
-
-   size_t actual_written = internal_encode(decoded, desc->format, &encoded_buffer, max_buffer_needed - 4);
-   if (actual_written == 0) { free(encoded_buffer); return NULL; }
-
-   *size = 4 + actual_written;
-   return encoded_buffer;
+static size_t encoded_value_size(const SdlTypeDesc *type, const void *value) {
+   if (type->kind == SDL_TYPE_STRING) {
+      const char *string = *(const char * const *)value;
+      size_t n = 0;
+      if (string == NULL) return 0;
+      while (string[n] != '\0') { if (n == SIZE_MAX - 1) return SIZE_MAX; ++n; }
+      return n;
+   }
+   if (type->kind == SDL_TYPE_STRUCT) return encoded_struct_size(type, value);
+   if (type->kind == SDL_TYPE_ENUM) return 4;
+   if (type->kind == SDL_TYPE_COMPLEX32) return 8;
+   if (type->kind == SDL_TYPE_COMPLEX64) return 16;
+   return type->size;
 }
 
-size_t type_decode_size(const void* encoded, size_t size) {
-   if (!encoded || size < 4) return 0;
-   uint32_t hash = *(const uint32_t*)encoded;
-   const TypeNode* desc = lookup_by_hash(hash);
-   if (!desc) return 0;
-
-   size_t dyn_mem_needed = internal_measure_buffer(((const uint8_t*)encoded) + 4, size - 4);
-   return desc->struct_size + dyn_mem_needed;
+size_t type_encode_size(const char *name, const void *decoded) {
+   const SdlTypeDesc *type = sdl_lookup_type(name);
+   size_t payload;
+   if (type == NULL || decoded == NULL) return 0;
+   payload = encoded_struct_size(type, decoded);
+   return payload > SIZE_MAX - 4 ? 0 : payload + 4;
 }
 
-void* type_decode(const void* encoded, size_t* size) {
-   if (!encoded || !size || *size < 4) return NULL;
-   uint32_t hash = *(const uint32_t*)encoded;
-   const TypeNode* desc = lookup_by_hash(hash);
-   if (!desc) return NULL;
+void *type_encode(const char *name, const void *decoded, size_t *size) {
+   const SdlTypeDesc *type;
+   size_t capacity, written;
+   uint8_t *buffer;
+   if (size == NULL) return NULL;
+   *size = 0;
+   type = sdl_lookup_type(name);
+   if (type == NULL || decoded == NULL) return NULL;
+   capacity = type_encode_size(name, decoded);
+   if (capacity == 0) return NULL;
+   buffer = (uint8_t *)malloc(capacity);
+   if (buffer == NULL) return NULL;
+   buffer[0] = (uint8_t)type->hash;
+   buffer[1] = (uint8_t)(type->hash >> 8);
+   buffer[2] = (uint8_t)(type->hash >> 16);
+   buffer[3] = (uint8_t)(type->hash >> 24);
+   written = sdl_value_encode(type, decoded, buffer + 4, capacity - 4);
+   if (written == SIZE_MAX || written + 4 != capacity) { free(buffer); return NULL; }
+   *size = capacity;
+   return buffer;
+}
 
-   size_t total_allocation = type_decode_size(encoded, *size);
-   if (total_allocation == 0) return NULL;
+size_t type_decode_size(const void *encoded, size_t size) {
+   const uint8_t *buffer = (const uint8_t *)encoded;
+   const SdlTypeDesc *type;
+   size_t extra;
+   uint32_t hash;
+   if (buffer == NULL || size < 4) return 0;
+   hash = (uint32_t)buffer[0] | ((uint32_t)buffer[1] << 8) |
+      ((uint32_t)buffer[2] << 16) | ((uint32_t)buffer[3] << 24);
+   type = sdl_lookup_hash(hash);
+   if (type == NULL) return 0;
+   extra = sdl_value_decode_measure(type, buffer + 4, size - 4);
+   if (extra == SIZE_MAX || type->size > SIZE_MAX - extra) return 0;
+   return type->size + extra;
+}
 
-   void* block = malloc(total_allocation);
-   if (!block) return NULL;
-
-   memset(block, 0, desc->struct_size);
-   uint8_t* pool = (uint8_t*)block + desc->struct_size;
-   size_t pool_offset = 0;
-
-   internal_decode_into(((const uint8_t*)encoded) + 4, *size - 4, desc->format, (uint8_t*)block, pool, &pool_offset);
+void *type_decode(const void *encoded, size_t *size) {
+   const uint8_t *buffer = (const uint8_t *)encoded;
+   const SdlTypeDesc *type;
+   void *block;
+   size_t total, offset = 0;
+   uint32_t hash;
+   if (buffer == NULL || size == NULL || *size < 4) return NULL;
+   hash = (uint32_t)buffer[0] | ((uint32_t)buffer[1] << 8) |
+      ((uint32_t)buffer[2] << 16) | ((uint32_t)buffer[3] << 24);
+   type = sdl_lookup_hash(hash);
+   total = type_decode_size(encoded, *size);
+   if (type == NULL || total == 0) return NULL;
+   block = calloc(1, total);
+   if (block == NULL) return NULL;
+   if (!sdl_value_decode(type, buffer + 4, *size - 4, block,
+         (uint8_t *)block + type->size, &offset)) {
+      free(block);
+      return NULL;
+   }
    return block;
 }
 
-void* type_clone(const char* type, const void* decoded) {
-   const TypeNode* desc = lookup_by_name(type);
-   if (!desc || !decoded) return NULL;
-
-   size_t mem_needed = internal_measure_struct(decoded, desc->format);
-   void* block = malloc(desc->struct_size + mem_needed);
-   if (!block) return NULL;
-
-   memset(block, 0, desc->struct_size);
-   uint8_t* pool = (uint8_t*)block + desc->struct_size;
-   size_t pool_offset = 0;
-
-   internal_clone_into(decoded, desc->format, (uint8_t*)block, pool, &pool_offset);
+void *type_clone(const char *name, const void *decoded) {
+   const SdlTypeDesc *type = sdl_lookup_type(name);
+   size_t extra;
+   void *block;
+   size_t offset = 0;
+   if (type == NULL || decoded == NULL) return NULL;
+   extra = sdl_value_measure(type, decoded);
+   if (extra == SIZE_MAX || type->size > SIZE_MAX - extra) return NULL;
+   block = calloc(1, type->size + extra);
+   if (block == NULL) return NULL;
+   sdl_value_clone(type, decoded, block, (uint8_t *)block + type->size, &offset);
    return block;
 }
 
-void type_free(void* ptr) { if (ptr) free(ptr); }
+void type_free(void *ptr) { free(ptr); }
