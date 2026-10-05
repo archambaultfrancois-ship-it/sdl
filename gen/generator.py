@@ -154,12 +154,13 @@ def main():
    argument_parser = argparse.ArgumentParser(description='Generate code from SDL schemas.')
    argument_parser.add_argument('-c', action='store_true', help='generate C code')
    argument_parser.add_argument('-rust', action='store_true', help='generate Rust code')
+   argument_parser.add_argument('-python', action='store_true', help='generate Python 3 code')
    argument_parser.add_argument('input', nargs='?', default='sdl', help='SDL file or directory')
    argument_parser.add_argument('output', nargs='?', default='build/generated',
       help='output directory (language subdirectory is added automatically)')
    arguments = argument_parser.parse_args()
-   if not arguments.c and not arguments.rust:
-      argument_parser.error('select at least one backend with -c or -rust')
+   if not arguments.c and not arguments.rust and not arguments.python:
+      argument_parser.error('select at least one backend with -c, -rust or -python')
    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
    if arguments.c:
       from c_backend import generate_c
@@ -167,6 +168,9 @@ def main():
    if arguments.rust:
       from rust_backend import generate_rust
       generate_rust(arguments.input, os.path.join(arguments.output, 'rust'))
+   if arguments.python:
+      from python_backend import generate_python
+      generate_python(arguments.input, os.path.join(arguments.output, 'python'))
 
 
 if __name__ == '__main__':
