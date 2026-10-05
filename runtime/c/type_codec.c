@@ -374,23 +374,23 @@ bool sdl_value_decode(const SdlTypeDesc *type, const uint8_t *buffer,
       } else if (size != type->size) return false;
       if (type->kind == SDL_TYPE_COMPLEX32) {
          uint32_t bits;
-         float real_part, imag_part;
+         float components[2];
          float complex result;
-         bits = sdl_wire_read_u32(buffer); memcpy(&real_part, &bits, 4);
-         bits = sdl_wire_read_u32(buffer + 4); memcpy(&imag_part, &bits, 4);
-         result = real_part + imag_part * I;
+         bits = sdl_wire_read_u32(buffer); memcpy(&components[0], &bits, 4);
+         bits = sdl_wire_read_u32(buffer + 4); memcpy(&components[1], &bits, 4);
+         memcpy(&result, components, sizeof(result));
          memcpy(value, &result, sizeof(result));
       } else if (type->kind == SDL_TYPE_COMPLEX64) {
          uint64_t bits[2];
-         double real_part, imag_part;
+         double components[2];
          double complex result;
          size_t j;
          for (i = 0; i < 2; ++i) {
             bits[i] = 0;
             for (j = 0; j < 8; ++j) bits[i] |= (uint64_t)buffer[i * 8 + j] << (j * 8);
          }
-         memcpy(&real_part, &bits[0], 8); memcpy(&imag_part, &bits[1], 8);
-         result = real_part + imag_part * I;
+         memcpy(&components[0], &bits[0], 8); memcpy(&components[1], &bits[1], 8);
+         memcpy(&result, components, sizeof(result));
          memcpy(value, &result, sizeof(result));
       } else {
          sdl_wire_decode_native(value, buffer, size);
