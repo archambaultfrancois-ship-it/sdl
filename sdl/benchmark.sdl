@@ -1,0 +1,4 @@
+message BenchPayload {
+   1: required string header;
+   2: repeated c32 samples;
+}
