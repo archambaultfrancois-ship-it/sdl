@@ -1,1 +1,3 @@
 /build/
+/tst/rust/target/
+__pycache__/
