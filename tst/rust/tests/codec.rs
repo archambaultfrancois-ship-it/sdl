@@ -1,4 +1,5 @@
-use sdl_runtime::{decode, encode, CodecError, Complex32, Complex64};
+use sdl_runtime::{decode, decode_dynamic, encode, CodecError, Complex32, Complex64,
+   DynamicValue, SdlMessage};
 use sdl_schema_tests::codec_cases::{CodecCases, State};
 use sdl_schema_tests::schema::{
    AnonymousEnvelope, AnonymousEnvelope1, AnonymousEnvelope2, AnonymousEnvelope3,
@@ -15,6 +16,15 @@ fn wire_u32(value: u32) -> [u8; 4] {
       value.to_le_bytes()
    } else {
       value.to_be_bytes()
+   }
+}
+
+fn read_wire_u32(bytes: &[u8]) -> u32 {
+   let bytes: [u8; 4] = bytes.try_into().unwrap();
+   if cfg!(feature = "wire-little-endian") {
+      u32::from_le_bytes(bytes)
+   } else {
+      u32::from_be_bytes(bytes)
    }
 }
 
@@ -37,11 +47,31 @@ fn root_payload_deep_clone_and_wire_round_trip() {
    assert_ne!(cloned.var_array[0].name.as_ref().unwrap().as_ptr(), original.var_array[0].name.as_ref().unwrap().as_ptr());
 
    let wire = encode(&cloned).unwrap();
+   let descriptor_size = read_wire_u32(&wire[..4]) as usize;
+   let descriptor_end = 4 + descriptor_size;
+   assert_eq!(&wire[4..descriptor_end], RootPayload::DESCRIPTOR);
    assert_eq!(wire.as_slice(), C_ROOT_PAYLOAD_WIRE);
    let decoded: RootPayload = decode(&wire).unwrap();
    assert_eq!(decoded, original);
    let decoded_from_c: RootPayload = decode(C_ROOT_PAYLOAD_WIRE).unwrap();
    assert_eq!(decoded_from_c, original);
+
+   let generic = decode_dynamic(&wire).unwrap();
+   assert_eq!(generic.type_name, "RootPayload");
+   assert_eq!(generic.fields.get("header"), Some(&DynamicValue::String(
+      "Mission_Data_Packet".to_owned())));
+   match generic.fields.get("var_array").unwrap() {
+      DynamicValue::Array(values) => match &values[0] {
+         DynamicValue::Message(item) => assert_eq!(item.fields.get("id"),
+            Some(&DynamicValue::Integer(99999))),
+         other => panic!("unexpected dynamic repeated value: {:?}", other),
+      },
+      other => panic!("unexpected dynamic repeated field: {:?}", other),
+   }
+   let mut modified_descriptor_hash = wire.clone();
+   modified_descriptor_hash[descriptor_end] ^= 1;
+   assert_eq!(decode_dynamic(&modified_descriptor_hash),
+      Err(CodecError::DescriptorHashMismatch));
 }
 
 #[test]
@@ -61,6 +91,22 @@ fn nested_fixed_arrays_round_trip() {
    let wire = encode(&input).unwrap();
    let decoded: FixedBoard = decode(&wire).unwrap();
    assert_eq!(decoded, input);
+   let generic = decode_dynamic(&wire).unwrap();
+   match generic.fields.get("rows").unwrap() {
+      DynamicValue::Array(rows) => match &rows[1] {
+         DynamicValue::Message(row) => match row.fields.get("vectors").unwrap() {
+            DynamicValue::Array(vectors) => match &vectors[0] {
+               DynamicValue::Message(vector) => assert_eq!(vector.fields.get("coords"),
+               Some(&DynamicValue::Array(vec![DynamicValue::Float(100.0),
+                  DynamicValue::Float(101.0)]))),
+               other => panic!("unexpected fixed vector: {:?}", other),
+            },
+            other => panic!("unexpected row vector array: {:?}", other),
+         },
+         other => panic!("unexpected fixed row value: {:?}", other),
+      },
+      other => panic!("unexpected fixed board rows: {:?}", other),
+   }
 
    let mut malformed = wire;
    malformed.extend_from_slice(&wire_u32(1));
@@ -86,6 +132,18 @@ fn anonymous_nested_structs_round_trip() {
    let wire = encode(&input).unwrap();
    let decoded: AnonymousEnvelope = decode(&wire).unwrap();
    assert_eq!(decoded, input);
+   let generic = decode_dynamic(&wire).unwrap();
+   match generic.fields.get("metadata").unwrap() {
+      DynamicValue::Message(metadata) => {
+         assert_eq!(metadata.type_name, "AnonymousEnvelope$1");
+         match metadata.fields.get("detail").unwrap() {
+            DynamicValue::Message(detail) => assert_eq!(detail.fields.get("text"),
+               Some(&DynamicValue::String("anonymous detail".to_owned()))),
+            other => panic!("unexpected anonymous detail: {:?}", other),
+         }
+      },
+      other => panic!("unexpected anonymous metadata: {:?}", other),
+   }
 }
 
 fn codec_cases() -> CodecCases {
@@ -122,6 +180,10 @@ fn codec_scalars_optionals_enums_arrays_and_empty_values() {
    let decoded: CodecCases = decode(&wire).unwrap();
    assert_eq!(decoded, input);
    assert!(decoded.ratio.unwrap().is_sign_negative());
+   let dynamic = decode_dynamic(&wire).unwrap();
+   assert_eq!(dynamic.fields.get("state"), Some(&DynamicValue::Enum {
+      type_name: "State".to_owned(), name: "READY".to_owned(), value: 1,
+   }));
 }
 
 #[test]
@@ -168,6 +230,7 @@ fn packed_field_rejects_non_multiple_element_length() {
 #[test]
 fn wrong_type_hash_is_rejected() {
    let mut wire = encode(&codec_cases()).unwrap();
-   wire[0] ^= 0x80;
+   let descriptor_size = read_wire_u32(&wire[..4]) as usize;
+   wire[4 + descriptor_size] ^= 0x80;
    assert_eq!(decode::<CodecCases>(&wire), Err(CodecError::TypeMismatch));
 }

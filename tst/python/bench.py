@@ -22,7 +22,7 @@ def main():
       ],
    )
    wire = encode(message)
-   assert len(wire) == 40220
+   assert len(wire) == 40224 + len(BenchPayload._SDL_DESCRIPTOR)
 
    start = time.perf_counter()
    for unused_iteration in range(iterations):

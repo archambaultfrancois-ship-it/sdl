@@ -58,7 +58,7 @@ int main(void) {
 
    wire = (uint8_t *)type_encode("BenchPayload", &message, &wire_size);
    assert(wire != NULL && wire_size != 0);
-   assert(wire_size == 40220);
+   assert(wire_size == 40224 + BENCHPAYLOAD_SCHEMA_DESCRIPTOR_SIZE);
 
    start = clock();
    for (i = 0; i < iterations; ++i) {

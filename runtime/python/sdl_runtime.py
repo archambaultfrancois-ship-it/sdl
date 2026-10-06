@@ -8,6 +8,12 @@ _WIRE_ENDIAN = os.environ.get('SDL_WIRE_ENDIAN', 'big').lower()
 if _WIRE_ENDIAN not in ('big', 'little'):
    raise RuntimeError('SDL_WIRE_ENDIAN must be "big" or "little"')
 _WIRE_PREFIX = '<' if _WIRE_ENDIAN == 'little' else '>'
+_MAX_DESCRIPTOR_SIZE = 1024 * 1024
+_PRIMITIVE_WIRE_SIZES = {
+   'bool': 1, 'int8': 1, 'int16': 2, 'int32': 4, 'int64': 8,
+   'fl32': 4, 'fl64': 8, 'c32': 8, 'c64': 16,
+}
+_BUILTIN_TYPES = frozenset(tuple(_PRIMITIVE_WIRE_SIZES) + ('string',))
 
 
 class CodecError(ValueError):
@@ -36,6 +42,39 @@ class Complex64:
 
    def __repr__(self):
       return 'Complex64(real={!r}, imag={!r})'.format(self.real, self.imag)
+
+
+class SdlDynamicEnum:
+   """Language-neutral enum value decoded from a wire descriptor."""
+
+   def __init__(self, type_name, value, name=None):
+      self.type_name = type_name
+      self.value = value
+      self.name = name
+
+   def __eq__(self, other):
+      return (isinstance(other, SdlDynamicEnum) and
+         (self.type_name, self.value, self.name) ==
+         (other.type_name, other.value, other.name))
+
+   def __repr__(self):
+      return 'SdlDynamicEnum({!r}, {!r}, {!r})'.format(
+         self.type_name, self.value, self.name)
+
+
+class SdlDynamicMessage:
+   """Neutral message value whose shape comes from its wire descriptor."""
+
+   def __init__(self, type_name, fields):
+      self.type_name = type_name
+      self.fields = fields
+
+   def __eq__(self, other):
+      return (isinstance(other, SdlDynamicMessage) and
+         self.type_name == other.type_name and self.fields == other.fields)
+
+   def __repr__(self):
+      return 'SdlDynamicMessage({!r}, {!r})'.format(self.type_name, self.fields)
 
 
 def default_value(type_name, namespace):
@@ -342,13 +381,403 @@ class SdlMessage:
 def encode(message):
    if not isinstance(message, SdlMessage):
       raise CodecError('encode expects an SDL message')
-   return struct.pack(_WIRE_PREFIX + 'I', message._SDL_HASH) + message.encode_payload()
+   descriptor = message._SDL_DESCRIPTOR
+   if len(descriptor) > 0xFFFFFFFF:
+      raise CodecError('schema descriptor exceeds uint32 length')
+   return (struct.pack(_WIRE_PREFIX + 'I', len(descriptor)) + descriptor +
+      struct.pack(_WIRE_PREFIX + 'I', message._SDL_HASH) + message.encode_payload())
 
 
 def decode(wire, message_type):
-   if len(wire) < 4:
-      raise CodecError('truncated message hash')
-   type_hash = struct.unpack_from(_WIRE_PREFIX + 'I', wire)[0]
+   if len(wire) < 8:
+      raise CodecError('truncated message descriptor')
+   descriptor_size = struct.unpack_from(_WIRE_PREFIX + 'I', wire)[0]
+   if descriptor_size > len(wire) - 8:
+      raise CodecError('truncated message descriptor')
+   descriptor = wire[4:4 + descriptor_size]
+   if descriptor != message_type._SDL_DESCRIPTOR:
+      raise CodecError('message schema descriptor mismatch')
+   hash_offset = 4 + descriptor_size
+   type_hash = struct.unpack_from(_WIRE_PREFIX + 'I', wire, hash_offset)[0]
    if type_hash != message_type._SDL_HASH:
       raise CodecError('message type hash mismatch')
-   return message_type.decode_payload(wire[4:])
+   return message_type.decode_payload(wire[hash_offset + 4:])
+
+
+def _fnv1a_32_bytes(data):
+   value = 2166136261
+   for byte in data:
+      value = ((value ^ byte) * 16777619) & 0xFFFFFFFF
+   return value
+
+
+def _read_descriptor_frame(wire):
+   if len(wire) < 8:
+      raise CodecError('truncated message descriptor')
+   descriptor_size = struct.unpack_from(_WIRE_PREFIX + 'I', wire)[0]
+   if descriptor_size > _MAX_DESCRIPTOR_SIZE or descriptor_size > len(wire) - 8:
+      raise CodecError('invalid or truncated message descriptor length')
+   descriptor_bytes = wire[4:4 + descriptor_size]
+   try:
+      descriptor = _decode_binary_descriptor(descriptor_bytes)
+   except (UnicodeDecodeError, ValueError, IndexError) as error:
+      raise CodecError('invalid schema descriptor') from error
+   hash_offset = 4 + descriptor_size
+   type_hash = struct.unpack_from(_WIRE_PREFIX + 'I', wire, hash_offset)[0]
+   if type_hash != _fnv1a_32_bytes(descriptor_bytes):
+      raise CodecError('schema descriptor hash mismatch')
+   messages, enums = _validate_dynamic_descriptor(descriptor)
+   return descriptor['root'], messages, enums, wire[hash_offset + 4:]
+
+
+class _DescriptorReader:
+   def __init__(self, data):
+      self.data = data
+      self.offset = 0
+
+   def read(self, size):
+      if size < 0 or size > len(self.data) - self.offset:
+         raise ValueError('truncated descriptor')
+      value = self.data[self.offset:self.offset + size]
+      self.offset += size
+      return value
+
+   def read_u8(self):
+      return self.read(1)[0]
+
+   def read_u16(self):
+      return int.from_bytes(self.read(2), 'big')
+
+   def read_u32(self):
+      return int.from_bytes(self.read(4), 'big')
+
+   def read_i32(self):
+      return int.from_bytes(self.read(4), 'big', signed=True)
+
+   def read_text(self):
+      size = self.read_u16()
+      return self.read(size).decode('utf-8')
+
+
+def _decode_binary_descriptor(data):
+   reader = _DescriptorReader(data)
+   if reader.read(4) != b'SDD1':
+      raise ValueError('unknown descriptor version')
+   root = reader.read_text()
+   messages = []
+   previous_message_name = None
+   for unused_message_index in range(reader.read_u16()):
+      name = reader.read_text()
+      if previous_message_name is not None and name <= previous_message_name:
+         raise ValueError('message declarations are not ordered')
+      previous_message_name = name
+      fields = []
+      previous_field_id = 0
+      for unused_field_index in range(reader.read_u16()):
+         field_id = reader.read_u32()
+         if field_id <= previous_field_id:
+            raise ValueError('message fields are not ordered')
+         previous_field_id = field_id
+         field_name = reader.read_text()
+         modifier_code = reader.read_u8()
+         if modifier_code > 3:
+            raise ValueError('invalid field modifier')
+         type_name = reader.read_text()
+         dimensions = [reader.read_u32() for unused_dimension in
+            range(reader.read_u8())]
+         fields.append({
+            'id': field_id,
+            'name': field_name,
+            'modifier': ('required', 'optional', 'repeated', 'packed')[modifier_code],
+            'type': type_name,
+            'dimensions': dimensions,
+         })
+      messages.append([name, fields])
+   enums = []
+   previous_enum_name = None
+   for unused_enum_index in range(reader.read_u16()):
+      name = reader.read_text()
+      if previous_enum_name is not None and name <= previous_enum_name:
+         raise ValueError('enum declarations are not ordered')
+      previous_enum_name = name
+      pairs = [[reader.read_text(), reader.read_i32()]
+         for unused_value_index in range(reader.read_u16())]
+      enums.append([name, pairs])
+   if reader.offset != len(data):
+      raise ValueError('trailing descriptor bytes')
+   return {'format': 'SDL-DESC-1', 'root': root,
+      'messages': messages, 'enums': enums}
+
+
+def _validate_dynamic_descriptor(descriptor):
+   if (not isinstance(descriptor, dict) or
+         set(descriptor) != {'format', 'root', 'messages', 'enums'} or
+         descriptor.get('format') != 'SDL-DESC-1' or
+         not isinstance(descriptor.get('root'), str) or
+         not descriptor.get('root') or
+         not isinstance(descriptor.get('messages'), list) or
+         not isinstance(descriptor.get('enums'), list)):
+      raise CodecError('unsupported schema descriptor shape')
+   messages = {}
+   enums = {}
+   previous_message_name = None
+   for entry in descriptor['messages']:
+      if (not isinstance(entry, list) or len(entry) != 2 or
+            not isinstance(entry[0], str) or not entry[0] or
+            not isinstance(entry[1], list) or
+            entry[0] in messages):
+         raise CodecError('invalid message declaration in descriptor')
+      if previous_message_name is not None and entry[0] <= previous_message_name:
+         raise CodecError('message declarations are not canonically ordered')
+      previous_message_name = entry[0]
+      fields = []
+      ids = set()
+      names = set()
+      previous_field_id = 0
+      for field in entry[1]:
+         if (not isinstance(field, dict) or set(field) !=
+               {'id', 'name', 'modifier', 'type', 'dimensions'}):
+            raise CodecError('invalid field declaration in descriptor')
+         field_id = field['id']
+         name = field.get('name', '')
+         modifier = field['modifier']
+         type_name = field['type']
+         dimensions = field['dimensions']
+         if (type(field_id) is not int or field_id <= 0 or field_id > 0xFFFFFFFF or
+               not isinstance(name, str) or not name or name in names or field_id in ids or
+               modifier not in ('required', 'optional', 'repeated', 'packed') or
+               not isinstance(type_name, str) or not isinstance(dimensions, list) or
+               any(type(item) is not int or item <= 0 or item > 0xFFFFFFFF
+                  for item in dimensions)):
+            raise CodecError('invalid field metadata in descriptor')
+         if field_id <= previous_field_id:
+            raise CodecError('message fields are not canonically ordered')
+         previous_field_id = field_id
+         if dimensions and modifier != 'required':
+            raise CodecError('fixed array has an invalid modifier')
+         ids.add(field_id)
+         names.add(name)
+         fields.append(field)
+      messages[entry[0]] = sorted(fields, key=lambda item: item['id'])
+   previous_enum_name = None
+   for entry in descriptor['enums']:
+      if (not isinstance(entry, list) or len(entry) != 2 or
+            not isinstance(entry[0], str) or not entry[0] or
+            not isinstance(entry[1], list) or
+            entry[0] in enums):
+         raise CodecError('invalid enum declaration in descriptor')
+      if previous_enum_name is not None and entry[0] <= previous_enum_name:
+         raise CodecError('enum declarations are not canonically ordered')
+      previous_enum_name = entry[0]
+      values = {}
+      names = set()
+      for pair in entry[1]:
+         if (not isinstance(pair, list) or len(pair) != 2 or
+               not isinstance(pair[0], str) or not pair[0] or
+               type(pair[1]) is not int or
+               pair[1] < -0x80000000 or pair[1] > 0x7FFFFFFF or
+               pair[0] in names or pair[1] in values):
+            raise CodecError('invalid enum value in descriptor')
+         names.add(pair[0])
+         values[pair[1]] = pair[0]
+      enums[entry[0]] = values
+   if descriptor['root'] not in messages:
+      raise CodecError('descriptor root message is missing')
+   if set(messages).intersection(enums):
+      raise CodecError('descriptor type name is ambiguous')
+
+   known_types = _BUILTIN_TYPES | set(messages) | set(enums)
+   for type_name, fields in messages.items():
+      for field in fields:
+         if field['type'] not in known_types:
+            raise CodecError('field refers to an unknown descriptor type')
+         if field['dimensions']:
+            fixed_size = _dynamic_type_fixed_size(field['type'], messages, enums)
+            if fixed_size is None:
+               raise CodecError('fixed array element type has variable wire size')
+            for dimension in field['dimensions']:
+               if fixed_size > 0xFFFFFFFF // dimension:
+                  raise CodecError('fixed array wire size overflows')
+               fixed_size *= dimension
+         if field['modifier'] == 'packed' and _dynamic_type_fixed_size(
+               field['type'], messages, enums) is None:
+            raise CodecError('packed field type has variable wire size')
+
+   visiting = set()
+   visited = set()
+
+   def visit(type_name, depth):
+      if depth > 64:
+         raise CodecError('descriptor type nesting is too deep')
+      if type_name in visited or type_name in _BUILTIN_TYPES or type_name in enums:
+         return
+      if type_name in visiting:
+         raise CodecError('recursive descriptor types are unsupported')
+      visiting.add(type_name)
+      for field in messages[type_name]:
+         if field['type'] in messages:
+            visit(field['type'], depth + 1)
+      visiting.remove(type_name)
+      visited.add(type_name)
+
+   for type_name in messages:
+      visit(type_name, 0)
+   return messages, enums
+
+
+def _dynamic_field_size(field, messages, enums, active=None):
+   size = _dynamic_type_fixed_size(field['type'], messages, enums, active)
+   if size is None:
+      return None
+   for dimension in field['dimensions']:
+      if size > 0xFFFFFFFF // dimension:
+         return None
+      size *= dimension
+   return size
+
+
+def _dynamic_type_fixed_size(type_name, messages, enums, active=None):
+   if type_name in _PRIMITIVE_WIRE_SIZES:
+      return _PRIMITIVE_WIRE_SIZES[type_name]
+   if type_name == 'string':
+      return None
+   if type_name in enums:
+      return 4
+   if type_name not in messages:
+      return None
+   if active is None:
+      active = set()
+   if type_name in active or len(active) >= 64 or not messages[type_name]:
+      return None
+   active = set(active)
+   active.add(type_name)
+   total = 0
+   for field in messages[type_name]:
+      if field['modifier'] != 'required':
+         return None
+      field_size = _dynamic_field_size(field, messages, enums, active)
+      if field_size is None or total > 0xFFFFFFFF - field_size:
+         return None
+      total += field_size
+   return total
+
+
+def _dynamic_decode_message(type_name, payload, messages, enums, depth=0):
+   if depth > 64:
+      raise CodecError('message nesting is too deep')
+   fields = messages.get(type_name)
+   if fields is None:
+      raise CodecError('unknown message type in descriptor')
+   by_id = {field['id']: field for field in fields}
+   values = {field['name']: ([] if field['modifier'] in ('repeated', 'packed')
+      else None) for field in fields}
+   offset = 0
+   while offset < len(payload):
+      if len(payload) - offset < 8:
+         raise CodecError('truncated field header')
+      field_id, length = struct.unpack_from(_WIRE_PREFIX + 'II', payload, offset)
+      offset += 8
+      if length > len(payload) - offset:
+         raise CodecError('truncated field payload')
+      field = by_id.get(field_id)
+      if field is not None:
+         part = payload[offset:offset + length]
+         modifier = field['modifier']
+         field_type = field['type']
+         if modifier == 'packed':
+            item_size = _dynamic_type_fixed_size(field_type, messages, enums)
+            if item_size is None or len(part) % item_size != 0:
+               raise CodecError('invalid packed field length')
+            item_values = [_dynamic_decode_fixed(field_type, part[index:index + item_size],
+               messages, enums) for index in range(0, len(part), item_size)]
+            values[field['name']].extend(item_values)
+         elif field['dimensions']:
+            values[field['name']] = _dynamic_decode_fixed(field_type, part,
+               messages, enums, field['dimensions'])
+         else:
+            item = _dynamic_decode_value(field_type, part, messages, enums, depth + 1)
+            if modifier == 'repeated':
+               values[field['name']].append(item)
+            else:
+               values[field['name']] = item
+      offset += length
+   return SdlDynamicMessage(type_name, values)
+
+
+def _dynamic_decode_value(type_name, payload, messages, enums, depth):
+   if type_name in enums:
+      if len(payload) != 4:
+         raise CodecError('invalid enum length')
+      number = struct.unpack(_WIRE_PREFIX + 'i', payload)[0]
+      values = enums[type_name]
+      if number not in values:
+         raise CodecError('invalid enum value')
+      return SdlDynamicEnum(type_name, number, values[number])
+   if type_name in messages:
+      return _dynamic_decode_message(type_name, payload, messages, enums, depth)
+   return _unpack_value(type_name, payload, {})
+
+
+def _dynamic_decode_fixed(type_name, payload, messages, enums, dimensions=(), depth=0):
+   if depth > 64:
+      raise CodecError('fixed value nesting is too deep')
+   item_size = _dynamic_type_fixed_size(type_name, messages, enums)
+   if item_size is None:
+      raise CodecError('fixed array element type has variable wire size')
+   expected = item_size
+   for dimension in dimensions:
+      if expected > 0xFFFFFFFF // dimension:
+         raise CodecError('fixed array size overflows')
+      expected *= dimension
+   if len(payload) != expected:
+      raise CodecError('invalid fixed value length')
+
+   def decode_dimension(offset, remaining_dimensions):
+      if not remaining_dimensions:
+         value = _dynamic_decode_fixed_plain(type_name,
+            payload[offset:offset + item_size], messages, enums, depth + 1)
+         return value, offset + item_size
+      values = []
+      for unused_index in range(remaining_dimensions[0]):
+         value, offset = decode_dimension(offset, remaining_dimensions[1:])
+         values.append(value)
+      return values, offset
+
+   if dimensions:
+      value, end = decode_dimension(0, dimensions)
+      if end != len(payload):
+         raise CodecError('invalid fixed array size')
+      return value
+   return _dynamic_decode_fixed_plain(type_name, payload, messages, enums, depth + 1)
+
+
+def _dynamic_decode_fixed_plain(type_name, payload, messages, enums, depth):
+   if type_name in enums:
+      number = struct.unpack(_WIRE_PREFIX + 'i', payload)[0]
+      values = enums[type_name]
+      if number not in values:
+         raise CodecError('invalid enum value')
+      return SdlDynamicEnum(type_name, number, values[number])
+   if type_name in messages:
+      fields = messages[type_name]
+      values = {}
+      offset = 0
+      for field in fields:
+         field_size = _dynamic_field_size(field, messages, enums)
+         if field_size is None or field_size > len(payload) - offset:
+            raise CodecError('invalid fixed struct field')
+         part = payload[offset:offset + field_size]
+         values[field['name']] = _dynamic_decode_fixed(type_name=field['type'],
+            payload=part, messages=messages, enums=enums,
+            dimensions=field['dimensions'], depth=depth + 1)
+         offset += field_size
+      if offset != len(payload):
+         raise CodecError('invalid fixed struct size')
+      return SdlDynamicMessage(type_name, values)
+   return _unpack_value(type_name, payload, {})
+
+
+def decode_dynamic(wire):
+   """Decode a message into neutral values using only its wire descriptor."""
+   root, messages, enums, payload = _read_descriptor_frame(wire)
+   return _dynamic_decode_message(root, payload, messages, enums)

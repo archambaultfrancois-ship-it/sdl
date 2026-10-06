@@ -7,10 +7,86 @@ import os
 import sys
 
 
-def fnv1a_32(string_data):
+def canonical_type_descriptor(schema, root_name):
+   """Return a stable binary descriptor for a message and its reachable types."""
+   messages = {}
+   enums = {}
+   pending = [root_name]
+   while pending:
+      name = pending.pop()
+      if name in messages or name in enums:
+         continue
+      if name in schema.messages:
+         message = schema.messages[name]
+         fields = []
+         for field in sorted(message.fields, key=lambda item: item.index):
+            fields.append({
+               'id': field.index,
+               'name': field.name,
+               'modifier': field.modifier,
+               'type': field.type_name,
+               'dimensions': list(field.array_dimensions),
+            })
+            if field.type_name in schema.messages or field.type_name in schema.enums:
+               pending.append(field.type_name)
+         messages[name] = fields
+      elif name in schema.enums:
+         enums[name] = [[enum_name, int(value)]
+            for enum_name, value in schema.enums[name].pairs]
+      elif name not in MsgParser.BUILTINS:
+         raise ValueError('unknown type in descriptor: ' + name)
+   output = bytearray(b'SDD1')
+
+   def append_u16(value, label):
+      if value < 0 or value > 0xFFFF:
+         raise ValueError(label + ' exceeds uint16 in schema descriptor')
+      output.extend(value.to_bytes(2, 'big'))
+
+   def append_u32(value):
+      output.extend(value.to_bytes(4, 'big'))
+
+   def append_text(value):
+      encoded = value.encode('utf-8')
+      append_u16(len(encoded), 'descriptor string length')
+      output.extend(encoded)
+
+   if len(messages) > 0xFFFF or len(enums) > 0xFFFF:
+      raise ValueError('too many declarations in schema descriptor')
+   append_text(root_name)
+   append_u16(len(messages), 'message count')
+   modifier_codes = {'required': 0, 'optional': 1, 'repeated': 2, 'packed': 3}
+   for name in sorted(messages):
+      append_text(name)
+      fields = messages[name]
+      append_u16(len(fields), 'field count')
+      for field in fields:
+         append_u32(field['id'])
+         append_text(field['name'])
+         output.append(modifier_codes[field['modifier']])
+         append_text(field['type'])
+         if len(field['dimensions']) > 0xFF:
+            raise ValueError('too many array dimensions in schema descriptor')
+         output.append(len(field['dimensions']))
+         for dimension in field['dimensions']:
+            append_u32(dimension)
+   append_u16(len(enums), 'enum count')
+   for name in sorted(enums):
+      append_text(name)
+      values = enums[name]
+      append_u16(len(values), 'enum value count')
+      for enum_name, value in values:
+         append_text(enum_name)
+         try:
+            output.extend(int(value).to_bytes(4, 'big', signed=True))
+         except OverflowError as error:
+            raise ValueError('enum value must fit signed int32 in ' + name) from error
+   return bytes(output)
+
+
+def canonical_type_hash(schema, root_name):
    value = 2166136261
-   for char in string_data:
-      value = ((value ^ ord(char)) * 16777619) & 0xFFFFFFFF
+   for byte in canonical_type_descriptor(schema, root_name):
+      value = ((value ^ byte) * 16777619) & 0xFFFFFFFF
    return value
 
 

@@ -8,7 +8,8 @@ from codec_cases import CodecCases, State
 from schema import (AnonymousEnvelope, AnonymousEnvelope_1, AnonymousEnvelope_2,
    AnonymousEnvelope_3, FixedBoard, FixedItem, FixedRow, FixedVector,
    RootPayload, VarItem)
-from sdl_runtime import CodecError, Complex32, Complex64, decode, encode
+from sdl_runtime import (CodecError, Complex32, Complex64, decode,
+   decode_dynamic, encode)
 
 
 WIRE_ENDIAN = os.environ.get('SDL_WIRE_ENDIAN', 'big').lower()
@@ -62,10 +63,33 @@ class CodecTests(unittest.TestCase):
          ],
       )
       wire = encode(original)
-      self.assertEqual(wire, FIXTURE.read_bytes())
+      fixture = FIXTURE.read_bytes()
+      self.assertEqual(wire, fixture)
       self.assertEqual(decode(wire, RootPayload), original)
-      self.assertEqual(decode(FIXTURE.read_bytes(), RootPayload), original)
+      self.assertEqual(decode(fixture, RootPayload), original)
       self.assertIsNot(original.fixed_array, decode(wire, RootPayload).fixed_array)
+
+   def test_wire_descriptor_decodes_without_generated_message_classes(self):
+      original = RootPayload(
+         header='descriptor-driven',
+         fixed_array=[FixedItem(x=1.25, y=-2.5)],
+         var_array=[VarItem(name='nested', id=123456789)],
+      )
+      decoded = decode_dynamic(encode(original))
+      self.assertEqual(decoded.type_name, 'RootPayload')
+      self.assertEqual(decoded.fields['header'], 'descriptor-driven')
+      self.assertEqual(decoded.fields['fixed_array'][0].type_name, 'FixedItem')
+      self.assertAlmostEqual(decoded.fields['fixed_array'][0].fields['x'], 1.25)
+      self.assertEqual(decoded.fields['var_array'][0].type_name, 'VarItem')
+      self.assertEqual(decoded.fields['var_array'][0].fields['name'], 'nested')
+      self.assertEqual(decoded.fields['var_array'][0].fields['id'], 123456789)
+
+   def test_dynamic_decode_rejects_modified_descriptor_hash(self):
+      wire = bytearray(encode(RootPayload(header='check')))
+      descriptor_size = int.from_bytes(wire[:4], WIRE_ENDIAN)
+      wire[4 + descriptor_size] ^= 1
+      with self.assertRaisesRegex(CodecError, 'descriptor hash'):
+         decode_dynamic(bytes(wire))
 
    def test_nested_fixed_arrays_round_trip(self):
       vector = lambda base: FixedVector(
@@ -80,6 +104,12 @@ class CodecTests(unittest.TestCase):
       )
       wire = encode(original)
       self.assertEqual(decode(wire, FixedBoard), original)
+      dynamic = decode_dynamic(wire)
+      self.assertEqual(dynamic.type_name, 'FixedBoard')
+      self.assertEqual(dynamic.fields['rows'][1].fields['vectors'][0].fields['coords'],
+         [100.0, 101.0])
+      self.assertEqual(dynamic.fields['packed_rows'][1].fields['vectors'][0].fields['grid'],
+         [[300, 301, 302], [303, 304, 305]])
       malformed = wire + wire_u32(1) + wire_u32(1) + b'\x00'
       with self.assertRaisesRegex(CodecError, 'fixed array length'):
          decode(malformed, FixedBoard)
@@ -94,12 +124,21 @@ class CodecTests(unittest.TestCase):
             AnonymousEnvelope_3(x=3.0, y=4.5)],
       )
       self.assertEqual(decode(encode(original), AnonymousEnvelope), original)
+      generic = decode_dynamic(encode(original))
+      metadata = generic.fields['metadata']
+      self.assertEqual(metadata.type_name, 'AnonymousEnvelope$1')
+      self.assertEqual(metadata.fields['detail'].fields['text'], 'anonymous detail')
+      self.assertAlmostEqual(generic.fields['points'][1].fields['x'], 3.0)
 
    def test_scalars_optionals_enums_arrays_and_empty_values(self):
       original = codec_cases()
       decoded = decode(encode(original), CodecCases)
       self.assertEqual(decoded, original)
       self.assertTrue(math.copysign(1.0, decoded.ratio) < 0.0)
+      dynamic = decode_dynamic(encode(original))
+      self.assertEqual(dynamic.fields['state'].type_name, 'State')
+      self.assertEqual(dynamic.fields['state'].name, 'READY')
+      self.assertEqual(dynamic.fields['state'].value, 1)
 
    def test_absent_optionals_and_empty_arrays(self):
       original = CodecCases()
@@ -121,7 +160,8 @@ class CodecTests(unittest.TestCase):
       with self.assertRaisesRegex(CodecError, 'boolean'):
          decode(malformed_bool, CodecCases)
       wrong_hash = bytearray(encode(codec_cases()))
-      wrong_hash[0] ^= 0x80
+      descriptor_size = int.from_bytes(wrong_hash[:4], WIRE_ENDIAN)
+      wrong_hash[4 + descriptor_size] ^= 0x80
       with self.assertRaisesRegex(CodecError, 'hash'):
          decode(bytes(wrong_hash), CodecCases)
 
