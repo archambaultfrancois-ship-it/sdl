@@ -42,7 +42,10 @@ uses only the standard library.
 
 The sample checks both generated typed decoding and the language-neutral
 dynamic decoder. Its `interop` target verifies that the C, Rust, and Python
-implementations agree on the descriptor and wire representation.
+implementations agree on the descriptor and wire representation. Java and
+Matlab/Octave backends are available in the generator and have their own
+runtime tests and benchmarks; this sample's Makefile currently exercises the
+C, Rust, and Python implementations.
 
 The public formatting entry points are `type_display("RadioCapture", &value,
 indent_width)` in C, `sdl_runtime::display(&value, indent_width)` in Rust, and

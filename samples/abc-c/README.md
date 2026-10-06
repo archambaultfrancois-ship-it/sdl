@@ -1,6 +1,12 @@
-# Quadratic equation example
+# Quadratic equation example (C)
 
-This C example uses three POSIX threads and the SDL C runtime:
+This C implementation uses three POSIX threads and the SDL C runtime. Matching
+Rust, Java, and Python programs are in [`abc-rust`](../abc-rust/README.md),
+[`abc-java`](../abc-java/README.md), and
+[`abc-python`](../abc-python/README.md). Each follows the same input, solve,
+and display pipeline with the same SDL message types. The simplified,
+sequential Matlab/Octave version is in
+[`abc-matlab`](../abc-matlab/README.md).
 
 1. The input thread asks for the real coefficients `a`, `b`, and `c`.
 2. The solver thread decodes and displays the input SDL message, solves
@@ -23,5 +29,5 @@ Run it in a terminal and enter three numbers when prompted, for example
 `1 -3 2` for the equation `x^2 - 3x + 2 = 0`. The solver displays the SDL
 messages it receives and sends before the display thread prints the solution.
 
-Requires a C99 compiler, POSIX threads and sockets, and Python 3 for generation.
+Requires a C99 compiler, POSIX threads and Unix-domain sockets, and Python 3 for generation.
 Use `make clean` to remove generated bindings and the executable.
