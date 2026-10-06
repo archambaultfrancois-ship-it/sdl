@@ -6,6 +6,12 @@ Run the typed runtime benchmarks from the repository root with:
 make bench
 ```
 
+The aggregate `make bench` command runs each backend and prints one summary
+table with encode/decode messages per second and MiB per second. The Matlab
+row identifies whether Matlab or the Octave fallback ran. Individual
+`make bench-c`, `make bench-rust`, `make bench-python`, `make bench-matlab`,
+and `make bench-java` targets retain their native output formats.
+
 The benchmark message is created before timing. It contains a 200-byte ASCII
 header and a packed array of 5,000 `c32` values. Its body is 40,216 bytes:
 200 bytes of string data, 40,000 bytes of complex samples, and two 8-byte

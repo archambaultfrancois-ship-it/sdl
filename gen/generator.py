@@ -422,7 +422,7 @@ def main():
    argument_parser.add_argument('-c', action='store_true', help='generate C code')
    argument_parser.add_argument('-rust', action='store_true', help='generate Rust code')
    argument_parser.add_argument('-python', action='store_true', help='generate Python 3 code')
-   argument_parser.add_argument('-matlab', action='store_true', help='generate MATLAB/Octave code')
+   argument_parser.add_argument('-matlab', action='store_true', help='generate Matlab/Octave code')
    argument_parser.add_argument('-java', action='store_true', help='generate Java 7 compatible code')
    argument_parser.add_argument('input', nargs='?', default='sdl', help='SDL file or directory')
    argument_parser.add_argument('output', nargs='?', default='build/generated',

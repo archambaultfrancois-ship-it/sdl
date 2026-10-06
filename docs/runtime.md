@@ -183,6 +183,14 @@ default to empty lists. Fixed arrays are nested lists with the declared
 dimensions. The generated class definitions are the authoritative Python
 field types.
 
+## Matlab
+
+Generate the Matlab backend with `gen/generator.py -matlab`. The generated
+codec is intended to work with both Matlab and GNU Octave. `make test-matlab`
+uses Matlab in batch mode when `matlab` is available in `PATH`, and otherwise
+falls back to Octave. Override the executable names with `matlab=...` or
+`OCTAVE=...` when needed.
+
 ## Java 7+
 
 Generate Java sources with `gen/generator.py -java`. Each `.sdl` file produces

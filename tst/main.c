@@ -1781,7 +1781,6 @@ int main(void) {
    type_dynamic_free(descriptor_output);
    type_free(bin_stream);
    type_free(cloned);
-   printf("\n [Clean] Memory resources wiped out. Zero fragmentation.\n");
 
    return 0;
 }

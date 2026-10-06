@@ -1,6 +1,6 @@
 # SDL encoder
 
-SDL is a schema-driven message encoder with C, Rust, Python, MATLAB/Octave, and Java runtimes.
+SDL is a schema-driven message encoder with C, Rust, Python, Matlab/Octave, and Java runtimes.
 The generator reads `.sdl` schemas and emits bindings for the selected
 languages. The runtimes share a language-neutral wire descriptor; the wire
 format does not depend on a target language's in-memory layout.
@@ -24,7 +24,7 @@ run the complete test suite with:
 make test
 ```
 
-This runs the C, Rust, Python, MATLAB/Octave, and Java unit tests in both wire byte orders. The
+This runs the C, Rust, Python, Matlab/Octave, and Java unit tests in both wire byte orders. The
 examples are intended for learning and can be run separately; their commands
 are documented below. Run the throughput measurements with `make bench`; see
 [`docs/benchmarks.md`](docs/benchmarks.md) for the measured message and timing
@@ -72,7 +72,7 @@ The default wire byte order is big endian. Little endian is a build/runtime
 option, and communicating peers must use the same setting because frames do
 not carry a byte-order marker. Select it with `-DSDL_WIRE_LITTLE_ENDIAN` when
 building C, the Cargo feature `wire-little-endian` for Rust, or the environment
-variable `SDL_WIRE_ENDIAN=little` for Python, MATLAB/Octave, and Java. The
+variable `SDL_WIRE_ENDIAN=little` for Python, Matlab/Octave, and Java. The
 example Makefiles coordinate the setting with `WIRE_ENDIAN=big` or
 `WIRE_ENDIAN=little`. See
 [`docs/wire_descriptor.md`](docs/wire_descriptor.md) for the frame and
