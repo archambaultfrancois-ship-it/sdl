@@ -10,6 +10,11 @@ RUST_GENERATED_DIR := $(GENERATED_DIR)/rust
 PYTHON_GENERATED_DIR := $(GENERATED_DIR)/python
 MATLAB_GENERATED_DIR := $(GENERATED_DIR)/matlab
 OCTAVE ?= octave
+JAVAC ?= javac
+JAVA ?= java
+JAVA_SOURCE ?= 8
+JAVA_GENERATED_DIR := $(GENERATED_DIR)/java
+JAVA_TEST_CLASSES := $(BUILD_DIR)/java-test-classes
 SDL_FILES := $(wildcard sdl/*.sdl)
 
 all: $(BUILD_DIR)/sdl_utest
@@ -19,6 +24,7 @@ check test:
 	$(MAKE) test-rust
 	$(MAKE) test-python
 	$(MAKE) test-matlab
+	$(MAKE) test-java
 
 test-c: $(BUILD_DIR)/sdl_utest $(BUILD_DIR)/sdl_utest_le
 	@echo "=== Component C: generated typed codec, runtime storage, then wire limits ==="
@@ -40,6 +46,7 @@ test-python: $(GENERATED_DIR)/.stamp
 
 bench: bench-c bench-rust bench-python
 	$(MAKE) bench-matlab
+	$(MAKE) bench-java
 
 bench-c: $(BUILD_DIR)/sdl_bench
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) ./$(BUILD_DIR)/sdl_bench
@@ -54,12 +61,23 @@ test-matlab: $(GENERATED_DIR)/.stamp
 	SDL_WIRE_ENDIAN=big $(OCTAVE) --quiet --no-gui --eval "addpath('$(MATLAB_GENERATED_DIR)'); addpath('tst/matlab'); run_tests"
 	SDL_WIRE_ENDIAN=little $(OCTAVE) --quiet --no-gui --eval "addpath('$(MATLAB_GENERATED_DIR)'); addpath('tst/matlab'); run_tests"
 
+test-java: $(GENERATED_DIR)/.stamp
+	mkdir -p $(JAVA_TEST_CLASSES)
+	$(JAVAC) -source $(JAVA_SOURCE) -target $(JAVA_SOURCE) -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
+	SDL_WIRE_ENDIAN=big $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaTests
+	SDL_WIRE_ENDIAN=little $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaTests
+
 bench-matlab: $(GENERATED_DIR)/.stamp
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) SDL_WIRE_ENDIAN=big $(OCTAVE) --quiet --no-gui --eval "addpath('$(MATLAB_GENERATED_DIR)'); addpath('tst/matlab'); bench"
 
-$(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py Makefile
+bench-java: $(GENERATED_DIR)/.stamp
+	mkdir -p $(JAVA_TEST_CLASSES)
+	$(JAVAC) -source $(JAVA_SOURCE) -target $(JAVA_SOURCE) -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
+	SDL_WIRE_ENDIAN=big SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaBench
+
+$(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py runtime/java/SdlCodec.java Makefile
 	mkdir -p $(GENERATED_DIR)
-	$(PYTHON) gen/generator.py -c -rust -python -matlab sdl $(GENERATED_DIR)
+	$(PYTHON) gen/generator.py -c -rust -python -matlab -java sdl $(GENERATED_DIR)
 	touch $@
 
 $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/empty_message.h $(C_GENERATED_DIR)/sdl_registry.h: $(GENERATED_DIR)/.stamp
@@ -79,4 +97,4 @@ $(BUILD_DIR)/sdl_bench: runtime/c/type_engine.c runtime/c/type_registry.c runtim
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all clean test test-c test-rust test-python test-matlab bench bench-c bench-rust bench-python bench-matlab
+.PHONY: all clean test test-c test-rust test-python test-matlab test-java bench bench-c bench-rust bench-python bench-matlab bench-java

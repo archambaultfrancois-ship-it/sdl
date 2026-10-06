@@ -1,6 +1,6 @@
 # Throughput benchmarks
 
-Run the three typed runtime benchmarks from the repository root with:
+Run the typed runtime benchmarks from the repository root with:
 
 ```sh
 make bench
@@ -16,13 +16,14 @@ decoding checks successful completion without inspecting decoded values in
 the timed loop.
 
 `SDL_BENCH_ITERATIONS` controls the number of iterations; `make bench` uses
-`BENCH_ITERATIONS` (default 200) to set it for all three runtimes. The value
+`BENCH_ITERATIONS` (default 200) to set it for all runtimes, including Java. The value
 must contain only ASCII decimal digits and represent a positive integer within
 the platform range; otherwise it falls back to 200 iterations.
 Output reports messages per second and MiB per second, where MiB is 1,048,576
 bytes. If an iteration count is too small for the timer resolution, the
 benchmark reports that instead of printing an infinite rate.
-All three benchmark commands use the default big-endian wire mode.
+All benchmark commands use the default big-endian wire mode. Java uses the
+same 200-byte header and 5,000 complex samples as the other implementations.
 
 These figures measure typed codec calls and their allocations. They do not
 include message construction, transport, or application work. The C benchmark

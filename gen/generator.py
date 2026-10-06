@@ -423,12 +423,13 @@ def main():
    argument_parser.add_argument('-rust', action='store_true', help='generate Rust code')
    argument_parser.add_argument('-python', action='store_true', help='generate Python 3 code')
    argument_parser.add_argument('-matlab', action='store_true', help='generate MATLAB/Octave code')
+   argument_parser.add_argument('-java', action='store_true', help='generate Java 7 compatible code')
    argument_parser.add_argument('input', nargs='?', default='sdl', help='SDL file or directory')
    argument_parser.add_argument('output', nargs='?', default='build/generated',
       help='output directory (language subdirectory is added automatically)')
    arguments = argument_parser.parse_args()
-   if not arguments.c and not arguments.rust and not arguments.python and not arguments.matlab:
-      argument_parser.error('select at least one backend with -c, -rust, -python or -matlab')
+   if not arguments.c and not arguments.rust and not arguments.python and not arguments.matlab and not arguments.java:
+      argument_parser.error('select at least one backend with -c, -rust, -python, -matlab or -java')
    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
    try:
       if arguments.c:
@@ -443,6 +444,9 @@ def main():
       if arguments.matlab:
          from matlab_backend import generate_matlab
          generate_matlab(arguments.input, os.path.join(arguments.output, 'matlab'))
+      if arguments.java:
+         from java_backend import generate_java
+         generate_java(arguments.input, os.path.join(arguments.output, 'java'))
    except ValueError as error:
       argument_parser.error(str(error))
 
