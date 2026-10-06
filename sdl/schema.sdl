@@ -28,6 +28,10 @@ message FixedBoard {
    2: packed FixedRow packed_rows;
 }
 
+message FixedRowBatch {
+   1: packed FixedRow rows;
+}
+
 message AnonymousEnvelope {
    1: required struct {
       1: required int32 code;

@@ -8,6 +8,8 @@ GENERATED_DIR := $(BUILD_DIR)/generated
 C_GENERATED_DIR := $(GENERATED_DIR)/c
 RUST_GENERATED_DIR := $(GENERATED_DIR)/rust
 PYTHON_GENERATED_DIR := $(GENERATED_DIR)/python
+MATLAB_GENERATED_DIR := $(GENERATED_DIR)/matlab
+OCTAVE ?= octave
 SDL_FILES := $(wildcard sdl/*.sdl)
 
 all: $(BUILD_DIR)/sdl_utest
@@ -16,6 +18,7 @@ check test:
 	$(MAKE) test-c
 	$(MAKE) test-rust
 	$(MAKE) test-python
+	$(MAKE) test-matlab
 
 test-c: $(BUILD_DIR)/sdl_utest $(BUILD_DIR)/sdl_utest_le
 	@echo "=== Component C: generated typed codec, runtime storage, then wire limits ==="
@@ -36,6 +39,7 @@ test-python: $(GENERATED_DIR)/.stamp
 	SDL_WIRE_ENDIAN=little PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) tst/python/run_tests.py
 
 bench: bench-c bench-rust bench-python
+	$(MAKE) bench-matlab
 
 bench-c: $(BUILD_DIR)/sdl_bench
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) ./$(BUILD_DIR)/sdl_bench
@@ -46,9 +50,16 @@ bench-rust: $(GENERATED_DIR)/.stamp
 bench-python: $(GENERATED_DIR)/.stamp
 	SDL_WIRE_ENDIAN=big SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) tst/python/bench.py
 
-$(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py Makefile
+test-matlab: $(GENERATED_DIR)/.stamp
+	SDL_WIRE_ENDIAN=big $(OCTAVE) --quiet --no-gui --eval "addpath('$(MATLAB_GENERATED_DIR)'); addpath('tst/matlab'); run_tests"
+	SDL_WIRE_ENDIAN=little $(OCTAVE) --quiet --no-gui --eval "addpath('$(MATLAB_GENERATED_DIR)'); addpath('tst/matlab'); run_tests"
+
+bench-matlab: $(GENERATED_DIR)/.stamp
+	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) SDL_WIRE_ENDIAN=big $(OCTAVE) --quiet --no-gui --eval "addpath('$(MATLAB_GENERATED_DIR)'); addpath('tst/matlab'); bench"
+
+$(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py Makefile
 	mkdir -p $(GENERATED_DIR)
-	$(PYTHON) gen/generator.py -c -rust -python sdl $(GENERATED_DIR)
+	$(PYTHON) gen/generator.py -c -rust -python -matlab sdl $(GENERATED_DIR)
 	touch $@
 
 $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/empty_message.h $(C_GENERATED_DIR)/sdl_registry.h: $(GENERATED_DIR)/.stamp
@@ -68,4 +79,4 @@ $(BUILD_DIR)/sdl_bench: runtime/c/type_engine.c runtime/c/type_registry.c runtim
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all clean test test-c test-rust test-python bench bench-c bench-rust bench-python
+.PHONY: all clean test test-c test-rust test-python test-matlab bench bench-c bench-rust bench-python bench-matlab
