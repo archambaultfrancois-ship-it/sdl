@@ -221,8 +221,7 @@ class MsgParser:
          visiting.add(name)
          message = self.messages[name]
          for field in message.fields:
-            if (field.type_name in self.messages and field.type_name != name and
-                  (field.modifier not in ('repeated', 'packed') or '$' in field.type_name)):
+            if field.type_name in self.messages:
                visit(field.type_name)
          visiting.remove(name)
          visited.add(name)

@@ -28,6 +28,89 @@ fn read_wire_u32(bytes: &[u8]) -> u32 {
    }
 }
 
+fn reverse_body_fields(wire: &[u8]) -> Vec<u8> {
+   let descriptor_size = read_wire_u32(&wire[..4]) as usize;
+   let body_offset = 8 + descriptor_size;
+   let mut fields: Vec<(u32, Vec<&[u8]>)> = Vec::new();
+   let mut offset = body_offset;
+   while offset < wire.len() {
+      let length = read_wire_u32(&wire[offset + 4..offset + 8]) as usize;
+      let end = offset + 8 + length;
+      assert!(end <= wire.len(), "test input contains a truncated field");
+      let field_id = read_wire_u32(&wire[offset..offset + 4]);
+      if let Some((previous_id, group)) = fields.last_mut() {
+         if *previous_id == field_id {
+            group.push(&wire[offset..end]);
+         } else {
+            fields.push((field_id, vec![&wire[offset..end]]));
+         }
+      } else {
+         fields.push((field_id, vec![&wire[offset..end]]));
+      }
+      offset = end;
+   }
+   let mut reversed = wire[..body_offset].to_vec();
+   for (_, group) in fields.into_iter().rev() {
+      for field in group {
+         reversed.extend_from_slice(field);
+      }
+   }
+   reversed
+}
+
+#[test]
+fn s01_field_order_is_independent_of_schema_order() {
+   let original = codec_cases();
+   let reordered = reverse_body_fields(&encode(&original).unwrap());
+   assert_eq!(decode::<CodecCases>(&reordered).unwrap(), original);
+   assert_eq!(decode_dynamic(&reordered).unwrap().fields.get("required_zero"),
+      Some(&DynamicValue::Integer(0)));
+}
+
+#[test]
+fn s02_unicode_strings_and_float_special_values_round_trip() {
+   let text = format!("{}{}tail", "SDL-é-📦-".repeat(128), '\0');
+   let original = RootPayload {
+      header: Some(text.clone()),
+      ..RootPayload::default()
+   };
+   assert_eq!(decode::<RootPayload>(&encode(&original).unwrap()).unwrap(), original);
+
+   let values = CodecCases {
+      ratio: Some(f32::INFINITY),
+      precise: Some(f64::NAN),
+      point: Some(Complex32 { real: f32::NEG_INFINITY, imag: f32::NAN }),
+      position: Some(Complex64 { real: f64::INFINITY, imag: f64::NEG_INFINITY }),
+      ..CodecCases::default()
+   };
+   let decoded = decode::<CodecCases>(&encode(&values).unwrap()).unwrap();
+   assert_eq!(decoded.ratio, Some(f32::INFINITY));
+   assert!(decoded.precise.unwrap().is_nan());
+   assert_eq!(decoded.point.unwrap().real, f32::NEG_INFINITY);
+   assert!(decoded.point.unwrap().imag.is_nan());
+   assert_eq!(decoded.position.unwrap().real, f64::INFINITY);
+   assert_eq!(decoded.position.unwrap().imag, f64::NEG_INFINITY);
+}
+
+#[test]
+fn s03_invalid_frame_and_field_lengths_are_rejected() {
+   let valid = encode(&codec_cases()).unwrap();
+   let mut bad_descriptor_length = valid.clone();
+   bad_descriptor_length[..4].copy_from_slice(&wire_u32(u32::MAX));
+   assert_eq!(decode::<CodecCases>(&bad_descriptor_length), Err(CodecError::Truncated));
+   assert_eq!(decode_dynamic(&bad_descriptor_length), Err(CodecError::Truncated));
+
+   let descriptor_size = read_wire_u32(&valid[..4]) as usize;
+   let body_offset = 8 + descriptor_size;
+   let mut bad_field_length = valid.clone();
+   bad_field_length[body_offset + 4..body_offset + 8]
+      .copy_from_slice(&wire_u32(u32::MAX));
+   assert_eq!(decode::<CodecCases>(&bad_field_length), Err(CodecError::Truncated));
+   assert_eq!(decode_dynamic(&bad_field_length), Err(CodecError::Truncated));
+   assert_eq!(decode::<CodecCases>(&valid[..7]), Err(CodecError::Truncated));
+   assert_eq!(decode_dynamic(&valid[..7]), Err(CodecError::Truncated));
+}
+
 #[test]
 fn root_payload_deep_clone_and_wire_round_trip() {
    let original = RootPayload {

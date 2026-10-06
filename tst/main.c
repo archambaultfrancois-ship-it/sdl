@@ -8,11 +8,159 @@
 #include "sdl_registry.h"
 #include "sdl_wire.h"
 #include <assert.h>
+#include <complex.h>
 #include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static uint8_t *reverse_wire_fields(const uint8_t *wire, size_t wire_size) {
+   size_t descriptor_size;
+   size_t body_offset;
+   size_t offset;
+   size_t count = 0;
+   size_t index;
+   size_t *starts;
+   size_t *ends;
+   uint8_t *result;
+   if (wire_size < 8) return NULL;
+   descriptor_size = sdl_wire_read_u32(wire);
+   if (descriptor_size > wire_size - 8) return NULL;
+   body_offset = 8 + descriptor_size;
+   starts = (size_t *)malloc((wire_size / 8 + 1) * sizeof(size_t));
+   ends = (size_t *)malloc((wire_size / 8 + 1) * sizeof(size_t));
+   result = (uint8_t *)malloc(wire_size);
+   if (starts == NULL || ends == NULL || result == NULL) {
+      free(starts);
+      free(ends);
+      free(result);
+      return NULL;
+   }
+   offset = body_offset;
+   while (offset < wire_size) {
+      uint32_t field_id;
+      size_t length;
+      if (wire_size - offset < 8) goto error;
+      field_id = sdl_wire_read_u32(wire + offset);
+      length = sdl_wire_read_u32(wire + offset + 4);
+      if (length > wire_size - offset - 8) goto error;
+      if (count > 0 &&
+          sdl_wire_read_u32(wire + starts[count - 1]) == field_id) {
+         ends[count - 1] = offset + 8 + length;
+      } else {
+         starts[count] = offset;
+         ends[count] = offset + 8 + length;
+         ++count;
+      }
+      offset = offset + 8 + length;
+   }
+   memcpy(result, wire, body_offset);
+   offset = body_offset;
+   for (index = count; index > 0; --index) {
+      size_t length = ends[index - 1] - starts[index - 1];
+      memcpy(result + offset, wire + starts[index - 1], length);
+      offset += length;
+   }
+   free(starts);
+   free(ends);
+   return result;
+error:
+   free(starts);
+   free(ends);
+   free(result);
+   return NULL;
+}
+
+static void test_extended_usage_cases(void) {
+   CodecCases input;
+   CodecCases *decoded;
+   RootPayload root;
+   RootPayload *decoded_root;
+   uint8_t *wire;
+   uint8_t *reordered;
+   uint8_t *malformed;
+   size_t wire_size = 0;
+   size_t decoded_size;
+   size_t descriptor_size;
+   size_t body_offset;
+   size_t first_length;
+   size_t cut;
+   char text[2048];
+   float complex_parts[2] = { -INFINITY, NAN };
+   double complex64_parts[2] = { INFINITY, -INFINITY };
+   const char *repeat = "SDL-é-📦-";
+   size_t repeat_size = strlen(repeat);
+   size_t repeat_index;
+
+   memset(&input, 0, sizeof(input));
+   input.has_ratio = true;
+   input.ratio = INFINITY;
+   input.has_precise = true;
+   input.precise = NAN;
+   input.has_point = true;
+   memcpy(&input.point, complex_parts, sizeof(input.point));
+   input.has_position = true;
+   memcpy(&input.position, complex64_parts, sizeof(input.position));
+   wire = (uint8_t *)type_encode("CodecCases", &input, &wire_size);
+   assert(wire != NULL);
+   reordered = reverse_wire_fields(wire, wire_size);
+   assert(reordered != NULL);
+   decoded_size = wire_size;
+   decoded = (CodecCases *)type_decode(reordered, &decoded_size);
+   assert(decoded != NULL);
+   assert(isinf(decoded->ratio) && decoded->ratio > 0.0f);
+   assert(isnan(decoded->precise));
+   assert(isinf(crealf(decoded->point)) && crealf(decoded->point) < 0.0f);
+   assert(isnan(cimagf(decoded->point)));
+   assert(isinf(creal(decoded->position)) && creal(decoded->position) > 0.0);
+   assert(isinf(cimag(decoded->position)) && cimag(decoded->position) < 0.0);
+   type_free(decoded);
+   type_free(reordered);
+   type_free(wire);
+   printf(" [S01] Reordered wire fields decode correctly... OK\n");
+
+   for (repeat_index = 0; repeat_index < 128; ++repeat_index)
+      memcpy(text + repeat_index * repeat_size, repeat, repeat_size);
+   text[128 * repeat_size] = '\0';
+   memset(&root, 0, sizeof(root));
+   root.has_header = true;
+   root.header = text;
+   wire_size = 0;
+   wire = (uint8_t *)type_encode("RootPayload", &root, &wire_size);
+   assert(wire != NULL);
+   decoded_size = wire_size;
+   decoded_root = (RootPayload *)type_decode(wire, &decoded_size);
+   assert(decoded_root != NULL);
+   assert(strcmp(decoded_root->header, text) == 0);
+   type_free(decoded_root);
+   printf(" [S02] UTF-8 strings and float edge values round-trip... OK\n");
+
+   descriptor_size = sdl_wire_read_u32(wire);
+   body_offset = 8 + descriptor_size;
+   first_length = sdl_wire_read_u32(wire + body_offset + 4);
+   for (cut = body_offset + 1; cut < body_offset + 8 + first_length; ++cut)
+      assert(type_decode_size(wire, cut) == 0);
+
+   malformed = (uint8_t *)malloc(wire_size);
+   assert(malformed != NULL);
+   memcpy(malformed, wire, wire_size);
+   sdl_wire_write_u32(malformed, UINT32_MAX);
+   assert(type_decode_size(malformed, wire_size) == 0);
+   assert(type_decode(malformed, &wire_size) == NULL);
+   assert(type_decode_dynamic(malformed, wire_size) == NULL);
+   memcpy(malformed, wire, wire_size);
+   sdl_wire_write_u32(malformed + body_offset + 4, UINT32_MAX);
+   assert(type_decode_size(malformed, wire_size) == 0);
+   decoded_size = wire_size;
+   assert(type_decode(malformed, &decoded_size) == NULL);
+   assert(type_decode_dynamic(malformed, wire_size) == NULL);
+   assert(type_decode_size(wire, 7) == 0);
+   assert(type_decode_dynamic(wire, 7) == NULL);
+   free(malformed);
+   type_free(wire);
+   printf(" [S03] Truncation and invalid lengths are rejected... OK\n");
+}
 
 static void test_codec_cases(void) {
    CodecCases input;
@@ -332,10 +480,11 @@ static void assert_root_wire_fixture(const void *wire, size_t wire_size) {
 int main(void) {
    /* 1. Startup registry initialization */
    register_all_types();
+   test_extended_usage_cases();
    test_codec_cases();
    test_fixed_nested_arrays();
    test_anonymous_nested_structs();
-   printf(" [Tests] Scalar, optional, array and malformed-wire cases... OK\n");
+   printf(" [S06] Scalar, optional, array and malformed-wire cases... OK\n");
    printf(" [Boot] Schema dynamic registration completed\n");
    printf(" [Info] ROOTPAYLOAD_HASH is: 0x%08X\n\n", ROOTPAYLOAD_HASH);
 
