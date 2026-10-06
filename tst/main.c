@@ -1639,38 +1639,44 @@ static void assert_root_wire_fixture(const void *wire, size_t wire_size) {
 }
 
 int main(void) {
-   /* 1. Startup registry initialization */
+   /* Component C1: generated typed codec and ordinary message behavior. */
    register_all_types();
-   test_extended_usage_cases();
-   test_primitive_payload_widths();
+   printf("\n[C1] Typed codec: round trips and composite layouts\n");
+   test_codec_cases();
    test_missing_required_fields_default();
-   test_duplicate_field_semantics();
-   test_repeated_fields_reject_null_storage();
-   test_invalid_enum_values();
-   test_fixed_enum_array_rejects_unknown_value();
-   test_packed_fixed_message_rejects_nested_invalid_enum();
+   test_empty_message_round_trip();
+   test_fixed_nested_arrays();
+   test_anonymous_nested_structs();
+   test_embedded_nul_string();
+   test_c_string_length_fallback();
    test_negative_enum_values();
-   test_enum_int32_boundaries();
+   test_packed_field_occurrences_concatenate();
+   test_duplicate_field_semantics();
+
+   /* Component C2: C storage and descriptor-driven runtime behavior. */
+   printf("\n[C2] Runtime storage and dynamic descriptors\n");
+   test_repeated_fields_reject_null_storage();
+   test_dynamic_descriptors_reject_invalid_fixed_layouts();
+   test_dynamic_descriptors_reject_builtin_type_name_collisions();
+   test_dynamic_descriptors_reject_empty_enums();
    test_recursive_wire_descriptor_is_rejected();
    test_nul_in_wire_descriptor_is_rejected();
    test_invalid_utf8_wire_descriptor_is_rejected();
    test_fixed_arrays_reject_variable_wire_elements();
-   test_dynamic_descriptors_reject_invalid_fixed_layouts();
-   test_dynamic_descriptors_reject_builtin_type_name_collisions();
-   test_dynamic_descriptors_reject_empty_enums();
-   test_empty_message_round_trip();
-   test_invalid_utf8_strings();
-   test_embedded_nul_string();
-   test_c_string_length_fallback();
-   test_codec_cases();
-   test_signed_integer_boundaries();
-   test_packed_field_occurrences_concatenate();
-   test_float_subnormal_round_trip();
-   test_fixed_nested_arrays();
-   test_anonymous_nested_structs();
-   printf(" [S06] Scalar, optional, array and malformed-wire cases... OK\n");
    printf(" [Boot] Schema dynamic registration completed\n");
-   printf(" [Info] ROOTPAYLOAD_HASH is: 0x%08X\n\n", ROOTPAYLOAD_HASH);
+   printf(" [Info] ROOTPAYLOAD_HASH is: 0x%08X\n", ROOTPAYLOAD_HASH);
+
+   /* Component C3: malformed input and boundary conditions run last. */
+   printf("\n[C3] Wire rejection and numeric boundaries\n");
+   test_invalid_enum_values();
+   test_fixed_enum_array_rejects_unknown_value();
+   test_packed_fixed_message_rejects_nested_invalid_enum();
+   test_invalid_utf8_strings();
+   test_primitive_payload_widths();
+   test_signed_integer_boundaries();
+   test_enum_int32_boundaries();
+   test_float_subnormal_round_trip();
+   test_extended_usage_cases();
 
    /* 2. Instantiate arrays data source */
    FixedItem mock_fixed[2] = {

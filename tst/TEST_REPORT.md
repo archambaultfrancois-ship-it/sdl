@@ -4,6 +4,18 @@
 wire modes. It does not run programs or smoke checks from `samples/`; those
 examples are kept focused on demonstrating usage.
 
+## Execution order and labels
+
+`make test` runs the language runtimes in a fixed component order: C, Rust,
+then Python. Within each runtime, ordinary codec behavior and wire/composite semantics
+run before malformed-input cases; explicit numeric, descriptor-size, and array
+limits form the final phase. C prints `C1` (typed codec), `C2` (storage and
+dynamic descriptors), and `C3` (wire rejection and boundaries). Rust test names
+use `t01_codec`, `t02_invalid`, and `t03_limits` prefixes and run serially.
+`tst/python/run_tests.py` groups runtime codec, schema/backend validation,
+malformed input, and limits in that order; test names carry matching component
+and phase prefixes.
+
 ## Coverage matrix
 
 | Area | C | Rust | Python |
