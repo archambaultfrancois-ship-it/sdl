@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #if defined(SDL_WIRE_LITTLE_ENDIAN) && defined(SDL_WIRE_BIG_ENDIAN)
 #error "Select only one SDL wire byte order"
@@ -18,5 +19,6 @@ void sdl_wire_encode_native(uint8_t *wire, const void *native_value,
    size_t size);
 void sdl_wire_decode_native(void *native_value, const uint8_t *wire,
    size_t size);
+bool sdl_wire_valid_utf8(const uint8_t *data, size_t size);
 
 #endif /* SDL_WIRE_H */

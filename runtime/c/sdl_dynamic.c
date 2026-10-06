@@ -48,14 +48,24 @@ typedef struct {
    SdlDynamicEnumDesc *enums;
 } SdlDynamicSchema;
 
-static bool valid_utf8(const uint8_t *data, size_t size);
-
 static char *copy_string(const char *value) {
    size_t size = strlen(value) + 1;
    char *copy = (char *)malloc(size);
    if (copy != NULL)
       memcpy(copy, value, size);
    return copy;
+}
+
+static bool is_builtin_type(const char *name) {
+   static const char *const names[] = {
+      "bool", "int8", "int16", "int32", "int64", "fl32", "fl64",
+      "c32", "c64", "string"
+   };
+   size_t i;
+   for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+      if (strcmp(name, names[i]) == 0)
+         return true;
+   return false;
 }
 
 static bool reader_read(SdlDynamicReader *reader, size_t size,
@@ -106,7 +116,7 @@ static char *reader_text(SdlDynamicReader *reader) {
    const uint8_t *data;
    char *text;
    if (!reader_u16(reader, &size) || !reader_read(reader, size, &data) ||
-       memchr(data, '\0', size) != NULL || !valid_utf8(data, size))
+       memchr(data, '\0', size) != NULL || !sdl_wire_valid_utf8(data, size))
       return NULL;
    text = (char *)malloc((size_t)size + 1);
    if (text == NULL)
@@ -233,12 +243,33 @@ static size_t sdl_fixed_type_size(const char *type_name,
    const SdlDynamicSchema *schema, const SdlDynamicMessageDesc **active,
    size_t depth);
 
+static bool validate_message_dependencies(const SdlDynamicSchema *schema,
+   size_t message_index, uint8_t *states, size_t depth) {
+   const SdlDynamicMessageDesc *message;
+   size_t i;
+   if (depth > SDL_DYNAMIC_MAX_NESTING) return false;
+   if (states[message_index] == 1) return false;
+   if (states[message_index] == 2) return true;
+   states[message_index] = 1;
+   message = &schema->messages[message_index];
+   for (i = 0; i < message->field_count; ++i) {
+      const SdlDynamicMessageDesc *target = schema_message_const(schema,
+         message->fields[i].type_name);
+      if (target != NULL && !validate_message_dependencies(schema,
+            (size_t)(target - schema->messages), states, depth + 1))
+         return false;
+   }
+   states[message_index] = 2;
+   return true;
+}
+
 static bool parse_descriptor(const uint8_t *data, size_t size,
    SdlDynamicSchema *schema) {
    SdlDynamicReader reader;
    const uint8_t *magic;
    uint16_t count16;
    size_t i, j, k;
+   uint8_t *dependency_states = NULL;
    memset(schema, 0, sizeof(*schema));
    reader.data = data;
    reader.size = size;
@@ -258,6 +289,7 @@ static bool parse_descriptor(const uint8_t *data, size_t size,
       SdlDynamicMessageDesc *message = &schema->messages[i];
       message->name = reader_text(&reader);
       if (message->name == NULL || message->name[0] == '\0' ||
+          is_builtin_type(message->name) ||
           !reader_u16(&reader, &count16))
          goto fail;
       message->field_count = count16;
@@ -312,10 +344,13 @@ static bool parse_descriptor(const uint8_t *data, size_t size,
       SdlDynamicEnumDesc *enumeration = &schema->enums[i];
       enumeration->name = reader_text(&reader);
       if (enumeration->name == NULL || enumeration->name[0] == '\0' ||
+          is_builtin_type(enumeration->name) ||
           schema_message(schema, enumeration->name) != NULL ||
           !reader_u16(&reader, &count16))
          goto fail;
       enumeration->item_count = count16;
+      if (enumeration->item_count == 0)
+         goto fail;
       enumeration->items = (SdlDynamicEnumItem *)calloc(enumeration->item_count,
          sizeof(*enumeration->items));
       if (enumeration->item_count != 0 && enumeration->items == NULL)
@@ -370,8 +405,17 @@ static bool parse_descriptor(const uint8_t *data, size_t size,
          }
       }
    }
+   dependency_states = (uint8_t *)calloc(schema->message_count,
+      sizeof(*dependency_states));
+   if (schema->message_count != 0 && dependency_states == NULL)
+      goto fail;
+   for (i = 0; i < schema->message_count; ++i)
+      if (!validate_message_dependencies(schema, i, dependency_states, 0))
+         goto fail;
+   free(dependency_states);
    return true;
 fail:
+   free(dependency_states);
    schema_clear(schema);
    return false;
 }
@@ -590,32 +634,6 @@ static bool value_string_set(SdlDynamicValue *value, const uint8_t *data,
    return true;
 }
 
-static bool valid_utf8(const uint8_t *data, size_t size) {
-   size_t i = 0;
-   while (i < size) {
-      uint8_t first = data[i++];
-      uint32_t value;
-      size_t continuation, j;
-      if (first < 0x80) continue;
-      if (first >= 0xC2 && first <= 0xDF) { value = first & 0x1FU; continuation = 1; }
-      else if (first >= 0xE0 && first <= 0xEF) { value = first & 0x0FU; continuation = 2; }
-      else if (first >= 0xF0 && first <= 0xF4) { value = first & 0x07U; continuation = 3; }
-      else return false;
-      if (continuation > size - i) return false;
-      for (j = 0; j < continuation; ++j) {
-         uint8_t next = data[i++];
-         if ((next & 0xC0U) != 0x80U) return false;
-         value = (value << 6) | (next & 0x3FU);
-      }
-      if ((continuation == 1 && value < 0x80) ||
-          (continuation == 2 && value < 0x800) ||
-          (continuation == 3 && value < 0x10000) ||
-          (value >= 0xD800 && value <= 0xDFFF) || value > 0x10FFFF)
-         return false;
-   }
-   return true;
-}
-
 static void decode_value(const char *type_name, const uint8_t *data, size_t size,
    const SdlDynamicSchema *schema, size_t depth, SdlDynamicValue *value) {
    size_t expected = primitive_size(type_name);
@@ -623,7 +641,7 @@ static void decode_value(const char *type_name, const uint8_t *data, size_t size
    if (depth > SDL_DYNAMIC_MAX_NESTING)
       return;
    if (strcmp(type_name, "string") == 0) {
-      if (valid_utf8(data, size))
+      if (sdl_wire_valid_utf8(data, size))
          (void)value_string_set(value, data, size);
       return;
    }

@@ -4,7 +4,7 @@
 import os
 
 from generator import (c_identifier, canonical_type_descriptor,
-   canonical_type_hash, parse_schemas)
+   canonical_type_hash, clear_generated_outputs, parse_schemas)
 
 
 def rust_variant(name):
@@ -19,9 +19,69 @@ def rust_type_name(name):
    return c_identifier(name)
 
 
+_RUST_KEYWORDS = set((
+   'as break const continue crate else enum extern false fn for if impl in let '
+   'loop match mod move mut pub ref return self Self static struct super trait '
+   'true type unsafe use where while union async await dyn abstract become box do '
+   'final macro override priv typeof unsized virtual yield try').split())
+_RUST_IMPORTED_TYPES = set((
+   'CodecError Complex32 Complex64 FixedWire SdlDisplay SdlMessage WireValue '
+   'String Option Vec Result bool char str i8 i16 i32 i64 i128 isize '
+   'u8 u16 u32 u64 u128 usize f32 f64').split())
+
+
 class RustBackend:
    def __init__(self, schema):
       self.schema = schema
+
+   def _validate_rust_identifiers(self):
+      type_names = {}
+      for name in list(self.schema.enums) + list(self.schema.message_order):
+         generated = (c_identifier(name) if name in self.schema.enums else
+            rust_type_name(name))
+         if not generated.isidentifier():
+            raise ValueError('Rust backend cannot emit invalid type identifier: ' +
+               name)
+         if generated in _RUST_KEYWORDS:
+            raise ValueError('Rust backend cannot use reserved word as type name: ' +
+               name)
+         if generated in _RUST_IMPORTED_TYPES:
+            raise ValueError('Rust type name conflicts with a runtime or standard type: ' +
+               name)
+         if generated in type_names:
+            raise ValueError('Rust type name collision after conversion: ' + name +
+               ' and ' + type_names[generated])
+         type_names[generated] = name
+
+      for enumeration in self.schema.enums.values():
+         variants = {}
+         for name, unused_value in enumeration.pairs:
+            generated = rust_variant(name)
+            if not generated.isidentifier():
+               raise ValueError('Rust backend cannot emit invalid enum variant: ' +
+                  enumeration.name + '.' + name)
+            if generated in _RUST_KEYWORDS:
+               raise ValueError('Rust backend cannot use reserved word as enum variant: ' +
+                  enumeration.name + '.' + name)
+            if generated in variants:
+               raise ValueError('Rust enum variant collision after conversion in ' +
+                  enumeration.name + ': ' + name + ' and ' + variants[generated])
+            variants[generated] = name
+
+      for message_name in self.schema.message_order:
+         fields = {}
+         for field in self.schema.messages[message_name].fields:
+            generated = c_identifier(field.name)
+            if not generated.isidentifier():
+               raise ValueError('Rust backend cannot emit invalid field identifier: ' +
+                  message_name + '.' + field.name)
+            if generated in _RUST_KEYWORDS:
+               raise ValueError('Rust backend cannot use reserved word as field name: ' +
+                  message_name + '.' + field.name)
+            if generated in fields:
+               raise ValueError('Rust field name collision after conversion in ' +
+                  message_name + ': ' + field.name + ' and ' + fields[generated])
+            fields[generated] = field.name
 
    def _rust_type(self, name):
       mapping = {
@@ -45,9 +105,14 @@ class RustBackend:
       return value_type
 
    def generate(self):
+      self._validate_rust_identifiers()
       used_types = {field.type_name for message in self.schema.messages.values()
          for field in message.fields}
-      imports = ['CodecError', 'SdlDisplay', 'SdlMessage', 'WireValue', 'write_field']
+      has_write_fields = any(field.modifier != 'packed'
+         for message in self.schema.messages.values() for field in message.fields)
+      imports = ['CodecError', 'SdlDisplay', 'SdlMessage', 'WireValue']
+      if has_write_fields:
+         imports.append('write_field')
       has_packed_fields = any(field.modifier == 'packed'
          for message in self.schema.messages.values() for field in message.fields)
       has_fixed_messages = any(self.schema.fixed_wire_size(name) is not None
@@ -148,7 +213,9 @@ class RustBackend:
                descriptor[offset:offset + 16]))
          output.append('   const DESCRIPTOR: &\'static [u8] = &[' +
             '\n      ' + ',\n      '.join(descriptor_lines) + '\n   ];\n')
-         output.append('   fn encode_fields(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {\n')
+         output_arg = 'output' if fields else '_output'
+         output.append('   fn encode_fields(&self, ' + output_arg +
+            ': &mut Vec<u8>) -> Result<(), CodecError> {\n')
          for field in fields:
             rust_field = c_identifier(field.name)
             if field.modifier == 'optional':
@@ -167,7 +234,9 @@ class RustBackend:
                   rust_field + ', output)?;\n')
          output.append('      Ok(())\n   }\n')
 
-         output.append('   fn decode_field(&mut self, id: u32, payload: &[u8]) -> Result<(), CodecError> {\n')
+         payload_arg = 'payload' if fields else '_payload'
+         output.append('   fn decode_field(&mut self, id: u32, ' + payload_arg +
+            ': &[u8]) -> Result<(), CodecError> {\n')
          output.append('      match id {\n')
          for field in fields:
             rust_field = c_identifier(field.name)
@@ -224,19 +293,29 @@ class RustBackend:
 
 def generate_rust(input_path, output_dir):
    schemas = parse_schemas(input_path)
-   os.makedirs(output_dir, exist_ok=True)
    modules = []
    seen_modules = set()
    for base_name, unused_identifier, parser in schemas:
       module_name = c_identifier(base_name).lower()
+      if module_name == 'mod':
+         raise ValueError('Rust schema filename mod collides with generated mod.rs')
+      if not module_name.isidentifier() or module_name in _RUST_KEYWORDS:
+         raise ValueError('invalid Rust module name from SDL filename: ' + base_name)
       if module_name in seen_modules:
          raise ValueError('SDL filenames map to the same Rust module: ' + module_name)
       seen_modules.add(module_name)
+      RustBackend(parser)._validate_rust_identifiers()
+      modules.append((module_name, parser))
+
+   clear_generated_outputs(output_dir, ('.rs',), (
+      '// Generated by the SDL Rust backend.',
+      '// Generated SDL modules.'))
+   for module_name, parser in modules:
       with open(os.path.join(output_dir, module_name + '.rs'), 'w', encoding='utf-8') as output_file:
          output_file.write(RustBackend(parser).generate())
-      modules.append(module_name)
+   module_names = [module_name for module_name, unused_parser in modules]
 
    with open(os.path.join(output_dir, 'mod.rs'), 'w', encoding='utf-8') as output_file:
       output_file.write('// Generated SDL modules.\n')
-      for module in modules:
+      for module in module_names:
          output_file.write('pub mod ' + module + ';\n')

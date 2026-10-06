@@ -105,29 +105,39 @@ def default_value(type_name, namespace):
    return None
 
 
-def _pack_value(type_name, value):
+def _pack_value(type_name, value, namespace=None):
    formats = {
       'int8': _WIRE_PREFIX + 'b', 'int16': _WIRE_PREFIX + 'h',
       'int32': _WIRE_PREFIX + 'i', 'int64': _WIRE_PREFIX + 'q',
       'fl32': _WIRE_PREFIX + 'f', 'fl64': _WIRE_PREFIX + 'd',
    }
    if type_name == 'bool':
+      if not isinstance(value, bool):
+         raise CodecError('boolean field requires bool')
       return b'\x01' if value else b'\x00'
    if type_name in formats:
       try:
          return struct.pack(formats[type_name], value)
-      except (struct.error, TypeError) as error:
+      except (struct.error, TypeError, OverflowError) as error:
          raise CodecError('invalid value for ' + type_name) from error
    if type_name in ('c32', 'c64'):
       fmt = _WIRE_PREFIX + ('ff' if type_name == 'c32' else 'dd')
       try:
          return struct.pack(fmt, value.real, value.imag)
-      except (struct.error, AttributeError, TypeError) as error:
+      except (struct.error, AttributeError, TypeError, OverflowError) as error:
          raise CodecError('invalid complex value') from error
    if type_name == 'string':
       if not isinstance(value, str):
          raise CodecError('string field requires str')
-      return value.encode('utf-8')
+      try:
+         return value.encode('utf-8')
+      except UnicodeEncodeError as error:
+         raise CodecError('string contains an invalid Unicode scalar value') from error
+   value_type = namespace.get(type_name) if namespace is not None else None
+   if value_type is not None and hasattr(value_type, '__members__'):
+      if not isinstance(value, value_type):
+         raise CodecError('invalid enum value for ' + type_name)
+      return struct.pack(_WIRE_PREFIX + 'i', int(value))
    if hasattr(value, '_SDL_FIELDS'):
       return value.encode_payload()
    if hasattr(value, '__int__'):
@@ -216,7 +226,7 @@ def _pack_fixed(type_name, value, namespace, dimensions=()):
       if len(output) != value_type._SDL_FIXED_SIZE:
          raise CodecError('fixed-size struct payload has an invalid size')
       return bytes(output)
-   return _pack_value(type_name, value)
+   return _pack_value(type_name, value, namespace)
 
 
 def _unpack_fixed(type_name, payload, namespace, dimensions=()):
@@ -275,7 +285,7 @@ def _unpack_array_fixed(type_name, payload, namespace):
 
 
 class SdlMessage:
-   """Base class used by generated SDL message dataclasses."""
+   """Base class used by generated SDL message classes."""
 
    _SDL_FIELDS = ()
    _SDL_HASH = 0
@@ -345,7 +355,7 @@ class SdlMessage:
          else:
             values = (value,)
          for item in values:
-            payload = _pack_value(type_name, item)
+            payload = _pack_value(type_name, item, namespace)
             if len(payload) > 0xFFFFFFFF:
                raise CodecError('field payload exceeds uint32 length')
             output.extend(struct.pack(_WIRE_PREFIX + 'II', field_id, len(payload)))
@@ -369,7 +379,7 @@ class SdlMessage:
             unused_id, name, modifier, type_name, dimensions = field
             namespace = __import__(cls.__module__, fromlist=['*']).__dict__
             if modifier == 'packed':
-               setattr(value, name, _unpack_array_fixed(type_name,
+               getattr(value, name).extend(_unpack_array_fixed(type_name,
                   payload[offset:offset + length], namespace))
             elif dimensions:
                setattr(value, name, _unpack_fixed(type_name,
@@ -462,7 +472,10 @@ class _DescriptorReader:
 
    def read_text(self):
       size = self.read_u16()
-      return self.read(size).decode('utf-8')
+      value = self.read(size).decode('utf-8')
+      if '\x00' in value:
+         raise ValueError('descriptor strings cannot contain NUL')
+      return value
 
 
 def _decode_binary_descriptor(data):
@@ -569,7 +582,7 @@ def _validate_dynamic_descriptor(descriptor):
    for entry in descriptor['enums']:
       if (not isinstance(entry, list) or len(entry) != 2 or
             not isinstance(entry[0], str) or not entry[0] or
-            not isinstance(entry[1], list) or
+            not isinstance(entry[1], list) or not entry[1] or
             entry[0] in enums):
          raise CodecError('invalid enum declaration in descriptor')
       if previous_enum_name is not None and entry[0] <= previous_enum_name:
@@ -589,7 +602,9 @@ def _validate_dynamic_descriptor(descriptor):
       enums[entry[0]] = values
    if descriptor['root'] not in messages:
       raise CodecError('descriptor root message is missing')
-   if set(messages).intersection(enums):
+   if (set(messages).intersection(enums) or
+         set(messages).intersection(_BUILTIN_TYPES) or
+         set(enums).intersection(_BUILTIN_TYPES)):
       raise CodecError('descriptor type name is ambiguous')
 
    known_types = _BUILTIN_TYPES | set(messages) | set(enums)

@@ -4,7 +4,38 @@
 import os
 
 from generator import (c_identifier, canonical_type_descriptor,
-   canonical_type_hash, parse_schemas)
+   canonical_type_hash, clear_generated_outputs, parse_schemas)
+
+
+_C_KEYWORDS = set((
+   'auto break case char const continue default do double else enum extern float '
+   'for goto if inline int long register restrict return short signed sizeof '
+   'static struct switch typedef union unsigned void volatile while '
+   '_Bool _Complex _Imaginary').split())
+_C_RESERVED_ORDINARY_NAMES = set((
+   'bool int8_t uint8_t int16_t uint16_t int32_t uint32_t int64_t uint64_t '
+   'size_t ptrdiff_t SdlTypeKind SdlTypeDesc SdlFieldDesc SdlEnumValueDesc '
+   'SdlUInt32Alignment SdlDynamicKind SdlDynamicComplex SdlDynamicEnum '
+   'SdlDynamicString SdlDynamicArray SdlDynamicField SdlDynamicMessage '
+   'SdlDynamicValue type_encode_size type_encode type_decode_size type_decode '
+   'type_clone type_display type_free type_decode_dynamic type_dynamic_free '
+   'type_dynamic_get sdl_register_type').split())
+_C_MACROS = set((
+   'bool true false complex imaginary I NULL offsetof SDL_NO_OFFSET '
+   'SDL_FIELD_OPTIONAL SDL_FIELD_REPEATED SDL_FIELD_PACKED '
+   'SDL_UINT32_ALIGNMENT').split())
+_C_RESERVED_HEADER_GUARDS = set((
+   'SDL_DYNAMIC_H SDL_TYPE_DESCRIPTORS_H SDL_TYPE_ENGINE_H '
+   'SDL_TYPE_PRIVATE_H SDL_TYPE_REGISTRY_H SDL_WIRE_H SDL_REGISTRY_H').split())
+
+
+def _is_ascii_c_identifier(value):
+   if not value or not value.isascii():
+      return False
+   first = value[0]
+   if not (first.isalpha() or first == '_'):
+      return False
+   return all(character.isalnum() or character == '_' for character in value[1:])
 
 
 class CBackend:
@@ -33,8 +64,74 @@ class CBackend:
    def _array_desc(message_name, field_name):
       return '&' + message_name.lower() + '_' + field_name.lower() + '_array_desc_0'
 
+   def _validate_c_identifiers(self):
+      for enum_name, enumeration in self.schema.enums.items():
+         if (not _is_ascii_c_identifier(enum_name) or enum_name.startswith('_')):
+            raise ValueError('C backend cannot emit portable enum type name: ' +
+               enum_name)
+         if c_identifier(enum_name) in _C_KEYWORDS:
+            raise ValueError('C backend cannot use C keyword as enum name: ' +
+               enum_name)
+         if enum_name in _C_RESERVED_ORDINARY_NAMES or enum_name in _C_MACROS:
+            raise ValueError('C backend cannot reuse a C or runtime name: ' +
+               enum_name)
+         for item_name, unused_value in enumeration.pairs:
+            if (not item_name.isascii() or
+                not all(character.isalnum() or character == '_' for character in item_name)):
+               raise ValueError('C backend cannot emit portable enum item name: ' +
+                  enum_name + '.' + item_name)
+      for message_name in self.schema.message_order:
+         c_name = c_identifier(message_name)
+         if not _is_ascii_c_identifier(c_name) or c_name.startswith('_'):
+            raise ValueError('C backend cannot emit portable type name: ' +
+               message_name)
+         if c_name in _C_KEYWORDS:
+            raise ValueError('C backend cannot use C keyword as type name: ' +
+               message_name)
+         if c_name in _C_RESERVED_ORDINARY_NAMES or c_name in _C_MACROS:
+            raise ValueError('C backend cannot reuse a C or runtime name: ' +
+               message_name)
+         for field in self.schema.messages[message_name].fields:
+            if (not _is_ascii_c_identifier(field.name) or
+                field.name.startswith('_')):
+               raise ValueError('C backend cannot emit portable field name: ' +
+                  message_name + '.' + field.name)
+            if field.name in _C_KEYWORDS:
+               raise ValueError('C backend cannot use C keyword as field name: ' +
+                  message_name + '.' + field.name)
+            if field.name in _C_MACROS:
+               raise ValueError('C backend cannot use C macro as field name: ' +
+                  message_name + '.' + field.name)
+
    def generate_files(self, base_name):
+      self._validate_c_identifiers()
       identifier = c_identifier(base_name)
+      presence_members = {}
+      count_members = {}
+      string_length_members = {}
+      for message_name in self.schema.message_order:
+         message_fields = self.schema.messages[message_name].fields
+         used_members = {field.name for field in message_fields}
+
+         def allocate_member(base_member):
+            member = base_member
+            suffix = 2
+            while member in used_members:
+               member = base_member + '_' + str(suffix)
+               suffix += 1
+            used_members.add(member)
+            return member
+
+         for field in message_fields:
+            if field.modifier == 'optional':
+               presence_members[(message_name, field.index)] = allocate_member(
+                  'has_' + field.name)
+            if field.modifier in ('repeated', 'packed'):
+               count_members[(message_name, field.index)] = allocate_member(
+                  field.name + '_count')
+            if field.type_name == 'string':
+               string_length_members[(message_name, field.index)] = allocate_member(
+                  'sdl_string_length_' + str(field.index))
       header = [
          '/* Generated by the SDL C backend. */\n',
          '#ifndef ' + identifier.upper() + '_H\n#define ' + identifier.upper() + '_H\n\n',
@@ -72,18 +169,30 @@ class CBackend:
          c_name = c_identifier(name)
          header.append('typedef struct {\n')
          fields = sorted(message.fields, key=lambda item: item.index)
+         if not fields:
+            header.append('   uint8_t sdl_empty_placeholder;\n')
          for field in fields:
             c_type = self._c_type(field.type_name)
             if field.modifier == 'optional':
-               header.append('   bool has_' + field.name + ';\n')
+               header.append('   bool ' + presence_members[(name, field.index)] + ';\n')
             if field.modifier in ('repeated', 'packed'):
-               header.append('   uint32_t ' + field.name + '_count;\n')
+               header.append('   uint32_t ' + count_members[(name, field.index)] + ';\n')
                header.append('   ' + c_type + ' *' + field.name + ';\n')
             elif field.array_dimensions:
                suffix = ''.join('[' + str(size) + ']' for size in field.array_dimensions)
                header.append('   ' + c_type + ' ' + field.name + suffix + ';\n')
             else:
                header.append('   ' + c_type + ' ' + field.name + ';\n')
+         for field in fields:
+            if field.type_name != 'string':
+               continue
+            length_member = string_length_members[(name, field.index)]
+            if field.modifier in ('repeated', 'packed'):
+               header.append('   /* UTF-8 byte lengths, parallel to ' + field.name + '. */\n')
+               header.append('   uint32_t *' + length_member + ';\n')
+            else:
+               header.append('   /* UTF-8 byte length; zero infers strlen for ordinary C strings. */\n')
+               header.append('   uint32_t ' + length_member + ';\n')
          header.append('} ' + c_name + ';\n')
          header.append('extern const SdlTypeDesc ' + c_name.upper() + '_DESC;\n\n')
          header.append('extern const uint8_t ' + c_name.upper() +
@@ -124,21 +233,26 @@ class CBackend:
                   str(count_value) + ' }\n};\n')
          source.append('static const SdlFieldDesc ' + c_name.lower() + '_fields[] = {\n')
          if not fields:
-            source.append('   { 0, NULL, NULL, 0, SDL_NO_OFFSET, SDL_NO_OFFSET, 0 }\n')
+            source.append('   { 0, NULL, NULL, 0, SDL_NO_OFFSET, SDL_NO_OFFSET, SDL_NO_OFFSET, 0 }\n')
          for field in fields:
-            presence = ('offsetof(' + c_name + ', has_' + field.name + ')'
+            presence = ('offsetof(' + c_name + ', ' +
+               presence_members[(name, field.index)] + ')'
                if field.modifier == 'optional' else 'SDL_NO_OFFSET')
-            count = ('offsetof(' + c_name + ', ' + field.name + '_count)'
+            count = ('offsetof(' + c_name + ', ' +
+               count_members[(name, field.index)] + ')'
                if field.modifier in ('repeated', 'packed') else 'SDL_NO_OFFSET')
             flags = 'SDL_FIELD_OPTIONAL' if field.modifier == 'optional' else '0'
             if field.modifier in ('repeated', 'packed'):
                flags += ' | SDL_FIELD_REPEATED'
             if field.modifier == 'packed':
                flags += ' | SDL_FIELD_PACKED'
+            length_offset = ('offsetof(' + c_name + ', ' +
+               string_length_members[(name, field.index)] + ')'
+               if field.type_name == 'string' else 'SDL_NO_OFFSET')
             source.append('   { ' + str(field.index) + 'U, "' + field.name + '", ' +
                (self._array_desc(c_name, field.name) if field.array_dimensions else
                 self._type_desc(field.type_name)) + ', offsetof(' + c_name + ', ' + field.name +
-               '), ' + presence + ', ' + count + ', ' + flags + ' },\n')
+               '), ' + presence + ', ' + count + ', ' + length_offset + ', ' + flags + ' },\n')
          source.append('};\n')
          source.append('typedef struct { char prefix; ' + c_name +
             ' value; } SDL_ALIGN_' + c_name.upper() + ';\n')
@@ -166,7 +280,22 @@ class CBackend:
 
 def generate_c(input_path, output_dir):
    schemas = parse_schemas(input_path)
-   os.makedirs(output_dir, exist_ok=True)
+   seen_guards = set()
+   for base_name, unused_id, unused_schema in schemas:
+      guard = c_identifier(base_name).upper() + '_H'
+      if base_name == 'sdl_registry':
+         raise ValueError('C schema filename sdl_registry collides with generated registry files')
+      if guard in _C_RESERVED_HEADER_GUARDS:
+         raise ValueError('C schema filename ' + base_name +
+            ' collides with generated/runtime include guard ' + guard)
+      if guard in seen_guards:
+         raise ValueError('C SDL filenames map to the same header guard: ' + guard)
+      seen_guards.add(guard)
+   for unused_base, unused_id, schema in schemas:
+      CBackend(schema)._validate_c_identifiers()
+   clear_generated_outputs(output_dir, ('.c', '.h'), (
+      '/* Generated by the SDL C backend. */',
+      '/* Generated registry for SDL files in the input directory. */'))
    generated = []
    for base_name, identifier, schema in schemas:
       header, source = CBackend(schema).generate_files(base_name)

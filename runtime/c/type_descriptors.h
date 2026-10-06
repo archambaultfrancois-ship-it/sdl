@@ -35,6 +35,7 @@ struct SdlFieldDesc {
    size_t offset;
    size_t presence_offset;
    size_t count_offset;
+   size_t string_length_offset;
    uint32_t flags;
 };
 
@@ -74,6 +75,9 @@ extern const SdlTypeDesc SDL_COMPLEX64_DESC;
 extern const SdlTypeDesc SDL_ENUM_DESC;
 extern const SdlTypeDesc SDL_STRING_DESC;
 
+typedef struct { char prefix; uint32_t value; } SdlUInt32Alignment;
+
+#define SDL_UINT32_ALIGNMENT offsetof(SdlUInt32Alignment, value)
 #define SDL_NO_OFFSET ((size_t)-1)
 #define SDL_FIELD_OPTIONAL 0x01u
 #define SDL_FIELD_REPEATED 0x02u

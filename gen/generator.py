@@ -7,6 +7,9 @@ import os
 import sys
 
 
+MAX_SCHEMA_DESCRIPTOR_SIZE = 1024 * 1024
+
+
 def canonical_type_descriptor(schema, root_name):
    """Return a stable binary descriptor for a message and its reachable types."""
    messages = {}
@@ -37,18 +40,23 @@ def canonical_type_descriptor(schema, root_name):
          raise ValueError('unknown type in descriptor: ' + name)
    output = bytearray(b'SDD1')
 
+   def append_bytes(value):
+      if len(value) > MAX_SCHEMA_DESCRIPTOR_SIZE - len(output):
+         raise ValueError('wire descriptor exceeds 1 MiB for ' + root_name)
+      output.extend(value)
+
    def append_u16(value, label):
       if value < 0 or value > 0xFFFF:
          raise ValueError(label + ' exceeds uint16 in schema descriptor')
-      output.extend(value.to_bytes(2, 'big'))
+      append_bytes(value.to_bytes(2, 'big'))
 
    def append_u32(value):
-      output.extend(value.to_bytes(4, 'big'))
+      append_bytes(value.to_bytes(4, 'big'))
 
    def append_text(value):
       encoded = value.encode('utf-8')
       append_u16(len(encoded), 'descriptor string length')
-      output.extend(encoded)
+      append_bytes(encoded)
 
    if len(messages) > 0xFFFF or len(enums) > 0xFFFF:
       raise ValueError('too many declarations in schema descriptor')
@@ -62,11 +70,11 @@ def canonical_type_descriptor(schema, root_name):
       for field in fields:
          append_u32(field['id'])
          append_text(field['name'])
-         output.append(modifier_codes[field['modifier']])
+         append_bytes(bytes((modifier_codes[field['modifier']],)))
          append_text(field['type'])
          if len(field['dimensions']) > 0xFF:
             raise ValueError('too many array dimensions in schema descriptor')
-         output.append(len(field['dimensions']))
+         append_bytes(bytes((len(field['dimensions']),)))
          for dimension in field['dimensions']:
             append_u32(dimension)
    append_u16(len(enums), 'enum count')
@@ -77,7 +85,7 @@ def canonical_type_descriptor(schema, root_name):
       for enum_name, value in values:
          append_text(enum_name)
          try:
-            output.extend(int(value).to_bytes(4, 'big', signed=True))
+            append_bytes(int(value).to_bytes(4, 'big', signed=True))
          except OverflowError as error:
             raise ValueError('enum value must fit signed int32 in ' + name) from error
    return bytes(output)
@@ -136,8 +144,10 @@ class MsgParser:
          line = re.sub(r'//.*', '', raw_line).strip()
          if not line:
             continue
-         match = re.match(r'enum\s+(\w+)\s*\{?$', line)
+         match = re.match(r'enum\s+(\w+)\s*\{$', line)
          if match:
+            if current_enum is not None or current_msg is not None:
+               raise ValueError('missing closing brace before declaration: ' + line)
             name = match.group(1)
             if name in self.enums or name in self.messages:
                raise ValueError('duplicate type name: ' + name)
@@ -145,8 +155,10 @@ class MsgParser:
             self.enums[name] = current_enum
             current_msg = None
             continue
-         match = re.match(r'message\s+(\w+)\s*\{?$', line)
+         match = re.match(r'message\s+(\w+)\s*\{$', line)
          if match:
+            if current_enum is not None or current_msg is not None:
+               raise ValueError('missing closing brace before declaration: ' + line)
             name = match.group(1)
             if name in self.enums or name in self.messages:
                raise ValueError('duplicate type name: ' + name)
@@ -158,10 +170,12 @@ class MsgParser:
          if line == '}':
             if anonymous_stack:
                raise ValueError('anonymous struct must close with its field name')
+            if current_enum is None and current_msg is None:
+               raise ValueError('unexpected closing brace')
             current_enum = None
             current_msg = None
             continue
-         match = re.match(r'(\d+):\s+(optional|required|repeated|packed)\s+struct\s*\{\s*$', line)
+         match = re.match(r'([0-9]+):\s+(optional|required|repeated|packed)\s+struct\s*\{\s*$', line)
          if match and current_msg is not None:
             root_name = anonymous_stack[0]['root'] if anonymous_stack else current_msg.name
             anonymous_counters[root_name] = anonymous_counters.get(root_name, 0) + 1
@@ -187,24 +201,28 @@ class MsgParser:
             current_msg = frame['parent']
             continue
          if current_enum is not None:
-            match = re.match(r'(\w+)\s*=\s*(-?\d+)\s*;', line)
+            match = re.match(r'(\w+)\s*=\s*(-?[0-9]+)\s*;', line)
             if not match:
                raise ValueError('invalid enum entry: ' + line)
             current_enum.pairs.append((match.group(1), match.group(2)))
             continue
          if current_msg is not None:
-            match = re.match(r'(\d+):\s+(optional|required|repeated|packed)\s+(\w+(?:\[\d+\])*)\s+(\w+)\s*;', line)
+            match = re.match(r'([0-9]+):\s+(optional|required|repeated|packed)\s+(\w+(?:\[[0-9]+\])*)\s+(\w+)\s*;', line)
             if not match:
                raise ValueError('invalid field declaration: ' + line)
             declared_type = match.group(3)
             type_name = re.match(r'\w+', declared_type).group(0)
-            dimensions = [int(value) for value in re.findall(r'\[(\d+)\]', declared_type)]
+            dimensions = [int(value) for value in re.findall(r'\[([0-9]+)\]', declared_type)]
             current_msg.fields.append(Field(match.group(1), match.group(2),
                type_name, match.group(4), dimensions))
             continue
          raise ValueError('unexpected SDL statement: ' + line)
       if anonymous_stack:
          raise ValueError('unterminated anonymous struct in ' + anonymous_stack[0]['root'])
+      if current_enum is not None:
+         raise ValueError('unterminated enum declaration: ' + current_enum.name)
+      if current_msg is not None:
+         raise ValueError('unterminated message declaration: ' + current_msg.name)
       self.validate()
       self._order_embedded_messages()
 
@@ -232,17 +250,37 @@ class MsgParser:
       self.message_order = ordered
 
    def validate(self):
+      if len(self.messages) > 0xFFFF:
+         raise ValueError('too many messages in schema descriptor')
+      if len(self.enums) > 0xFFFF:
+         raise ValueError('too many enums in schema descriptor')
+
+      def validate_text(value, label):
+         if len(value.encode('utf-8')) > 0xFFFF:
+            raise ValueError(label + ' exceeds uint16 in schema descriptor')
+
       generated_symbols = {}
       for type_name in list(self.enums) + list(self.messages):
+         if type_name in self.BUILTINS:
+            raise ValueError('type name conflicts with built-in type: ' + type_name)
+         validate_text(type_name, 'type name')
          symbol = c_identifier(type_name).upper()
          if symbol in generated_symbols and generated_symbols[symbol] != type_name:
             raise ValueError('generated type identifier collision: ' + type_name +
                ' and ' + generated_symbols[symbol])
          generated_symbols[symbol] = type_name
       for message in self.messages.values():
+         if len(message.fields) > 0xFFFF:
+            raise ValueError('too many fields in ' + message.name +
+               ' for schema descriptor')
          ids = set()
          names = set()
          for field in message.fields:
+            validate_text(field.name, 'field name in ' + message.name)
+            validate_text(field.type_name, 'field type name in ' + message.name)
+            if len(field.array_dimensions) > 0xFF:
+               raise ValueError('too many array dimensions in ' + message.name +
+                  '.' + field.name)
             if field.index <= 0 or field.index > 0xFFFFFFFF:
                raise ValueError('field ID must fit in a nonzero uint32')
             if field.index in ids or field.name in names:
@@ -274,13 +312,24 @@ class MsgParser:
                raise ValueError('packed field type must have a fixed wire size: ' +
                   message.name + '.' + field.name)
       for enum in self.enums.values():
+         if len(enum.pairs) > 0xFFFF:
+            raise ValueError('too many values in enum ' + enum.name +
+               ' for schema descriptor')
          names = set()
          values = set()
+         if not enum.pairs:
+            raise ValueError('enum must declare at least one value: ' + enum.name)
          for name, value in enum.pairs:
-            if name in names or int(value) in values:
+            validate_text(name, 'enum item name in ' + enum.name)
+            numeric_value = int(value)
+            if numeric_value < -0x80000000 or numeric_value > 0x7FFFFFFF:
+               raise ValueError('enum value must fit signed int32 in ' + enum.name)
+            if name in names or numeric_value in values:
                raise ValueError('duplicate enum name or value in ' + enum.name)
             names.add(name)
-            values.add(int(value))
+            values.add(numeric_value)
+      for root_name in self.message_order:
+         canonical_type_descriptor(self, root_name)
 
    def fixed_wire_size(self, type_name, active=None):
       primitive_sizes = {
@@ -346,6 +395,26 @@ def parse_schemas(input_path):
          seen_symbols.add(symbol)
       parsed.append((base_name, identifier, parser))
    return parsed
+
+
+
+def clear_generated_outputs(output_dir, extensions, markers):
+   """Remove stale backend files while preserving unrelated user files."""
+   if not os.path.isdir(output_dir):
+      os.makedirs(output_dir, exist_ok=True)
+      return
+   for name in os.listdir(output_dir):
+      path = os.path.join(output_dir, name)
+      if not os.path.isfile(path) or not any(name.endswith(extension)
+            for extension in extensions):
+         continue
+      try:
+         with open(path, 'r', encoding='utf-8') as generated_file:
+            marker = generated_file.readline().rstrip('\r\n')
+      except (UnicodeDecodeError, OSError):
+         continue
+      if marker in markers:
+         os.remove(path)
 
 
 def main():
