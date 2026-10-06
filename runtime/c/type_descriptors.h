@@ -23,6 +23,11 @@ typedef enum {
 typedef struct SdlTypeDesc SdlTypeDesc;
 typedef struct SdlFieldDesc SdlFieldDesc;
 
+typedef struct {
+   int32_t value;
+   const char *name;
+} SdlEnumValueDesc;
+
 struct SdlFieldDesc {
    uint32_t id;
    const char *name;
@@ -50,6 +55,10 @@ struct SdlTypeDesc {
          const SdlTypeDesc *element;
          size_t count;
       } array;
+      struct {
+         size_t value_count;
+         const SdlEnumValueDesc *values;
+      } enumeration;
    } detail;
 };
 

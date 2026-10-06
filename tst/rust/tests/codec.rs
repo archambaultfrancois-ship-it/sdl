@@ -1,5 +1,5 @@
-use sdl_runtime::{decode, decode_dynamic, encode, CodecError, Complex32, Complex64,
-   DynamicValue, SdlMessage};
+use sdl_runtime::{decode, decode_dynamic, display, encode, CodecError, Complex32,
+   Complex64, DynamicValue, SdlMessage};
 use sdl_schema_tests::codec_cases::{CodecCases, State};
 use sdl_schema_tests::schema::{
    AnonymousEnvelope, AnonymousEnvelope1, AnonymousEnvelope2, AnonymousEnvelope3,
@@ -109,6 +109,19 @@ fn s03_invalid_frame_and_field_lengths_are_rejected() {
    assert_eq!(decode_dynamic(&bad_field_length), Err(CodecError::Truncated));
    assert_eq!(decode::<CodecCases>(&valid[..7]), Err(CodecError::Truncated));
    assert_eq!(decode_dynamic(&valid[..7]), Err(CodecError::Truncated));
+}
+
+#[test]
+fn display_formats_typed_objects_with_configurable_indentation() {
+   let original = codec_cases();
+   let rendered = display(&original, 2);
+   assert!(rendered.starts_with("CodecCases {\n"));
+   assert!(rendered.contains("  tiny: -128\n"));
+   assert!(rendered.contains("  state: READY\n"));
+   assert!(rendered.contains("  samples: [\n    -32768,\n"));
+
+   let absent = display(&CodecCases::default(), 4);
+   assert!(absent.contains("    tiny: null\n"));
 }
 
 #[test]
