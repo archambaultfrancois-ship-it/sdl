@@ -8,142 +8,899 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Arrays;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Dependency-free SDL wire codec using Java 7 APIs. */
 public final class SdlCodec {
-   private static final boolean LITTLE = "little".equalsIgnoreCase(System.getenv("SDL_WIRE_ENDIAN"));
    private static final int MAX_DESCRIPTOR = 1024 * 1024;
    private SdlCodec() {}
    public interface Message {}
-   public interface EnumValue { int wireValue(); }
+   public interface EnumValue {
+      int wireValue();
+   }
    public static final class Field {
-      public final long id; public final String name, modifier, typeName;
-      public final Class<?> valueClass; public final int[] dimensions; public final boolean enumeration;
-      public Field(long id,String name,String modifier,String typeName,Class<?> valueClass,int[] dimensions,boolean enumeration) {
-         this.id=id; this.name=name; this.modifier=modifier; this.typeName=typeName;
-         this.valueClass=valueClass; this.dimensions=dimensions; this.enumeration=enumeration;
+      public final long id;
+      public final String name, modifier, typeName;
+      public final Class<?> valueClass;
+      public final int[] dimensions;
+      public final boolean enumeration;
+      public Field(long id, String name, String modifier, String typeName, Class<?> valueClass,
+                   int[] dimensions, boolean enumeration) {
+         this.id = id;
+         this.name = name;
+         this.modifier = modifier;
+         this.typeName = typeName;
+         this.valueClass = valueClass;
+         this.dimensions = dimensions;
+         this.enumeration = enumeration;
       }
    }
    public static final class CodecException extends RuntimeException {
-      public CodecException(String m) { super(m); } public CodecException(String m,Throwable t) { super(m,t); }
+      public CodecException(String m) { super(m); }
+      public CodecException(String m, Throwable t) { super(m, t); }
    }
    public static final class Complex32 {
-      public float real,imag; public Complex32() {} public Complex32(float r,float i){real=r;imag=i;}
-      public boolean equals(Object o){if(!(o instanceof Complex32))return false;Complex32 c=(Complex32)o;return Float.floatToIntBits(real)==Float.floatToIntBits(c.real)&&Float.floatToIntBits(imag)==Float.floatToIntBits(c.imag);}
-      public int hashCode(){return Float.floatToIntBits(real)*31+Float.floatToIntBits(imag);} public String toString(){return "("+real+","+imag+")";}
+      public float real, imag;
+      public Complex32() {}
+      public Complex32(float r, float i) {
+         real = r;
+         imag = i;
+      }
+      public boolean equals(Object o) {
+         if (!(o instanceof Complex32))
+            return false;
+         Complex32 c = (Complex32)o;
+         return Float.floatToIntBits(real) == Float.floatToIntBits(c.real) &&
+             Float.floatToIntBits(imag) == Float.floatToIntBits(c.imag);
+      }
+      public int hashCode() { return Float.floatToIntBits(real) * 31 + Float.floatToIntBits(imag); }
+      public String toString() { return "(" + real + "," + imag + ")"; }
    }
    public static final class Complex64 {
-      public double real,imag; public Complex64() {} public Complex64(double r,double i){real=r;imag=i;}
-      public boolean equals(Object o){if(!(o instanceof Complex64))return false;Complex64 c=(Complex64)o;return Double.doubleToLongBits(real)==Double.doubleToLongBits(c.real)&&Double.doubleToLongBits(imag)==Double.doubleToLongBits(c.imag);}
-      public int hashCode(){long a=Double.doubleToLongBits(real),b=Double.doubleToLongBits(imag);return (int)(a^(a>>>32))*31+(int)(b^(b>>>32));} public String toString(){return "("+real+","+imag+")";}
+      public double real, imag;
+      public Complex64() {}
+      public Complex64(double r, double i) {
+         real = r;
+         imag = i;
+      }
+      public boolean equals(Object o) {
+         if (!(o instanceof Complex64))
+            return false;
+         Complex64 c = (Complex64)o;
+         return Double.doubleToLongBits(real) == Double.doubleToLongBits(c.real) &&
+             Double.doubleToLongBits(imag) == Double.doubleToLongBits(c.imag);
+      }
+      public int hashCode() {
+         long a = Double.doubleToLongBits(real), b = Double.doubleToLongBits(imag);
+         return (int)(a ^ (a >>> 32)) * 31 + (int)(b ^ (b >>> 32));
+      }
+      public String toString() { return "(" + real + "," + imag + ")"; }
    }
    /** Packed c32 values in structure-of-arrays form for allocation-free access. */
    public static final class Complex32Array {
       public float[] re, im;
-      public Complex32Array(){this(new float[0],new float[0]);}
-      public Complex32Array(float[] re,float[] im){if(re==null||im==null||re.length!=im.length)throw new CodecException("complex component arrays must have equal lengths");this.re=re;this.im=im;}
-      public int size(){return re.length;}
-      public Complex32 get(int index){return new Complex32(re[index],im[index]);}
-      public void append(Complex32Array other){if(other==null||other.size()==0)return;float[] nr=new float[size()+other.size()],ni=new float[size()+other.size()];System.arraycopy(re,0,nr,0,size());System.arraycopy(im,0,ni,0,size());System.arraycopy(other.re,0,nr,size(),other.size());System.arraycopy(other.im,0,ni,size(),other.size());re=nr;im=ni;}
+      public Complex32Array() { this(new float[0], new float[0]); }
+      public Complex32Array(float[] re, float[] im) {
+         if (re == null || im == null || re.length != im.length)
+            throw new CodecException("complex component arrays must have equal lengths");
+         this.re = re;
+         this.im = im;
+      }
+      public int size() { return re.length; }
+      public Complex32 get(int index) { return new Complex32(re[index], im[index]); }
+      public void append(Complex32Array other) {
+         if (other == null || other.size() == 0)
+            return;
+         float[] nr = new float[size() + other.size()], ni = new float[size() + other.size()];
+         System.arraycopy(re, 0, nr, 0, size());
+         System.arraycopy(im, 0, ni, 0, size());
+         System.arraycopy(other.re, 0, nr, size(), other.size());
+         System.arraycopy(other.im, 0, ni, size(), other.size());
+         re = nr;
+         im = ni;
+      }
    }
    /** Packed c64 values in structure-of-arrays form for allocation-free access. */
    public static final class Complex64Array {
       public double[] re, im;
-      public Complex64Array(){this(new double[0],new double[0]);}
-      public Complex64Array(double[] re,double[] im){if(re==null||im==null||re.length!=im.length)throw new CodecException("complex component arrays must have equal lengths");this.re=re;this.im=im;}
-      public int size(){return re.length;}
-      public Complex64 get(int index){return new Complex64(re[index],im[index]);}
-      public void append(Complex64Array other){if(other==null||other.size()==0)return;double[] nr=new double[size()+other.size()],ni=new double[size()+other.size()];System.arraycopy(re,0,nr,0,size());System.arraycopy(im,0,ni,0,size());System.arraycopy(other.re,0,nr,size(),other.size());System.arraycopy(other.im,0,ni,size(),other.size());re=nr;im=ni;}
+      public Complex64Array() { this(new double[0], new double[0]); }
+      public Complex64Array(double[] re, double[] im) {
+         if (re == null || im == null || re.length != im.length)
+            throw new CodecException("complex component arrays must have equal lengths");
+         this.re = re;
+         this.im = im;
+      }
+      public int size() { return re.length; }
+      public Complex64 get(int index) { return new Complex64(re[index], im[index]); }
+      public void append(Complex64Array other) {
+         if (other == null || other.size() == 0)
+            return;
+         double[] nr = new double[size() + other.size()], ni = new double[size() + other.size()];
+         System.arraycopy(re, 0, nr, 0, size());
+         System.arraycopy(im, 0, ni, 0, size());
+         System.arraycopy(other.re, 0, nr, size(), other.size());
+         System.arraycopy(other.im, 0, ni, size(), other.size());
+         re = nr;
+         im = ni;
+      }
    }
-   public static byte[] encode(Message m,byte[] descriptor,int hash,Field[] fields) {
-      byte[] payload=encodePayload(m,fields); ByteArrayOutputStream out=new ByteArrayOutputStream(); writeU32(out,descriptor.length);out.write(descriptor,0,descriptor.length);writeU32(out,hash);out.write(payload,0,payload.length);return out.toByteArray();
+   private static CodecException malformed(String m) { return new CodecException(m); }
+   private static Field[] messageFields(Class<?> t) {
+      try {
+         return (Field[])t.getField("SDL_FIELDS").get(null);
+      } catch (Exception e) {
+         throw new CodecException("missing SDL fields", e);
+      }
    }
-   public static Object decode(Class<?> type,byte[] descriptor,int hash,Field[] fields,byte[] wire) {
-      if(wire==null||wire.length<8)throw malformed("truncated frame");long n=readU32(wire,0);
-      if(n>MAX_DESCRIPTOR||n>wire.length-8)throw malformed("invalid descriptor length");
-      if(n!=descriptor.length)throw new CodecException("schema descriptor mismatch");
-      for(int i=0;i<(int)n;i++)if(wire[4+i]!=descriptor[i])throw new CodecException("schema descriptor mismatch");
-      if(readU32(wire,4+(int)n)!=(hash&0xffffffffL))throw new CodecException("schema hash mismatch");
-      byte[] body=new byte[wire.length-8-(int)n];System.arraycopy(wire,8+(int)n,body,0,body.length);return decodePayload(type,fields,body);
+   private static Object instance(Class<?> t) {
+      try {
+         return t.getDeclaredConstructor().newInstance();
+      } catch (Exception e) {
+         throw new CodecException("cannot instantiate message", e);
+      }
    }
-   public static byte[] encodePayload(Message m,Field[] fields) {
-      ByteArrayOutputStream out=new ByteArrayOutputStream();
-      for(Field f:fields){Object v=get(m,f.name);
-         if(f.dimensions.length>0){writeField(out,f.id,packFixed(f.valueClass,v,f.dimensions));continue;}
-         if("optional".equals(f.modifier)){if(v!=null)writeField(out,f.id,packValue(f,v));}
-         else if("repeated".equals(f.modifier)){for(Object x:(List<?>)v)writeField(out,f.id,packValue(f,x));}
-         else if("packed".equals(f.modifier)){if("c32".equals(f.typeName)){Complex32Array xs=(Complex32Array)v;if(xs.re==null||xs.im==null||xs.re.length!=xs.im.length)throw new CodecException("complex component arrays must have equal lengths");if(xs.size()>0)writeField(out,f.id,packComplex(xs.re,xs.im));}else if("c64".equals(f.typeName)){Complex64Array xs=(Complex64Array)v;if(xs.re==null||xs.im==null||xs.re.length!=xs.im.length)throw new CodecException("complex component arrays must have equal lengths");if(xs.size()>0)writeField(out,f.id,packComplex(xs.re,xs.im));}else{List<?> xs=(List<?>)v;if(!xs.isEmpty()){ByteArrayOutputStream packed=new ByteArrayOutputStream();for(Object x:xs){byte[] b=packFixed(f.valueClass,x,new int[0]);packed.write(b,0,b.length);}writeField(out,f.id,packed.toByteArray());}}}
-         else writeField(out,f.id,packValue(f,v));
-      }return out.toByteArray();
+   private static Object get(Object o, String n) {
+      try {
+         return o.getClass().getField(n).get(o);
+      } catch (Exception e) {
+         throw new CodecException("cannot read " + n, e);
+      }
    }
-   @SuppressWarnings("unchecked")
-   public static Object decodePayload(Class<?> type,Field[] fields,byte[] bytes){
-      if(bytes==null)throw malformed("null payload");Object result=instance(type);int pos=0;
-      while(pos<bytes.length){if(bytes.length-pos<8)throw malformed("truncated field header");long id=readU32(bytes,pos),len=readU32(bytes,pos+4);pos+=8;if(len>bytes.length-pos)throw malformed("truncated field payload");int end=pos+(int)len;Field f=find(fields,id);
-         if(f!=null){byte[] part=new byte[(int)len];System.arraycopy(bytes,pos,part,0,part.length);Object decoded;
-            if(f.dimensions.length>0)decoded=unpackFixed(f.valueClass,part,f.dimensions);
-            else if("packed".equals(f.modifier)){if("c32".equals(f.typeName)){Complex32Array xs=unpackComplex32(part,0,part.length),old=(Complex32Array)get(result,f.name);if(old.size()==0)set(result,f.name,xs);else old.append(xs);}else if("c64".equals(f.typeName)){Complex64Array xs=unpackComplex64(part,0,part.length),old=(Complex64Array)get(result,f.name);if(old.size()==0)set(result,f.name,xs);else old.append(xs);}else{int size=fixedSize(f.valueClass);if(size<0||part.length%size!=0)throw malformed("invalid packed field length");List<Object> xs=(List<Object>)get(result,f.name);for(int p=0;p<part.length;p+=size){byte[] one=new byte[size];System.arraycopy(part,p,one,0,size);xs.add(unpackFixed(f.valueClass,one,new int[0]));}}pos=end;continue;}
-            else decoded=unpackValue(f,part);
-            if("repeated".equals(f.modifier))((List<Object>)get(result,f.name)).add(decoded);else set(result,f.name,decoded);
-         }pos=end;
-      }return result;
+   public static String display(Message m, Field[] fs) {
+      StringBuilder s = new StringBuilder(m.getClass().getSimpleName()).append('{');
+      for (int i = 0; i < fs.length; i++) {
+         if (i > 0)
+            s.append(", ");
+         s.append(fs[i].name).append('=').append(get(m, fs[i].name));
+      }
+      return s.append('}').toString();
    }
-   private static Field find(Field[] fs,long id){for(Field f:fs)if(f.id==id)return f;return null;}
-   private static byte[] packFixed(Class<?> type,Object value,int[] dims){
-      if(dims.length>0){if(value==null||!value.getClass().isArray()||Array.getLength(value)!=dims[0])throw new CodecException("fixed array has wrong length");int[] rest=tail(dims);ByteArrayOutputStream out=new ByteArrayOutputStream();for(int i=0;i<Array.getLength(value);i++){byte[] b=packFixed(type,Array.get(value,i),rest);out.write(b,0,b.length);}return out.toByteArray();}
-      if(Message.class.isAssignableFrom(type)){ByteArrayOutputStream out=new ByteArrayOutputStream();for(Field f:messageFields(type)){if(!"required".equals(f.modifier))throw new CodecException("fixed struct has non-required field");byte[] b=packFixed(f.valueClass,get(value,f.name),f.dimensions);out.write(b,0,b.length);}return out.toByteArray();}
-      return packValue(new Field(0,"","","",type,new int[0],EnumValue.class.isAssignableFrom(type)),value);
+
+   private static int compareNames(String a, String b) {
+      byte[] x = a.getBytes(StandardCharsets.UTF_8), y = b.getBytes(StandardCharsets.UTF_8);
+      for (int i = 0; i < Math.min(x.length, y.length); i++) {
+         int d = (x[i] & 255) - (y[i] & 255);
+         if (d != 0)
+            return d;
+      }
+      return x.length - y.length;
    }
-   private static Object unpackFixed(Class<?> type,byte[] bytes,int[] dims){
-      if(dims.length>0){int[] rest=tail(dims);int size=fixedSize(type,rest);if(size<0||bytes.length!=size*dims[0])throw malformed("invalid fixed array length");Class<?> component=rest.length==0?type:Array.newInstance(type,rest).getClass();Object array=Array.newInstance(component,dims[0]);for(int i=0;i<dims[0];i++){byte[] b=new byte[size];System.arraycopy(bytes,i*size,b,0,size);Array.set(array,i,unpackFixed(type,b,rest));}return array;}
-      if(Message.class.isAssignableFrom(type)){int size=fixedSize(type);if(size!=bytes.length)throw malformed("invalid fixed struct length");Object v=instance(type);int pos=0;for(Field f:messageFields(type)){int n=fixedSize(f.valueClass,f.dimensions);byte[] b=new byte[n];System.arraycopy(bytes,pos,b,0,n);set(v,f.name,unpackFixed(f.valueClass,b,f.dimensions));pos+=n;}return v;}
-      return unpackValue(new Field(0,"","","",type,new int[0],EnumValue.class.isAssignableFrom(type)),bytes);
+   private static final java.util.Comparator<String> UTF8_ORDER =
+       new java.util.Comparator<String>() {
+          public int compare(String a, String b) { return compareNames(a, b); }
+       };
+   private static final class Declaration {
+      final String name;
+      final List<Field> fields = new ArrayList<Field>();
+      Declaration(String name) { this.name = name; }
    }
-   private static int[] tail(int[] a){int[] b=new int[a.length-1];System.arraycopy(a,1,b,0,b.length);return b;}
-   private static int fixedSize(Class<?> type){return fixedSize(type,new int[0]);}
-   private static int fixedSize(Class<?> t,int[] dims){int n;
-      if(t==Boolean.class||t==Byte.class)n=1;else if(t==Short.class)n=2;else if(t==Integer.class||t==Float.class||EnumValue.class.isAssignableFrom(t))n=4;else if(t==Long.class||t==Double.class||t==Complex32.class)n=8;else if(t==Complex64.class)n=16;
-      else if(Message.class.isAssignableFrom(t)){n=0;for(Field f:messageFields(t)){if(!"required".equals(f.modifier))return -1;int x=fixedSize(f.valueClass,f.dimensions);if(x<0||n>Integer.MAX_VALUE-x)return -1;n+=x;}}else return -1;
-      for(int d:dims){if(n>Integer.MAX_VALUE/d)return -1;n*=d;}return n;
+   private static final class Schema {
+      final Map<String, Integer> fixedSizes = new HashMap<String, Integer>();
+      final TreeMap<String, Declaration> messages = new TreeMap<String, Declaration>(UTF8_ORDER);
+      final TreeMap<String, Map<Integer, String>> enums =
+          new TreeMap<String, Map<Integer, String>>(UTF8_ORDER);
    }
-   private static byte[] packValue(Field f,Object v){String t=f.typeName.length()==0?typeName(f.valueClass):f.typeName;
-      if("string".equals(t)){if(v==null)throw new CodecException("null string");return ((String)v).getBytes(StandardCharsets.UTF_8);}
-      if(f.enumeration){if(!(v instanceof EnumValue))throw new CodecException("invalid enum value");return integer(((EnumValue)v).wireValue(),4);}
-      if("bool".equals(t)){if(!(v instanceof Boolean))throw new CodecException("invalid bool");return new byte[]{(byte)(((Boolean)v)?1:0)};}
-      if("int8".equals(t))return integer(((Number)v).byteValue(),1);if("int16".equals(t))return integer(((Number)v).shortValue(),2);if("int32".equals(t))return integer(((Number)v).intValue(),4);if("int64".equals(t))return integer(((Number)v).longValue(),8);
-      if("fl32".equals(t))return integer(Float.floatToIntBits(((Number)v).floatValue()),4);if("fl64".equals(t))return integer(Double.doubleToLongBits(((Number)v).doubleValue()),8);
-      if("c32".equals(t)){Complex32 c=(Complex32)v;return join(integer(Float.floatToIntBits(c.real),4),integer(Float.floatToIntBits(c.imag),4));}if("c64".equals(t)){Complex64 c=(Complex64)v;return join(integer(Double.doubleToLongBits(c.real),8),integer(Double.doubleToLongBits(c.imag),8));}
-      if(v instanceof Message)return encodePayload((Message)v,messageFields(v.getClass()));throw new CodecException("unsupported SDL type: "+t);
+   private static final class Binding {
+      final Class<?> type;
+      final Map<Long, Field> fields = new HashMap<Long, Field>();
+      final Map<Long, java.lang.reflect.Field> access =
+          new HashMap<Long, java.lang.reflect.Field>();
+      Binding(Class<?> t) {
+         type = t;
+         for (Field f : messageFields(t)) {
+            fields.put(f.id, f);
+            try {
+               access.put(f.id, t.getField(f.name));
+            } catch (Exception e) {
+               throw new CodecException("missing field", e);
+            }
+         }
+      }
    }
-   private static byte[] packComplex(float[] re,float[] im){if(re==null||im==null||re.length!=im.length)throw new CodecException("complex component arrays must have equal lengths");if(re.length>Integer.MAX_VALUE/8)throw new CodecException("packed complex field is too large");byte[] out=new byte[re.length*8];for(int i=0;i<re.length;i++){putInteger(out,i*8,Float.floatToIntBits(re[i]),4);putInteger(out,i*8+4,Float.floatToIntBits(im[i]),4);}return out;}
-   private static byte[] packComplex(double[] re,double[] im){if(re==null||im==null||re.length!=im.length)throw new CodecException("complex component arrays must have equal lengths");if(re.length>Integer.MAX_VALUE/16)throw new CodecException("packed complex field is too large");byte[] out=new byte[re.length*16];for(int i=0;i<re.length;i++){putInteger(out,i*16,Double.doubleToLongBits(re[i]),8);putInteger(out,i*16+8,Double.doubleToLongBits(im[i]),8);}return out;}
-   private static Complex32Array unpackComplex32(byte[] bytes,int offset,int length){if(length%8!=0)throw malformed("invalid packed field length");int count=length/8;float[] re=new float[count],im=new float[count];for(int i=0;i<count;i++){re[i]=Float.intBitsToFloat((int)readInteger(bytes,offset+i*8,4));im[i]=Float.intBitsToFloat((int)readInteger(bytes,offset+i*8+4,4));}return new Complex32Array(re,im);}
-   private static Complex64Array unpackComplex64(byte[] bytes,int offset,int length){if(length%16!=0)throw malformed("invalid packed field length");int count=length/16;double[] re=new double[count],im=new double[count];for(int i=0;i<count;i++){re[i]=Double.longBitsToDouble(readInteger(bytes,offset+i*16,8));im[i]=Double.longBitsToDouble(readInteger(bytes,offset+i*16+8,8));}return new Complex64Array(re,im);}
-   private static Object unpackValue(Field f,byte[] b){String t=f.typeName.length()==0?typeName(f.valueClass):f.typeName;
-      if("string".equals(t)){try{CharsetDecoder d=StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT);return d.decode(ByteBuffer.wrap(b)).toString();}catch(CharacterCodingException e){throw new CodecException("invalid UTF-8",e);}}
-      if(Message.class.isAssignableFrom(f.valueClass))return decodePayload(f.valueClass,messageFields(f.valueClass),b);
-      int size=wireSize(t);if(b.length!=size)throw malformed("invalid scalar size for "+t);
-      if(f.enumeration){int x=(int)readInteger(b,0);try{return f.valueClass.getMethod("fromWire",Integer.TYPE).invoke(null,Integer.valueOf(x));}catch(Exception e){throw new CodecException("invalid enum value",e);}}
-      if("bool".equals(t)){if(b[0]!=0&&b[0]!=1)throw malformed("invalid bool");return Boolean.valueOf(b[0]!=0);}
-      if("int8".equals(t))return Byte.valueOf((byte)readInteger(b,0));if("int16".equals(t))return Short.valueOf((short)readInteger(b,0));if("int32".equals(t))return Integer.valueOf((int)readInteger(b,0));if("int64".equals(t))return Long.valueOf(readInteger(b,0));
-      if("fl32".equals(t))return Float.valueOf(Float.intBitsToFloat((int)readInteger(b,0)));if("fl64".equals(t))return Double.valueOf(Double.longBitsToDouble(readInteger(b,0)));
-      if("c32".equals(t))return new Complex32(Float.intBitsToFloat((int)readInteger(b,0,4)),Float.intBitsToFloat((int)readInteger(b,4,4)));if("c64".equals(t))return new Complex64(Double.longBitsToDouble(readInteger(b,0,8)),Double.longBitsToDouble(readInteger(b,8,8)));
-      throw malformed("unsupported SDL type");
+   public static final class Context {
+      private final Schema schema, localSchema;
+      private final String[] names;
+      private final Map<String, Binding> bindings = new HashMap<String, Binding>();
+      private final Map<String, Integer> sizes = new HashMap<String, Integer>();
+      private Context(Schema schema, Schema local) {
+         this.schema = schema;
+         this.localSchema = local;
+         this.names = schema.messages.keySet().toArray(new String[0]);
+      }
    }
-   private static int wireSize(String t){if("bool".equals(t)||"int8".equals(t))return 1;if("int16".equals(t))return 2;if("int32".equals(t)||"fl32".equals(t))return 4;if("int64".equals(t)||"fl64".equals(t)||"c32".equals(t))return 8;if("c64".equals(t))return 16;return 4;}
-   private static String typeName(Class<?> c){if(c==Boolean.class)return "bool";if(c==Byte.class)return "int8";if(c==Short.class)return "int16";if(c==Integer.class)return "int32";if(c==Long.class)return "int64";if(c==Float.class)return "fl32";if(c==Double.class)return "fl64";if(c==Complex32.class)return "c32";if(c==Complex64.class)return "c64";if(c==String.class)return "string";return "message";}
-   private static byte[] integer(long v,int n){byte[] b=new byte[n];for(int i=0;i<n;i++){int s=(LITTLE?i:n-1-i)*8;b[i]=(byte)(v>>>s);}return b;}
-   private static void putInteger(byte[] b,int p,long v,int n){for(int i=0;i<n;i++){int s=(LITTLE?i:n-1-i)*8;b[p+i]=(byte)(v>>>s);}}
-   private static long readInteger(byte[] b,int p){return readInteger(b,p,b.length);}
-   private static long readInteger(byte[] b,int p,int n){long v=0;if(LITTLE){for(int i=n-1;i>=0;i--)v=(v<<8)|(b[p+i]&255L);}else{for(int i=0;i<n;i++)v=(v<<8)|(b[p+i]&255L);}return v;}
-   private static long readU32(byte[] b,int p){return readInteger(new byte[]{b[p],b[p+1],b[p+2],b[p+3]},0)&0xffffffffL;}
-   private static void writeU32(ByteArrayOutputStream o,long n){byte[] b=integer(n,4);o.write(b,0,b.length);}
-   private static void writeField(ByteArrayOutputStream o,long id,byte[] b){writeU32(o,id);writeU32(o,b.length);o.write(b,0,b.length);}
-   private static byte[] join(byte[] a,byte[] b){byte[] x=new byte[a.length+b.length];System.arraycopy(a,0,x,0,a.length);System.arraycopy(b,0,x,a.length,b.length);return x;}
-   private static Field[] messageFields(Class<?> t){try{return (Field[])t.getField("SDL_FIELDS").get(null);}catch(Exception e){throw new CodecException("missing SDL fields",e);}}
-   private static Object instance(Class<?> t){try{return t.getDeclaredConstructor().newInstance();}catch(Exception e){throw new CodecException("cannot instantiate message",e);}}
-   private static Object get(Object o,String n){try{return o.getClass().getField(n).get(o);}catch(Exception e){throw new CodecException("cannot read "+n,e);}}
-   private static void set(Object o,String n,Object v){try{o.getClass().getField(n).set(o,v);}catch(Exception e){throw new CodecException("cannot set "+n,e);}}
-   private static CodecException malformed(String m){return new CodecException(m);}
-   public static String display(Message m,Field[] fs){StringBuilder s=new StringBuilder(m.getClass().getSimpleName()).append('{');for(int i=0;i<fs.length;i++){if(i>0)s.append(", ");s.append(fs[i].name).append('=').append(get(m,fs[i].name));}return s.append('}').toString();}
+   private static String name(Class<?> t) {
+      try {
+         return (String)t.getField("SDL_NAME").get(null);
+      } catch (Exception e) {
+         throw new CodecException("missing SDL name", e);
+      }
+   }
+   private static String catalogue(Class<?> t) {
+      try {
+         return (String)t.getField("SDL_DESCRIPTOR").get(null);
+      } catch (Exception e) {
+         throw new CodecException("missing SDL description", e);
+      }
+   }
+   private static final String IDENT = "[\\p{L}\\p{N}_$]+";
+   private static final Pattern HEAD = Pattern.compile("(message|enum) (" + IDENT + ") \\{");
+   private static final Pattern FIELD =
+       Pattern.compile("  ([0-9]+): (required|optional|repeated|packed) (" + IDENT +
+                       ")((?:\\[[0-9]+\\])*) (" + IDENT + ");");
+   private static final Pattern ITEM = Pattern.compile("  (" + IDENT + ") = (-?[0-9]+);");
+   private static long number(String s) {
+      try {
+         long n = Long.parseLong(s);
+         if (n < 0 || n > 0xffffffffL)
+            throw malformed("uint32 overflow");
+         return n;
+      } catch (NumberFormatException e) {
+         throw new CodecException("invalid number", e);
+      }
+   }
+   private static Schema parse(String text) {
+      if (text == null || text.getBytes(StandardCharsets.UTF_8).length > MAX_DESCRIPTOR ||
+          !text.startsWith("SDL2\n") || !text.endsWith("\n") || text.indexOf('\0') >= 0)
+         throw malformed("expected SDL2 description");
+      utf8(text);
+      String[] lines = text.substring(5).split("\n");
+      Schema schema = new Schema();
+      String previousMessage = "", previousEnum = "";
+      for (int i = 0; i < lines.length; i++) {
+         Matcher head = HEAD.matcher(lines[i]);
+         if (!head.matches())
+            throw malformed("invalid declaration");
+         String type = head.group(2);
+         if (type.getBytes(StandardCharsets.UTF_8).length > 65535)
+            throw malformed("identifier limit");
+         if (wireSize(type) > 0 || type.equals("string"))
+            throw malformed("reserved type name");
+         if (head.group(1).equals("message")) {
+            if (compareNames(type, previousMessage) <= 0 || schema.messages.size() >= 65535)
+               throw malformed("message order");
+            previousMessage = type;
+            Declaration d = new Declaration(type);
+            HashSet<String> names = new HashSet<String>();
+            long previous = 0;
+            while (++i < lines.length && !lines[i].equals("}")) {
+               Matcher f = FIELD.matcher(lines[i]);
+               if (!f.matches() || d.fields.size() >= 65535)
+                  throw malformed("invalid field");
+               if (f.group(3).getBytes(StandardCharsets.UTF_8).length > 65535 ||
+                   f.group(5).getBytes(StandardCharsets.UTF_8).length > 65535)
+                  throw malformed("identifier limit");
+               long id = number(f.group(1));
+               if (id <= previous || !names.add(f.group(5)))
+                  throw malformed("duplicate field");
+               previous = id;
+               Matcher dimensions = Pattern.compile("\\[([0-9]+)\\]").matcher(f.group(4));
+               List<Integer> dims = new ArrayList<Integer>();
+               while (dimensions.find()) {
+                  long n = number(dimensions.group(1));
+                  if (n == 0 || n > Integer.MAX_VALUE || dims.size() >= 255)
+                     throw malformed("invalid dimension");
+                  dims.add((int)n);
+               }
+               int[] ds = new int[dims.size()];
+               for (int j = 0; j < ds.length; j++)
+                  ds[j] = dims.get(j);
+               if (ds.length > 0 && !f.group(2).equals("required"))
+                  throw malformed("array cardinality");
+               d.fields.add(new Field(id, f.group(5), f.group(2), f.group(3), null, ds, false));
+            }
+            if (i == lines.length)
+               throw malformed("unclosed message");
+            schema.messages.put(type, d);
+         } else {
+            if (compareNames(type, previousEnum) <= 0 || schema.enums.size() >= 65535)
+               throw malformed("enum order");
+            previousEnum = type;
+            Map<Integer, String> items = new java.util.LinkedHashMap<Integer, String>();
+            HashSet<String> names = new HashSet<String>();
+            while (++i < lines.length && !lines[i].equals("}")) {
+               Matcher item = ITEM.matcher(lines[i]);
+               if (!item.matches() || items.size() >= 65535)
+                  throw malformed("invalid enum");
+               if (item.group(1).getBytes(StandardCharsets.UTF_8).length > 65535)
+                  throw malformed("identifier limit");
+               int n;
+               try {
+                  n = Integer.parseInt(item.group(2));
+               } catch (NumberFormatException e) {
+                  throw new CodecException("enum overflow", e);
+               }
+               if (items.containsKey(n) || !names.add(item.group(1)))
+                  throw malformed("duplicate enum value");
+               items.put(n, item.group(1));
+            }
+            if (i == lines.length || items.isEmpty())
+               throw malformed("invalid enum");
+            schema.enums.put(type, items);
+         }
+      }
+      if (schema.messages.isEmpty())
+         throw malformed("empty catalogue");
+      for (String type : schema.enums.keySet())
+         if (schema.messages.containsKey(type))
+            throw malformed("ambiguous type");
+      for (Declaration d : schema.messages.values())
+         for (Field f : d.fields) {
+            if (wireSize(f.typeName) == 0 && !f.typeName.equals("string") &&
+                !schema.messages.containsKey(f.typeName) && !schema.enums.containsKey(f.typeName))
+               throw malformed("unknown field type");
+            if (f.dimensions.length > 0 || f.modifier.equals("packed")) {
+               int size = fixedSize(schema, f.typeName, new HashSet<String>(), 0);
+               if (size <= 0)
+                  throw malformed("variable packed/array element");
+               for (int n : f.dimensions) {
+                  if (size > Integer.MAX_VALUE / n)
+                     throw malformed("array overflow");
+                  size *= n;
+               }
+            }
+         }
+      Map<String, Integer> heights = new HashMap<String, Integer>();
+      for (String type : schema.messages.keySet())
+         visit(schema, type, new HashSet<String>(), heights, 0);
+      return schema;
+   }
+   private static int visit(Schema s, String name, HashSet<String> active,
+                            Map<String, Integer> heights, int depth) {
+      Integer cached = heights.get(name);
+      if (depth > 64 || (cached != null && depth + cached > 64))
+         throw malformed("deep schema");
+      if (cached != null)
+         return cached;
+      if (!active.add(name))
+         throw malformed("recursive schema");
+      int height = 0;
+      for (Field f : s.messages.get(name).fields)
+         if (s.messages.containsKey(f.typeName))
+            height = Math.max(height, 1 + visit(s, f.typeName, active, heights, depth + 1));
+      if (depth + height > 64)
+         throw malformed("deep schema");
+      active.remove(name);
+      heights.put(name, height);
+      return height;
+   }
+   private static int fixedSize(Schema s, String name, HashSet<String> active, int depth) {
+      if (depth > 64)
+         return -1;
+      Integer cached = s.fixedSizes.get(name);
+      if (cached != null)
+         return cached;
+      int result = computeFixedSize(s, name, active, depth);
+      s.fixedSizes.put(name, result);
+      return result;
+   }
+   private static int computeFixedSize(Schema s, String name, HashSet<String> active, int depth) {
+      int n = wireSize(name);
+      if (n > 0)
+         return n;
+      if (s.enums.containsKey(name))
+         return 4;
+      if (name.equals("string"))
+         return -1;
+      Declaration d = s.messages.get(name);
+      if (d == null || depth > 64 || d.fields.isEmpty() || !active.add(name))
+         return -1;
+      int total = 0;
+      for (Field f : d.fields) {
+         if (!f.modifier.equals("required")) {
+            active.remove(name);
+            return -1;
+         }
+         int size = fixedSize(s, f.typeName, active, depth + 1);
+         if (size < 0) {
+            active.remove(name);
+            return -1;
+         }
+         for (int dim : f.dimensions) {
+            if (size > Integer.MAX_VALUE / dim)
+               throw malformed("array overflow");
+            size *= dim;
+         }
+         if (total > Integer.MAX_VALUE - size)
+            throw malformed("size overflow");
+         total += size;
+      }
+      active.remove(name);
+      return total;
+   }
+   private static boolean sameField(Field a, Field b) {
+      return a.id == b.id && a.name.equals(b.name) && a.typeName.equals(b.typeName) &&
+          a.modifier.equals(b.modifier) && Arrays.equals(a.dimensions, b.dimensions);
+   }
+   private static boolean sameDeclaration(Declaration a, Declaration b) {
+      if (a.fields.size() != b.fields.size())
+         return false;
+      for (int i = 0; i < a.fields.size(); i++)
+         if (!sameField(a.fields.get(i), b.fields.get(i)))
+            return false;
+      return true;
+   }
+   private static void merge(Schema target, Schema source) {
+      for (Declaration d : source.messages.values()) {
+         Declaration old = target.messages.get(d.name);
+         if (old != null && !sameDeclaration(old, d))
+            throw malformed("conflicting message");
+         target.messages.put(d.name, d);
+      }
+      for (String n : source.enums.keySet()) {
+         if (target.enums.containsKey(n) && !target.enums.get(n).equals(source.enums.get(n)))
+            throw malformed("conflicting enum");
+         target.enums.put(n, source.enums.get(n));
+      }
+   }
+   private static String render(Schema schema) {
+      StringBuilder out = new StringBuilder("SDL2\n");
+      for (Declaration d : schema.messages.values()) {
+         out.append("message ").append(d.name).append(" {\n");
+         for (Field f : d.fields) {
+            out.append("  ")
+                .append(f.id)
+                .append(": ")
+                .append(f.modifier)
+                .append(' ')
+                .append(f.typeName);
+            for (int n : f.dimensions)
+               out.append('[').append(n).append(']');
+            out.append(' ').append(f.name).append(";\n");
+         }
+         out.append("}\n");
+      }
+      for (String n : schema.enums.keySet()) {
+         out.append("enum ").append(n).append(" {\n");
+         for (Map.Entry<Integer, String> item : schema.enums.get(n).entrySet())
+            out.append("  ")
+                .append(item.getValue())
+                .append(" = ")
+                .append(item.getKey())
+                .append(";\n");
+         out.append("}\n");
+      }
+      return out.toString();
+   }
+   public static String description(Class<?>... types) {
+      Schema s = new Schema();
+      for (Class<?> t : types)
+         merge(s, parse(catalogue(t)));
+      String text = render(s);
+      parse(text);
+      return text;
+   }
+   private static void bind(Context ctx, Class<?> type) {
+      String name = name(type);
+      if (ctx.bindings.containsKey(name)) {
+         if (ctx.bindings.get(name).type != type)
+            throw malformed("duplicate local type");
+         return;
+      }
+      Binding b = new Binding(type);
+      ctx.bindings.put(name, b);
+      for (Field f : b.fields.values())
+         if (Message.class.isAssignableFrom(f.valueClass))
+            bind(ctx, f.valueClass);
+   }
+   private static String cardinality(String m) {
+      return m.equals("packed") || m.equals("repeated") ? "sequence" : m;
+   }
+   public static Context prepare(String text, Class<?>... localTypes) {
+      Schema local = new Schema();
+      for (Class<?> t : localTypes)
+         merge(local, parse(catalogue(t)));
+      Context ctx = new Context(parse(text), local);
+      for (Class<?> t : localTypes)
+         bind(ctx, t);
+      for (Declaration d : ctx.schema.messages.values()) {
+         ctx.sizes.put(d.name, fixedSize(ctx.schema, d.name, new HashSet<String>(), 0));
+         Binding b = ctx.bindings.get(d.name);
+         if (b == null)
+            continue;
+         for (Field f : d.fields) {
+            Field l = b.fields.get(f.id);
+            if (l != null &&
+                (!l.typeName.equals(f.typeName) || !Arrays.equals(l.dimensions, f.dimensions) ||
+                 !cardinality(l.modifier).equals(cardinality(f.modifier))))
+               throw malformed("incompatible field");
+         }
+      }
+      return ctx;
+   }
+
+   private static final class Sink {
+      final byte[] bytes;
+      int offset;
+      Sink(byte[] bytes) { this.bytes = bytes; }
+      void reserve(int n) {
+         if (n < 0 || offset > Integer.MAX_VALUE - n)
+            throw malformed("message exceeds Java buffer size");
+         if (bytes != null && n > bytes.length - offset)
+            throw malformed("buffer overflow");
+      }
+      void integer(long v, int n) {
+         reserve(n);
+         if (bytes != null)
+            for (int i = 0; i < n; i++)
+               bytes[offset + i] = (byte)(v >>> ((n - 1 - i) * 8));
+         offset += n;
+      }
+      void data(byte[] b) {
+         reserve(b.length);
+         if (bytes != null)
+            System.arraycopy(b, 0, bytes, offset, b.length);
+         offset += b.length;
+      }
+      void count(long n) {
+         if (n < 0 || n > 0xffffffffL)
+            throw malformed("counter overflow");
+         do {
+            int b = (int)(n & 127);
+            n >>>= 7;
+            if (n != 0)
+               b |= 128;
+            integer(b, 1);
+         } while (n != 0);
+      }
+   }
+   private static byte[] utf8(String value) {
+      for (int i = 0; i < value.length(); i++) {
+         char c = value.charAt(i);
+         if (Character.isHighSurrogate(c)) {
+            if (++i == value.length() || !Character.isLowSurrogate(value.charAt(i)))
+               throw malformed("invalid Unicode string");
+         } else if (Character.isLowSurrogate(c))
+            throw malformed("invalid Unicode string");
+      }
+      return value.getBytes(StandardCharsets.UTF_8);
+   }
+   private static Object readAccess(Binding b, long id, Object value) {
+      try {
+         return b.access.get(id).get(value);
+      } catch (Exception e) {
+         throw new CodecException("field read failed", e);
+      }
+   }
+   private static void writeAccess(Binding b, long id, Object value, Object decoded) {
+      try {
+         b.access.get(id).set(value, decoded);
+      } catch (Exception e) {
+         throw new CodecException("field write failed", e);
+      }
+   }
+   private static void writeMessage(Context ctx, String name, Object value, Sink sink) {
+      Declaration d = ctx.schema.messages.get(name);
+      Binding b = ctx.bindings.get(name);
+      if (d == null || b == null || value == null || !b.type.isInstance(value) ||
+          d.fields.size() != b.fields.size())
+         throw malformed("encoding requires emission catalogue");
+      for (Field f : d.fields) {
+         Field local = b.fields.get(f.id);
+         if (local == null)
+            throw malformed("missing emission field");
+         Object v = readAccess(b, f.id, value);
+         if (f.modifier.equals("optional")) {
+            sink.count(v == null ? 0 : 1);
+            if (v != null)
+               writeValue(ctx, f.typeName, f.dimensions, 0, v, sink);
+         } else if (f.modifier.equals("repeated") || f.modifier.equals("packed")) {
+            if (v instanceof Complex32Array) {
+               Complex32Array a = (Complex32Array)v;
+               if (a.re == null || a.im == null || a.re.length != a.im.length)
+                  throw malformed("invalid complex arrays");
+               sink.count(a.size());
+               for (int i = 0; i < a.size(); i++) {
+                  sink.integer(Float.floatToRawIntBits(a.re[i]), 4);
+                  sink.integer(Float.floatToRawIntBits(a.im[i]), 4);
+               }
+            } else if (v instanceof Complex64Array) {
+               Complex64Array a = (Complex64Array)v;
+               if (a.re == null || a.im == null || a.re.length != a.im.length)
+                  throw malformed("invalid complex arrays");
+               sink.count(a.size());
+               for (int i = 0; i < a.size(); i++) {
+                  sink.integer(Double.doubleToRawLongBits(a.re[i]), 8);
+                  sink.integer(Double.doubleToRawLongBits(a.im[i]), 8);
+               }
+            } else {
+               if (!(v instanceof List<?>))
+                  throw malformed("invalid sequence");
+               List<?> xs = (List<?>)v;
+               sink.count(xs.size());
+               for (Object x : xs)
+                  writeValue(ctx, f.typeName, f.dimensions, 0, x, sink);
+            }
+         } else
+            writeValue(ctx, f.typeName, f.dimensions, 0, v, sink);
+      }
+   }
+   private static void writeValue(Context ctx, String name, int[] dims, int level, Object v,
+                                  Sink sink) {
+      if (level < dims.length) {
+         if (v == null || !v.getClass().isArray() || Array.getLength(v) != dims[level])
+            throw malformed("invalid fixed array");
+         for (int i = 0; i < dims[level]; i++)
+            writeValue(ctx, name, dims, level + 1, Array.get(v, i), sink);
+         return;
+      }
+      if (v == null)
+         throw malformed("null required value");
+      if (ctx.schema.messages.containsKey(name)) {
+         writeMessage(ctx, name, v, sink);
+         return;
+      }
+      if (ctx.schema.enums.containsKey(name)) {
+         if (!(v instanceof EnumValue) ||
+             !ctx.schema.enums.get(name).containsKey(((EnumValue)v).wireValue()))
+            throw malformed("invalid enum");
+         sink.integer(((EnumValue)v).wireValue(), 4);
+         return;
+      }
+      if (name.equals("string")) {
+         if (!(v instanceof String))
+            throw malformed("invalid string");
+         byte[] bytes = utf8((String)v);
+         sink.count(bytes.length);
+         sink.data(bytes);
+         return;
+      }
+      if (name.equals("bool")) {
+         if (!(v instanceof Boolean))
+            throw malformed("invalid bool");
+         sink.integer((Boolean)v ? 1 : 0, 1);
+         return;
+      }
+      if (name.equals("c32")) {
+         Complex32 z = (Complex32)v;
+         sink.integer(Float.floatToRawIntBits(z.real), 4);
+         sink.integer(Float.floatToRawIntBits(z.imag), 4);
+         return;
+      }
+      if (name.equals("c64")) {
+         Complex64 z = (Complex64)v;
+         sink.integer(Double.doubleToRawLongBits(z.real), 8);
+         sink.integer(Double.doubleToRawLongBits(z.imag), 8);
+         return;
+      }
+      if (name.equals("fl32"))
+         sink.integer(Float.floatToRawIntBits(((Number)v).floatValue()), 4);
+      else if (name.equals("fl64"))
+         sink.integer(Double.doubleToRawLongBits(((Number)v).doubleValue()), 8);
+      else
+         sink.integer(((Number)v).longValue(), wireSize(name));
+   }
+   public static byte[] encode(Context ctx, Message value) {
+      String name = name(value.getClass());
+      int id = Arrays.asList(ctx.names).indexOf(name) + 1;
+      if (id == 0)
+         throw malformed("unknown message type");
+      Sink measure = new Sink(null);
+      measure.count(id);
+      writeMessage(ctx, name, value, measure);
+      byte[] bytes = new byte[measure.offset];
+      Sink sink = new Sink(bytes);
+      sink.count(id);
+      writeMessage(ctx, name, value, sink);
+      return bytes;
+   }
+   private static final class Cursor {
+      final byte[] bytes;
+      int offset;
+      Cursor(byte[] bytes) {
+         if (bytes == null)
+            throw malformed("null data");
+         this.bytes = bytes;
+      }
+      void need(int n) {
+         if (n < 0 || n > bytes.length - offset)
+            throw malformed("truncated payload");
+      }
+      long integer(int n) {
+         need(n);
+         long v = 0;
+         for (int i = 0; i < n; i++)
+            v = (v << 8) | (bytes[offset++] & 255L);
+         return v;
+      }
+      long count() {
+         long n = 0;
+         for (int i = 0; i < 5; i++) {
+            int b = (int)integer(1);
+            if (i == 4 && b > 15)
+               throw malformed("counter overflow");
+            n |= (long)(b & 127) << (7 * i);
+            if (b < 128) {
+               if (i > 0 && b == 0)
+                  throw malformed("noncanonical counter");
+               return n;
+            }
+         }
+         throw malformed("invalid counter");
+      }
+   }
+   private static int sequenceCount(Context ctx, Field f, Cursor r) {
+      long n = f.modifier.equals("required") ? 1 : r.count();
+      if (f.modifier.equals("optional") && n > 1)
+         throw malformed("optional count exceeds one");
+      int size = wireSize(f.typeName);
+      if (size == 0) {
+         if (ctx.schema.enums.containsKey(f.typeName))
+            size = 4;
+         else {
+            Integer cached = ctx.sizes.get(f.typeName);
+            size = cached == null ? -1 : cached;
+         }
+      }
+      if (size > 0) {
+         long unit = size;
+         for (int dim : f.dimensions)
+            unit *= dim;
+         if (n > (r.bytes.length - r.offset) / unit)
+            throw malformed("truncated array");
+      } else if (n > 1048576)
+         throw malformed("variable sequence too large");
+      if (n > Integer.MAX_VALUE)
+         throw malformed("sequence exceeds Java size");
+      return (int)n;
+   }
+   private static Object readMessage(Context ctx, String name, Cursor r, int depth, boolean skip) {
+      if (depth > 64)
+         throw malformed("message nesting too deep");
+      Declaration d = ctx.schema.messages.get(name);
+      Binding b = ctx.bindings.get(name);
+      if (!skip && b == null)
+         throw malformed("unknown local type");
+      Object result = skip ? null : instance(b.type);
+      for (Field f : d.fields) {
+         int count = sequenceCount(ctx, f, r);
+         Field local = skip ? null : b.fields.get(f.id);
+         boolean discard = skip || local == null;
+         Object value = null;
+         if (f.modifier.equals("packed") || f.modifier.equals("repeated")) {
+            if (!discard && local.modifier.equals("packed") && f.typeName.equals("c32")) {
+               float[] re = new float[count], im = new float[count];
+               for (int i = 0; i < count; i++) {
+                  re[i] = Float.intBitsToFloat((int)r.integer(4));
+                  im[i] = Float.intBitsToFloat((int)r.integer(4));
+               }
+               value = new Complex32Array(re, im);
+            } else if (!discard && local.modifier.equals("packed") && f.typeName.equals("c64")) {
+               double[] re = new double[count], im = new double[count];
+               for (int i = 0; i < count; i++) {
+                  re[i] = Double.longBitsToDouble(r.integer(8));
+                  im[i] = Double.longBitsToDouble(r.integer(8));
+               }
+               value = new Complex64Array(re, im);
+            } else {
+               List<Object> xs = discard ? null : new ArrayList<Object>(count);
+               for (int i = 0; i < count; i++) {
+                  Object x =
+                      readValue(ctx, f.typeName, f.dimensions, 0,
+                                local == null ? null : local.valueClass, r, depth + 1, discard);
+                  if (!discard)
+                     xs.add(x);
+               }
+               value = xs;
+            }
+         } else if (count == 1)
+            value = readValue(ctx, f.typeName, f.dimensions, 0,
+                              local == null ? null : local.valueClass, r, depth + 1, discard);
+         if (!discard)
+            writeAccess(b, f.id, result, value);
+      }
+      return result;
+   }
+   private static Object readValue(Context ctx, String name, int[] dims, int level, Class<?> local,
+                                   Cursor r, int depth, boolean skip) {
+      if (depth > 64)
+         throw malformed("value nesting too deep");
+      if (level < dims.length) {
+         Class<?> component = null;
+         if (!skip) {
+            component = local;
+            for (int i = level + 1; i < dims.length; i++)
+               component = Array.newInstance(component, 0).getClass();
+         }
+         Object array = skip ? null : Array.newInstance(component, dims[level]);
+         for (int i = 0; i < dims[level]; i++) {
+            Object value = readValue(ctx, name, dims, level + 1, local, r, depth + 1, skip);
+            if (!skip)
+               Array.set(array, i, value);
+         }
+         return array;
+      }
+      if (ctx.schema.messages.containsKey(name))
+         return readMessage(ctx, name, r, depth + 1, skip);
+      if (name.equals("string")) {
+         long n = r.count();
+         if (n > Integer.MAX_VALUE)
+            throw malformed("string too large");
+         r.need((int)n);
+         String value;
+         try {
+            value = StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(r.bytes, r.offset, (int)n))
+                        .toString();
+         } catch (CharacterCodingException e) {
+            throw new CodecException("invalid UTF-8", e);
+         }
+         r.offset += (int)n;
+         return skip ? null : value;
+      }
+      if (ctx.schema.enums.containsKey(name)) {
+         int n = (int)r.integer(4);
+         if (!ctx.schema.enums.get(name).containsKey(n))
+            throw malformed("invalid sender enum");
+         if (skip)
+            return null;
+         try {
+            return local.getMethod("fromWire", Integer.TYPE).invoke(null, n);
+         } catch (Exception e) {
+            throw new CodecException("invalid local enum", e);
+         }
+      }
+      if (name.equals("bool")) {
+         long n = r.integer(1);
+         if (n > 1)
+            throw malformed("invalid bool");
+         return skip ? null : Boolean.valueOf(n == 1);
+      }
+      if (name.equals("c32")) {
+         float re = Float.intBitsToFloat((int)r.integer(4)),
+               im = Float.intBitsToFloat((int)r.integer(4));
+         return skip ? null : new Complex32(re, im);
+      }
+      if (name.equals("c64")) {
+         double re = Double.longBitsToDouble(r.integer(8)),
+                im = Double.longBitsToDouble(r.integer(8));
+         return skip ? null : new Complex64(re, im);
+      }
+      long n = r.integer(wireSize(name));
+      if (skip)
+         return null;
+      if (name.equals("int8"))
+         return Byte.valueOf((byte)n);
+      if (name.equals("int16"))
+         return Short.valueOf((short)n);
+      if (name.equals("int32"))
+         return Integer.valueOf((int)n);
+      if (name.equals("int64"))
+         return Long.valueOf(n);
+      if (name.equals("fl32"))
+         return Float.valueOf(Float.intBitsToFloat((int)n));
+      if (name.equals("fl64"))
+         return Double.valueOf(Double.longBitsToDouble(n));
+      throw malformed("unknown primitive");
+   }
+   public static Message decode(Context ctx, byte[] bytes) {
+      Cursor r = new Cursor(bytes);
+      long id = r.count();
+      if (id < 1 || id > ctx.names.length)
+         throw malformed("unknown message ID");
+      Message result = (Message)readMessage(ctx, ctx.names[(int)id - 1], r, 0, false);
+      if (r.offset != bytes.length)
+         throw malformed("trailing bytes");
+      return result;
+   }
+   private static int wireSize(String name) {
+      if (name.equals("bool") || name.equals("int8"))
+         return 1;
+      if (name.equals("int16"))
+         return 2;
+      if (name.equals("int32") || name.equals("fl32"))
+         return 4;
+      if (name.equals("int64") || name.equals("fl64") || name.equals("c32"))
+         return 8;
+      if (name.equals("c64"))
+         return 16;
+      return 0;
+   }
 }

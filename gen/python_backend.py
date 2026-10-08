@@ -5,13 +5,12 @@ import keyword
 import os
 import unicodedata
 
-from generator import c_identifier, canonical_type_descriptor, canonical_type_hash, clear_generated_outputs, parse_schemas
+from generator import c_identifier, canonical_type_descriptor, clear_generated_outputs, parse_schemas
 
 
 _PYTHON_IMPORTED_TYPES = set(('IntEnum Complex32 Complex64 SdlMessage').split())
 _PYTHON_MESSAGE_RESERVED_FIELDS = set((
-   '_SDL_DESCRIPTOR _SDL_HASH _SDL_FIXED_SIZE _SDL_FIELDS encode_payload '
-   'decode_payload display __init__ __eq__ __repr__ __class__ __dict__ '
+   '_SDL_DESCRIPTOR _SDL_NAME _SDL_FIXED_SIZE _SDL_FIELDS display __init__ __eq__ __repr__ __class__ __dict__ '
    '__weakref__').split())
 
 
@@ -96,21 +95,15 @@ class PythonBackend:
             key=lambda field: field.index)
          output.append('class ' + c_identifier(message_name) + '(SdlMessage):\n')
          descriptor = canonical_type_descriptor(self.schema, message_name)
-         descriptor_lines = []
-         for offset in range(0, len(descriptor), 16):
-            descriptor_lines.append(', '.join(str(byte) for byte in
-               descriptor[offset:offset + 16]))
-         output.append('   _SDL_DESCRIPTOR = bytes((\n      ' + ',\n      '.join(
-            descriptor_lines) + ',\n   ))\n')
-         output.append('   _SDL_HASH = 0x' + format(
-            canonical_type_hash(self.schema, message_name), '08X') + '\n')
+         output.append('   _SDL_NAME = ' + repr(message_name) + '\n')
+         output.append('   _SDL_DESCRIPTOR = ' + repr(descriptor.decode('utf-8')) + '\n')
          fixed_size = self.schema.fixed_wire_size(message_name)
          if fixed_size is not None:
             output.append('   _SDL_FIXED_SIZE = ' + str(fixed_size) + '\n')
          output.append('   _SDL_FIELDS = (\n')
          for field in fields:
             output.append('      (' + str(field.index) + ', ' + repr(c_identifier(field.name)) +
-               ', ' + repr(field.modifier) + ', ' + repr(c_identifier(field.type_name)) + ', ' +
+               ', ' + repr(field.modifier) + ', ' + repr(field.type_name) + ', ' +
                repr(tuple(field.array_dimensions)) + '),\n')
          output.append('   )\n\n')
       return ''.join(output)

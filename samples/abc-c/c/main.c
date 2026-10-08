@@ -51,55 +51,81 @@ static int read_all(int socket_fd, void *buffer, size_t size) {
    return 1;
 }
 
-/* Prefix the SDL frame so the stream socket reader knows its boundary. */
-static int send_message(int socket_fd, const char *type, const void *message) {
-   uint8_t *frame;
-   uint8_t length_header[4];
-   size_t frame_size = 0;
-   int success;
-   frame = (uint8_t *)type_encode(type, message, &frame_size);
-   if (frame == NULL || frame_size == 0 || frame_size > MAX_FRAME_SIZE ||
-       frame_size > UINT32_MAX) {
-      type_free(frame);
+/* The sample sends one catalogue then one data message per connection. */
+static int send_buffer(int fd, const void *data, size_t size) {
+   uint8_t header[4];
+   if (!size || size > MAX_FRAME_SIZE)
+      return 0;
+   header[0] = (uint8_t)(size >> 24);
+   header[1] = (uint8_t)(size >> 16);
+   header[2] = (uint8_t)(size >> 8);
+   header[3] = (uint8_t)size;
+   return write_all(fd, header, 4) && write_all(fd, data, size);
+}
+static void *receive_buffer(int fd, size_t *size) {
+   uint8_t header[4];
+   uint32_t n;
+   void *data;
+   if (!read_all(fd, header, 4))
+      return NULL;
+   n = ((uint32_t)header[0] << 24) | ((uint32_t)header[1] << 16) | ((uint32_t)header[2] << 8) |
+       header[3];
+   if (!n || n > MAX_FRAME_SIZE)
+      return NULL;
+   data = malloc(n);
+   if (!data)
+      return NULL;
+   if (!read_all(fd, data, n)) {
+      free(data);
+      return NULL;
+   }
+   *size = n;
+   return data;
+}
+static int send_message(int fd, const char *type, const void *value) {
+   const char *types[] = {type};
+   size_t n, ds;
+   char *text = type_description(types, 1, &ds);
+   SdlContext *ctx;
+   void *data;
+   int ok;
+   if (!text)
+      return 0;
+   ctx = type_prepare(text, ds);
+   if (!ctx) {
+      type_free(text);
       return 0;
    }
-   length_header[0] = (uint8_t)(frame_size >> 24);
-   length_header[1] = (uint8_t)(frame_size >> 16);
-   length_header[2] = (uint8_t)(frame_size >> 8);
-   length_header[3] = (uint8_t)frame_size;
-   success = write_all(socket_fd, length_header, sizeof(length_header)) &&
-      write_all(socket_fd, frame, frame_size);
-   type_free(frame);
-   return success;
+   data = type_encode(ctx, type, value, &n);
+   ok = data && send_buffer(fd, text, ds) && send_buffer(fd, data, n);
+   type_free(text);
+   type_free(data);
+   type_context_free(ctx);
+   return ok;
 }
-
-static void *receive_message(int socket_fd, size_t *frame_size) {
-   uint8_t length_header[4];
-   uint32_t length;
-   uint8_t *frame;
-   void *message;
-   if (!read_all(socket_fd, length_header, sizeof(length_header)))
+static void *receive_message(int fd, const char *expected, size_t *size) {
+   size_t ds;
+   void *text = receive_buffer(fd, &ds), *data, *value;
+   SdlContext *ctx;
+   if (!text)
       return NULL;
-   length = ((uint32_t)length_header[0] << 24) |
-      ((uint32_t)length_header[1] << 16) |
-      ((uint32_t)length_header[2] << 8) | (uint32_t)length_header[3];
-   if (length == 0 || length > MAX_FRAME_SIZE)
+   ctx = type_prepare(text, ds);
+   free(text);
+   if (!ctx)
       return NULL;
-   frame = (uint8_t *)malloc(length);
-   if (frame == NULL)
-      return NULL;
-   if (!read_all(socket_fd, frame, length)) {
-      free(frame);
-      return NULL;
+   data = receive_buffer(fd, size);
+   value = NULL;
+   if (data) {
+      const char *name = type_message_name(ctx, data, *size);
+      if (name && !strcmp(name, expected))
+         value = type_decode(ctx, data, *size);
    }
-   *frame_size = length;
-   message = type_decode(frame, frame_size);
-   free(frame);
-   return message;
+   free(data);
+   type_context_free(ctx);
+   return value;
 }
 
-static int display_sdl_message(const char *label, const char *type,
-   const void *message) {
+static int display_sdl_message(const char *label, const char *type, const void *message) {
    char *rendered = type_display(type, message, 3);
    if (rendered == NULL) {
       fprintf(stderr, "Could not display SDL message of type %s.\n", type);
@@ -119,8 +145,7 @@ static void *input_thread(void *argument) {
    printf("Enter coefficients a, b, c for a*x^2 + b*x + c = 0: ");
    fflush(stdout);
    scanned = scanf("%lf %lf %lf", &input.a, &input.b, &input.c);
-   if (scanned != 3 || !isfinite(input.a) || !isfinite(input.b) ||
-       !isfinite(input.c)) {
+   if (scanned != 3 || !isfinite(input.a) || !isfinite(input.b) || !isfinite(input.c)) {
       fprintf(stderr, "Please enter three finite real numbers.\n");
       close(sockets->input_socket);
       return &thread_failure;
@@ -141,7 +166,7 @@ static void *solver_thread(void *argument) {
    EquationResult result;
    size_t frame_size = 0;
    double discriminant;
-   input = (EquationInput *)receive_message(sockets->input_socket, &frame_size);
+   input = (EquationInput *)receive_message(sockets->input_socket, "EquationInput", &frame_size);
    close(sockets->input_socket);
    if (input == NULL) {
       fprintf(stderr, "Could not receive or decode the coefficient message.\n");
@@ -156,8 +181,7 @@ static void *solver_thread(void *argument) {
    memset(&result, 0, sizeof(result));
    if (input->a == 0.0) {
       if (input->b == 0.0)
-         result.kind = input->c == 0.0 ? EQUATIONKIND_INFINITE_SOLUTIONS :
-            EQUATIONKIND_NO_SOLUTION;
+         result.kind = input->c == 0.0 ? EQUATIONKIND_INFINITE_SOLUTIONS : EQUATIONKIND_NO_SOLUTION;
       else {
          result.kind = EQUATIONKIND_ONE_REAL;
          result.has_x1 = true;
@@ -203,35 +227,33 @@ static void *display_thread(void *argument) {
    ThreadSockets *sockets = (ThreadSockets *)argument;
    EquationResult *result;
    size_t frame_size = 0;
-   result = (EquationResult *)receive_message(sockets->result_socket,
-      &frame_size);
+   result =
+       (EquationResult *)receive_message(sockets->result_socket, "EquationResult", &frame_size);
    close(sockets->result_socket);
    if (result == NULL) {
       fprintf(stderr, "Could not receive or decode the result message.\n");
       return &thread_failure;
    }
    switch (result->kind) {
-      case EQUATIONKIND_TWO_REAL:
-         printf("Two real roots: x1 = %.12g, x2 = %.12g\n",
-            result->x1, result->x2);
-         break;
-      case EQUATIONKIND_ONE_REAL:
-         printf("One real root: x = %.12g\n", result->x1);
-         break;
-      case EQUATIONKIND_COMPLEX:
-         printf("Complex roots: x = %.12g +/- %.12gi\n",
-            result->real_part, result->imaginary_part);
-         break;
-      case EQUATIONKIND_INFINITE_SOLUTIONS:
-         puts("Every real number is a solution.");
-         break;
-      case EQUATIONKIND_NO_SOLUTION:
-         puts("There is no solution.");
-         break;
-      default:
-         fprintf(stderr, "Received an unknown equation result.\n");
-         type_free(result);
-         return &thread_failure;
+   case EQUATIONKIND_TWO_REAL:
+      printf("Two real roots: x1 = %.12g, x2 = %.12g\n", result->x1, result->x2);
+      break;
+   case EQUATIONKIND_ONE_REAL:
+      printf("One real root: x = %.12g\n", result->x1);
+      break;
+   case EQUATIONKIND_COMPLEX:
+      printf("Complex roots: x = %.12g +/- %.12gi\n", result->real_part, result->imaginary_part);
+      break;
+   case EQUATIONKIND_INFINITE_SOLUTIONS:
+      puts("Every real number is a solution.");
+      break;
+   case EQUATIONKIND_NO_SOLUTION:
+      puts("There is no solution.");
+      break;
+   default:
+      fprintf(stderr, "Received an unknown equation result.\n");
+      type_free(result);
+      return &thread_failure;
    }
    type_free(result);
    return NULL;
@@ -285,8 +307,7 @@ int main(void) {
    pthread_join(input_id, &input_status);
    pthread_join(solver_id, &solver_status);
    pthread_join(display_id, &display_status);
-   return input_status == NULL && solver_status == NULL &&
-      display_status == NULL ? 0 : 1;
+   return input_status == NULL && solver_status == NULL && display_status == NULL ? 0 : 1;
 
 thread_error:
    fprintf(stderr, "Could not create worker thread.\n");
@@ -298,8 +319,11 @@ thread_error:
    close(input_pair[1]);
    close(result_pair[0]);
    close(result_pair[1]);
-   if (input_started) pthread_join(input_id, NULL);
-   if (solver_started) pthread_join(solver_id, NULL);
-   if (display_started) pthread_join(display_id, NULL);
+   if (input_started)
+      pthread_join(input_id, NULL);
+   if (solver_started)
+      pthread_join(solver_id, NULL);
+   if (display_started)
+      pthread_join(display_id, NULL);
    return 1;
 }

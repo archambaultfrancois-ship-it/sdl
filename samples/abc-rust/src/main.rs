@@ -6,14 +6,24 @@ use std::thread;
 mod abc;
 
 use abc::{EquationInput, EquationKind, EquationResult};
-use sdl_runtime::{decode, display, encode, SdlMessage};
+use sdl_runtime::{decode, description, display, encode, prepare, SdlMessage};
 
 const MAX_FRAME_SIZE: usize = 1024 * 1024;
 
 fn send_message<T: SdlMessage>(stream: &mut UnixStream, message: &T) -> io::Result<()> {
-    let frame = encode(message).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{:?}", e)))?;
+    let text = description(&[T::type_info()])
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{:?}", e)))?;
+    let ctx = prepare(&text, &[T::type_info()])
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{:?}", e)))?;
+    stream.write_all(&(text.len() as u32).to_be_bytes())?;
+    stream.write_all(text.as_bytes())?;
+    let frame = encode(&ctx, message)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{:?}", e)))?;
     if frame.is_empty() || frame.len() > MAX_FRAME_SIZE || frame.len() > u32::MAX as usize {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "SDL frame is too large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "SDL frame is too large",
+        ));
     }
     stream.write_all(&(frame.len() as u32).to_be_bytes())?;
     stream.write_all(&frame)
@@ -21,15 +31,33 @@ fn send_message<T: SdlMessage>(stream: &mut UnixStream, message: &T) -> io::Resu
 
 fn receive_message<T: SdlMessage + Default>(stream: &mut UnixStream) -> io::Result<T> {
     use std::io::Read;
+    let mut schema_header = [0; 4];
+    stream.read_exact(&mut schema_header)?;
+    let schema_size = u32::from_be_bytes(schema_header) as usize;
+    if schema_size == 0 || schema_size > MAX_FRAME_SIZE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid catalogue length",
+        ));
+    }
+    let mut schema = vec![0; schema_size];
+    stream.read_exact(&mut schema)?;
+    let text =
+        std::str::from_utf8(&schema).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let ctx = prepare(text, &[T::type_info()])
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{:?}", e)))?;
     let mut header = [0; 4];
     stream.read_exact(&mut header)?;
     let length = u32::from_be_bytes(header) as usize;
     if length == 0 || length > MAX_FRAME_SIZE {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid SDL frame length"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid SDL frame length",
+        ));
     }
     let mut frame = vec![0; length];
     stream.read_exact(&mut frame)?;
-    decode(&frame).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{:?}", e)))
+    decode(&ctx, &frame).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{:?}", e)))
 }
 
 fn input_thread(mut socket: UnixStream) -> io::Result<()> {
@@ -37,12 +65,30 @@ fn input_thread(mut socket: UnixStream) -> io::Result<()> {
     io::stdout().flush()?;
     let mut line = String::new();
     io::stdin().read_line(&mut line)?;
-    let values: Vec<f64> = line.split_whitespace().map(str::parse).collect::<Result<_, _>>()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Please enter three finite real numbers."))?;
+    let values: Vec<f64> = line
+        .split_whitespace()
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Please enter three finite real numbers.",
+            )
+        })?;
     if values.len() != 3 || values.iter().any(|x| !x.is_finite()) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Please enter three finite real numbers."));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Please enter three finite real numbers.",
+        ));
     }
-    send_message(&mut socket, &EquationInput { a: values[0], b: values[1], c: values[2] })
+    send_message(
+        &mut socket,
+        &EquationInput {
+            a: values[0],
+            b: values[1],
+            c: values[2],
+        },
+    )
 }
 
 fn solver_thread(mut input_socket: UnixStream, mut result_socket: UnixStream) -> io::Result<()> {
@@ -51,7 +97,11 @@ fn solver_thread(mut input_socket: UnixStream, mut result_socket: UnixStream) ->
     let mut result = EquationResult::default();
     if input.a == 0.0 {
         if input.b == 0.0 {
-            result.kind = if input.c == 0.0 { EquationKind::InfiniteSolutions } else { EquationKind::NoSolution };
+            result.kind = if input.c == 0.0 {
+                EquationKind::InfiniteSolutions
+            } else {
+                EquationKind::NoSolution
+            };
         } else {
             result.kind = EquationKind::OneReal;
             result.x1 = Some(-input.c / input.b);
@@ -79,9 +129,17 @@ fn solver_thread(mut input_socket: UnixStream, mut result_socket: UnixStream) ->
 fn display_thread(mut socket: UnixStream) -> io::Result<()> {
     let result: EquationResult = receive_message(&mut socket)?;
     match result.kind {
-        EquationKind::TwoReal => println!("Two real roots: x1 = {:.12}, x2 = {:.12}", result.x1.unwrap(), result.x2.unwrap()),
+        EquationKind::TwoReal => println!(
+            "Two real roots: x1 = {:.12}, x2 = {:.12}",
+            result.x1.unwrap(),
+            result.x2.unwrap()
+        ),
         EquationKind::OneReal => println!("One real root: x = {:.12}", result.x1.unwrap()),
-        EquationKind::Complex => println!("Complex roots: x = {:.12} +/- {:.12}i", result.real_part.unwrap(), result.imaginary_part.unwrap()),
+        EquationKind::Complex => println!(
+            "Complex roots: x = {:.12} +/- {:.12}i",
+            result.real_part.unwrap(),
+            result.imaginary_part.unwrap()
+        ),
         EquationKind::InfiniteSolutions => println!("Every real number is a solution."),
         EquationKind::NoSolution => println!("There is no solution."),
     }

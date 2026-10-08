@@ -6,6 +6,3 @@ edition = "2021"
 [lib]
 name = "sdl_runtime"
 path = "src/lib.rs"
-
-[features]
-wire-little-endian = []

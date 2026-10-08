@@ -1,93 +1,73 @@
+use crate::dynamic::{fixed_type_size, parse_descriptor, FieldDesc, SchemaDesc};
+use std::collections::{BTreeMap, HashSet};
 use std::convert::TryInto;
 use std::fmt::Write as FmtWrite;
 
-fn wire_u32(value: u32) -> [u8; 4] {
-   if cfg!(feature = "wire-little-endian") {
-      value.to_le_bytes()
-   } else {
-      value.to_be_bytes()
-   }
-}
-
-fn wire_u64(value: u64) -> [u8; 8] {
-   if cfg!(feature = "wire-little-endian") {
-      value.to_le_bytes()
-   } else {
-      value.to_be_bytes()
-   }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CodecError {
-   Truncated,
-   TypeMismatch,
-   LengthOverflow,
-   InvalidBoolean,
-   InvalidEnum,
-   InvalidUtf8,
-   InvalidDescriptor,
-   DescriptorHashMismatch,
+    Truncated,
+    TypeMismatch,
+    LengthOverflow,
+    InvalidBoolean,
+    InvalidEnum,
+    InvalidUtf8,
+    InvalidDescriptor,
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Complex32 {
-   pub real: f32,
-   pub imag: f32,
+    pub real: f32,
+    pub imag: f32,
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Complex64 {
-   pub real: f64,
-   pub imag: f64,
+    pub real: f64,
+    pub imag: f64,
 }
 
 pub trait WireValue: Sized {
-   fn encode_payload(&self) -> Result<Vec<u8>, CodecError>;
-   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError>;
+    fn encode_value(&self, out: &mut Vec<u8>) -> Result<(), CodecError>;
+    fn decode_value(reader: &mut Reader<'_>, type_name: &str) -> Result<Self, CodecError>;
+    fn encoded_size(&self) -> Result<usize, CodecError>;
 }
-
-pub trait FixedWire: Sized {
-   const WIRE_SIZE: usize;
-
-   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError>;
-   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError>;
-}
-
 /// Formats generated SDL values as an indented, structured string.
 pub trait SdlDisplay {
-   fn fmt_sdl(&self, output: &mut String, indent_width: usize, depth: usize);
+    fn fmt_sdl(&self, output: &mut String, indent_width: usize, depth: usize);
 }
 
 /// Render an SDL value using `indent_width` spaces per nesting level.
 pub fn display<T: SdlDisplay + ?Sized>(value: &T, indent_width: usize) -> String {
-   let mut output = String::new();
-   value.fmt_sdl(&mut output, indent_width, 0);
-   output.push('\n');
-   output
+    let mut output = String::new();
+    value.fmt_sdl(&mut output, indent_width, 0);
+    output.push('\n');
+    output
 }
 
-pub fn display_struct_start(output: &mut String, name: &str, _: usize,
-   _: usize) {
-   let _ = writeln!(output, "{} {{", name);
+pub fn display_struct_start(output: &mut String, name: &str, _: usize, _: usize) {
+    let _ = writeln!(output, "{} {{", name);
 }
 
-pub fn display_struct_field<T: SdlDisplay + ?Sized>(output: &mut String,
-   name: &str, value: &T, depth: usize, indent_width: usize) {
-   display_indent(output, depth.saturating_add(1), indent_width);
-   let _ = write!(output, "{}: ", name);
-   value.fmt_sdl(output, indent_width, depth.saturating_add(1));
-   output.push('\n');
+pub fn display_struct_field<T: SdlDisplay + ?Sized>(
+    output: &mut String,
+    name: &str,
+    value: &T,
+    depth: usize,
+    indent_width: usize,
+) {
+    display_indent(output, depth.saturating_add(1), indent_width);
+    let _ = write!(output, "{}: ", name);
+    value.fmt_sdl(output, indent_width, depth.saturating_add(1));
+    output.push('\n');
 }
 
 pub fn display_struct_end(output: &mut String, depth: usize, indent_width: usize) {
-   display_indent(output, depth, indent_width);
-   output.push('}');
+    display_indent(output, depth, indent_width);
+    output.push('}');
 }
 
 fn display_indent(output: &mut String, depth: usize, indent_width: usize) {
-   for _ in 0..depth.saturating_mul(indent_width) {
-      output.push(' ');
-   }
+    for _ in 0..depth.saturating_mul(indent_width) {
+        output.push(' ');
+    }
 }
 
 macro_rules! display_scalar {
@@ -103,436 +83,533 @@ macro_rules! display_scalar {
 display_scalar!(bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);
 
 impl SdlDisplay for String {
-   fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {
-      let _ = write!(output, "{:?}", self);
-   }
+    fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {
+        let _ = write!(output, "{:?}", self);
+    }
 }
 
 impl SdlDisplay for str {
-   fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {
-      let _ = write!(output, "{:?}", self);
-   }
+    fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {
+        let _ = write!(output, "{:?}", self);
+    }
 }
 
 impl SdlDisplay for Complex32 {
-   fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {
-      let _ = write!(output, "({}, {})", self.real, self.imag);
-   }
+    fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {
+        let _ = write!(output, "({}, {})", self.real, self.imag);
+    }
 }
 
 impl SdlDisplay for Complex64 {
-   fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {
-      let _ = write!(output, "({}, {})", self.real, self.imag);
-   }
+    fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {
+        let _ = write!(output, "({}, {})", self.real, self.imag);
+    }
 }
 
 impl<T: SdlDisplay> SdlDisplay for Option<T> {
-   fn fmt_sdl(&self, output: &mut String, indent_width: usize, depth: usize) {
-      match self {
-         Some(value) => value.fmt_sdl(output, indent_width, depth),
-         None => output.push_str("null"),
-      }
-   }
+    fn fmt_sdl(&self, output: &mut String, indent_width: usize, depth: usize) {
+        match self {
+            Some(value) => value.fmt_sdl(output, indent_width, depth),
+            None => output.push_str("null"),
+        }
+    }
 }
 
 impl<T: SdlDisplay> SdlDisplay for Vec<T> {
-   fn fmt_sdl(&self, output: &mut String, indent_width: usize, depth: usize) {
-      if self.is_empty() {
-         output.push_str("[]");
-         return;
-      }
-      output.push_str("[\n");
-      for (index, value) in self.iter().enumerate() {
-         display_indent(output, depth.saturating_add(1), indent_width);
-         value.fmt_sdl(output, indent_width, depth.saturating_add(1));
-         if index + 1 < self.len() { output.push(','); }
-         output.push('\n');
-      }
-      display_indent(output, depth, indent_width);
-      output.push(']');
-   }
+    fn fmt_sdl(&self, output: &mut String, indent_width: usize, depth: usize) {
+        if self.is_empty() {
+            output.push_str("[]");
+            return;
+        }
+        output.push_str("[\n");
+        for (index, value) in self.iter().enumerate() {
+            display_indent(output, depth.saturating_add(1), indent_width);
+            value.fmt_sdl(output, indent_width, depth.saturating_add(1));
+            if index + 1 < self.len() {
+                output.push(',');
+            }
+            output.push('\n');
+        }
+        display_indent(output, depth, indent_width);
+        output.push(']');
+    }
 }
 
 impl<T: SdlDisplay, const N: usize> SdlDisplay for [T; N] {
-   fn fmt_sdl(&self, output: &mut String, indent_width: usize, depth: usize) {
-      if self.is_empty() {
-         output.push_str("[]");
-         return;
-      }
-      output.push_str("[\n");
-      for (index, value) in self.iter().enumerate() {
-         display_indent(output, depth.saturating_add(1), indent_width);
-         value.fmt_sdl(output, indent_width, depth.saturating_add(1));
-         if index + 1 < N { output.push(','); }
-         output.push('\n');
-      }
-      display_indent(output, depth, indent_width);
-      output.push(']');
-   }
+    fn fmt_sdl(&self, output: &mut String, indent_width: usize, depth: usize) {
+        if self.is_empty() {
+            output.push_str("[]");
+            return;
+        }
+        output.push_str("[\n");
+        for (index, value) in self.iter().enumerate() {
+            display_indent(output, depth.saturating_add(1), indent_width);
+            value.fmt_sdl(output, indent_width, depth.saturating_add(1));
+            if index + 1 < N {
+                output.push(',');
+            }
+            output.push('\n');
+        }
+        display_indent(output, depth, indent_width);
+        output.push(']');
+    }
 }
 
-pub trait SdlMessage: WireValue + Default {
-   const HASH: u32;
-   const DESCRIPTOR: &'static [u8];
+pub trait SdlMessage: WireValue + Default + 'static {
+    const NAME: &'static str;
+    const DESCRIPTOR: &'static str;
+    fn type_info() -> TypeInfo {
+        TypeInfo {
+            name: Self::NAME,
+            descriptor: Self::DESCRIPTOR,
+            decoder: decode_box::<Self>,
+            type_id: std::any::TypeId::of::<Self>(),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+pub struct TypeInfo {
+    pub name: &'static str,
+    pub descriptor: &'static str,
+    type_id: std::any::TypeId,
+    decoder: for<'a> fn(&mut Reader<'a>) -> Result<Box<dyn std::any::Any>, CodecError>,
+}
+fn decode_box<T: SdlMessage>(r: &mut Reader<'_>) -> Result<Box<dyn std::any::Any>, CodecError> {
+    Ok(Box::new(T::decode_value(r, T::NAME)?))
+}
+pub struct Context {
+    pub(crate) schema: SchemaDesc,
+    names: Vec<String>,
+    locals: BTreeMap<String, TypeInfo>,
+    emissions: BTreeMap<String, bool>,
+    sizes: BTreeMap<String, Option<usize>>,
+}
+fn merge(catalogues: &[&str]) -> Result<SchemaDesc, CodecError> {
+    let mut result = SchemaDesc {
+        messages: Default::default(),
+        enums: Default::default(),
+    };
+    for text in catalogues {
+        let schema = parse_descriptor(text)?;
+        for (name, value) in schema.messages {
+            if let Some(previous) = result.messages.get(&name) {
+                if previous != &value {
+                    return Err(CodecError::InvalidDescriptor);
+                }
+            }
+            result.messages.insert(name, value);
+        }
+        for (name, value) in schema.enums {
+            if let Some(previous) = result.enums.get(&name) {
+                if previous != &value {
+                    return Err(CodecError::InvalidDescriptor);
+                }
+            }
+            result.enums.insert(name, value);
+        }
+    }
+    Ok(result)
+}
+pub fn description(types: &[TypeInfo]) -> Result<String, CodecError> {
+    let schema = merge(&types.iter().map(|t| t.descriptor).collect::<Vec<_>>())?;
+    let text = crate::dynamic::render(&schema);
+    parse_descriptor(&text)?;
+    Ok(text)
+}
+pub fn prepare(text: &str, types: &[TypeInfo]) -> Result<Context, CodecError> {
+    let schema = parse_descriptor(text)?;
+    let local_schema = merge(&types.iter().map(|t| t.descriptor).collect::<Vec<_>>())?;
+    let mut locals = BTreeMap::new();
+    for info in types {
+        if locals.insert(info.name.to_owned(), *info).is_some() {
+            return Err(CodecError::InvalidDescriptor);
+        }
+    }
+    for (name, message) in &schema.messages {
+        if let Some(local) = local_schema.messages.get(name) {
+            for f in &message.fields {
+                if let Some(l) = local.fields.iter().find(|l| l.id == f.id) {
+                    if f.type_name != l.type_name
+                        || f.dimensions != l.dimensions
+                        || f.modifier.min(2) != l.modifier.min(2)
+                    {
+                        return Err(CodecError::TypeMismatch);
+                    }
+                }
+            }
+        }
+    }
+    let mut names: Vec<_> = schema.messages.keys().cloned().collect();
+    names.sort();
+    let sizes = schema
+        .messages
+        .keys()
+        .chain(schema.enums.keys())
+        .map(|name| {
+            (
+                name.clone(),
+                fixed_type_size(name, &schema, &mut HashSet::new(), 0),
+            )
+        })
+        .collect();
+    let mut emissions = BTreeMap::new();
+    for name in &names {
+        emission_match(&schema, &local_schema, name, &mut emissions);
+    }
+    Ok(Context {
+        schema,
+        names,
+        locals,
+        emissions,
+        sizes,
+    })
+}
+fn emission_match(
+    schema: &SchemaDesc,
+    local: &SchemaDesc,
+    name: &str,
+    cache: &mut BTreeMap<String, bool>,
+) -> bool {
+    if let Some(result) = cache.get(name) {
+        return *result;
+    }
+    let Some(m) = schema.messages.get(name) else {
+        return false;
+    };
+    let Some(l) = local.messages.get(name) else {
+        return false;
+    };
+    let result = m.fields.len() == l.fields.len()
+        && m.fields.iter().zip(&l.fields).all(|(f, l)| {
+            f.id == l.id
+                && f.type_name == l.type_name
+                && f.dimensions == l.dimensions
+                && f.modifier.min(2) == l.modifier.min(2)
+                && (!schema.messages.contains_key(&f.type_name)
+                    || emission_match(schema, local, &f.type_name, cache))
+        });
+    cache.insert(name.to_owned(), result);
+    result
+}
+pub fn encode<T: SdlMessage>(ctx: &Context, value: &T) -> Result<Vec<u8>, CodecError> {
+    if let Some(info) = ctx.locals.get(T::NAME) {
+        if info.type_id != std::any::TypeId::of::<T>() {
+            return Err(CodecError::TypeMismatch);
+        }
+    }
+    let id = ctx
+        .names
+        .iter()
+        .position(|n| n == T::NAME)
+        .ok_or(CodecError::TypeMismatch)?
+        + 1;
+    if !ctx.emissions.get(T::NAME).copied().unwrap_or(false) {
+        return Err(CodecError::TypeMismatch);
+    }
+    let mut out = Vec::new();
+    out.try_reserve(
+        value
+            .encoded_size()?
+            .checked_add(count_size(id)?)
+            .ok_or(CodecError::LengthOverflow)?,
+    )
+    .map_err(|_| CodecError::LengthOverflow)?;
+    write_count(id, &mut out)?;
+    value.encode_value(&mut out)?;
+    Ok(out)
+}
+pub fn decode<T: SdlMessage>(ctx: &Context, data: &[u8]) -> Result<T, CodecError> {
+    if ctx.locals.get(T::NAME).map(|info| info.type_id) != Some(std::any::TypeId::of::<T>()) {
+        return Err(CodecError::TypeMismatch);
+    }
+    let mut r = Reader::new(ctx, data);
+    if r.root()? != T::NAME {
+        return Err(CodecError::TypeMismatch);
+    }
+    let value = T::decode_value(&mut r, T::NAME)?;
+    r.finish()?;
+    Ok(value)
+}
+pub struct TypedMessage {
+    pub type_name: String,
+    pub value: Box<dyn std::any::Any>,
+}
+pub fn decode_any(ctx: &Context, data: &[u8]) -> Result<TypedMessage, CodecError> {
+    let mut r = Reader::new(ctx, data);
+    let name = r.root()?.to_owned();
+    let info = ctx.locals.get(&name).ok_or(CodecError::TypeMismatch)?;
+    let value = (info.decoder)(&mut r)?;
+    r.finish()?;
+    Ok(TypedMessage {
+        type_name: name,
+        value,
+    })
+}
+pub fn count_size(n: usize) -> Result<usize, CodecError> {
+    if n > u32::MAX as usize {
+        return Err(CodecError::LengthOverflow);
+    }
+    let mut n = n;
+    let mut bytes = 1;
+    while n >= 128 {
+        n >>= 7;
+        bytes += 1;
+    }
+    Ok(bytes)
+}
+pub fn write_count(n: usize, out: &mut Vec<u8>) -> Result<(), CodecError> {
+    count_size(n)?;
+    let mut n = n;
+    while n >= 128 {
+        out.push((n as u8 & 127) | 128);
+        n >>= 7;
+    }
+    out.push(n as u8);
+    Ok(())
+}
+pub fn add_size(total: usize, n: usize) -> Result<usize, CodecError> {
+    total.checked_add(n).ok_or(CodecError::LengthOverflow)
+}
 
-   fn encode_fields(&self, output: &mut Vec<u8>) -> Result<(), CodecError>;
-   fn decode_field(&mut self, id: u32, payload: &[u8]) -> Result<(), CodecError>;
-
-   fn encode_body(&self) -> Result<Vec<u8>, CodecError> {
-      let mut output = Vec::new();
-      self.encode_fields(&mut output)?;
-      Ok(output)
-   }
-
-   fn decode_body(input: &[u8]) -> Result<Self, CodecError> {
-      let mut value = Self::default();
-      let mut offset = 0;
-      while offset < input.len() {
-         if input.len() - offset < 8 {
+pub struct Reader<'a> {
+    pub(crate) context: &'a Context,
+    data: &'a [u8],
+    offset: usize,
+    depth: usize,
+}
+impl<'a> Reader<'a> {
+    pub fn new(context: &'a Context, data: &'a [u8]) -> Self {
+        Self {
+            context,
+            data,
+            offset: 0,
+            depth: 0,
+        }
+    }
+    pub fn take(&mut self, n: usize) -> Result<&'a [u8], CodecError> {
+        if n > self.data.len() - self.offset {
             return Err(CodecError::Truncated);
-         }
-         let id = read_u32(&input[offset..offset + 4])?;
-         let length = read_u32(&input[offset + 4..offset + 8])? as usize;
-         offset += 8;
-         if length > input.len() - offset {
-            return Err(CodecError::Truncated);
-         }
-         value.decode_field(id, &input[offset..offset + length])?;
-         offset += length;
-      }
-      Ok(value)
-   }
-}
-
-pub fn encode<T: SdlMessage>(value: &T) -> Result<Vec<u8>, CodecError> {
-   let body = value.encode_body()?;
-   let descriptor = T::DESCRIPTOR;
-   let descriptor_length: u32 = descriptor.len().try_into()
-      .map_err(|_| CodecError::LengthOverflow)?;
-   let mut output = Vec::with_capacity(8 + descriptor.len() + body.len());
-   output.extend_from_slice(&wire_u32(descriptor_length));
-   output.extend_from_slice(descriptor);
-   output.extend_from_slice(&wire_u32(T::HASH));
-   output.extend_from_slice(&body);
-   Ok(output)
-}
-
-pub fn decode<T: SdlMessage>(input: &[u8]) -> Result<T, CodecError> {
-   if input.len() < 8 {
-      return Err(CodecError::Truncated);
-   }
-   let descriptor_length = read_u32(&input[..4])? as usize;
-   if descriptor_length > input.len() - 8 {
-      return Err(CodecError::Truncated);
-   }
-   let hash_offset = 4 + descriptor_length;
-   if &input[4..hash_offset] != T::DESCRIPTOR {
-      return Err(CodecError::TypeMismatch);
-   }
-   let hash = read_u32(&input[hash_offset..hash_offset + 4])?;
-   if hash != T::HASH {
-      return Err(CodecError::TypeMismatch);
-   }
-   T::decode_body(&input[hash_offset + 4..])
-}
-
-pub fn write_field<T: WireValue>(
-   id: u32,
-   value: &T,
-   output: &mut Vec<u8>,
-) -> Result<(), CodecError> {
-   let payload = value.encode_payload()?;
-   let length: u32 = payload.len().try_into().map_err(|_| CodecError::LengthOverflow)?;
-   output.extend_from_slice(&wire_u32(id));
-   output.extend_from_slice(&wire_u32(length));
-   output.extend_from_slice(&payload);
-   Ok(())
-}
-
-pub fn write_packed_field<T: FixedWire>(
-   id: u32,
-   values: &[T],
-   output: &mut Vec<u8>,
-) -> Result<(), CodecError> {
-   if values.is_empty() {
-      return Ok(());
-   }
-   if T::WIRE_SIZE == 0 || values.len() > u32::MAX as usize / T::WIRE_SIZE {
-      return Err(CodecError::LengthOverflow);
-   }
-   let payload_length = values.len() * T::WIRE_SIZE;
-   output.extend_from_slice(&wire_u32(id));
-   output.extend_from_slice(&wire_u32(payload_length as u32));
-   for value in values {
-      value.encode_fixed(output)?;
-   }
-   Ok(())
-}
-
-pub fn read_packed_field<T: FixedWire>(payload: &[u8]) -> Result<Vec<T>, CodecError> {
-   if T::WIRE_SIZE == 0 || payload.len() % T::WIRE_SIZE != 0 {
-      return Err(CodecError::TypeMismatch);
-   }
-   let mut values = Vec::with_capacity(payload.len() / T::WIRE_SIZE);
-   for item in payload.chunks_exact(T::WIRE_SIZE) {
-      values.push(T::decode_fixed(item)?);
-   }
-   Ok(values)
-}
-
-fn read_u32(bytes: &[u8]) -> Result<u32, CodecError> {
-   let bytes: [u8; 4] = bytes.try_into().map_err(|_| CodecError::Truncated)?;
-   Ok(if cfg!(feature = "wire-little-endian") {
-      u32::from_le_bytes(bytes)
-   } else {
-      u32::from_be_bytes(bytes)
-   })
-}
-
-fn read_u64(bytes: &[u8]) -> Result<u64, CodecError> {
-   let bytes: [u8; 8] = bytes.try_into().map_err(|_| CodecError::Truncated)?;
-   Ok(if cfg!(feature = "wire-little-endian") {
-      u64::from_le_bytes(bytes)
-   } else {
-      u64::from_be_bytes(bytes)
-   })
-}
-
-macro_rules! fixed_integer {
-   ($type:ty, $size:expr) => {
-      impl WireValue for $type {
-         fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
-            let bytes = if cfg!(feature = "wire-little-endian") {
-               self.to_le_bytes()
-            } else {
-               self.to_be_bytes()
-            };
-            Ok(bytes.to_vec())
-         }
-
-         fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
-            let bytes: [u8; $size] = payload.try_into().map_err(|_| CodecError::TypeMismatch)?;
-            Ok(if cfg!(feature = "wire-little-endian") {
-               <$type>::from_le_bytes(bytes)
-            } else {
-               <$type>::from_be_bytes(bytes)
-            })
-         }
-      }
-
-      impl FixedWire for $type {
-         const WIRE_SIZE: usize = $size;
-
-         fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
-            let bytes = if cfg!(feature = "wire-little-endian") {
-               self.to_le_bytes()
-            } else {
-               self.to_be_bytes()
-            };
-            output.extend_from_slice(&bytes);
+        }
+        let start = self.offset;
+        self.offset += n;
+        Ok(&self.data[start..self.offset])
+    }
+    pub fn count(&mut self) -> Result<usize, CodecError> {
+        let mut n = 0u32;
+        for i in 0..5 {
+            let b = self.take(1)?[0];
+            if i == 4 && b > 15 {
+                return Err(CodecError::LengthOverflow);
+            }
+            n |= ((b & 127) as u32) << (7 * i);
+            if b < 128 {
+                if i > 0 && b == 0 {
+                    return Err(CodecError::TypeMismatch);
+                }
+                return Ok(n as usize);
+            }
+        }
+        Err(CodecError::LengthOverflow)
+    }
+    pub fn root(&mut self) -> Result<&'a str, CodecError> {
+        let n = self.count()?;
+        self.context
+            .names
+            .get(n.wrapping_sub(1))
+            .map(|s| s.as_str())
+            .ok_or(CodecError::TypeMismatch)
+    }
+    pub fn fields(&self, name: &str) -> Result<&'a [FieldDesc], CodecError> {
+        self.context
+            .schema
+            .messages
+            .get(name)
+            .map(|m| m.fields.as_slice())
+            .ok_or(CodecError::TypeMismatch)
+    }
+    pub fn field_count(&mut self, f: &FieldDesc) -> Result<usize, CodecError> {
+        let n = if f.modifier == 0 { 1 } else { self.count()? };
+        if f.modifier == 1 && n > 1 {
+            return Err(CodecError::TypeMismatch);
+        }
+        let size = match f.type_name.as_str() {
+            "bool" | "int8" => Some(1),
+            "int16" => Some(2),
+            "int32" | "fl32" => Some(4),
+            "int64" | "fl64" | "c32" => Some(8),
+            "c64" => Some(16),
+            _ => self.context.sizes.get(&f.type_name).copied().flatten(),
+        };
+        if let Some(size) = size {
+            let size = f
+                .dimensions
+                .iter()
+                .try_fold(size, |s, n| s.checked_mul(*n))
+                .ok_or(CodecError::LengthOverflow)?;
+            if n > (self.data.len() - self.offset) / size {
+                return Err(CodecError::Truncated);
+            }
+        } else if n > 1048576 {
+            return Err(CodecError::LengthOverflow);
+        }
+        Ok(n)
+    }
+    pub fn enter(&mut self) -> Result<(), CodecError> {
+        self.depth += 1;
+        if self.depth > 64 {
+            Err(CodecError::InvalidDescriptor)
+        } else {
             Ok(())
-         }
-
-         fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
-            <Self as WireValue>::decode_payload(payload)
-         }
-      }
-   };
+        }
+    }
+    pub fn leave(&mut self) {
+        self.depth -= 1;
+    }
+    pub fn finish(&self) -> Result<(), CodecError> {
+        if self.offset == self.data.len() {
+            Ok(())
+        } else {
+            Err(CodecError::TypeMismatch)
+        }
+    }
+    pub fn validate_enum(&self, name: &str, n: i32) -> Result<(), CodecError> {
+        if self
+            .context
+            .schema
+            .enums
+            .get(name)
+            .map_or(false, |items| items.iter().any(|(_, v)| *v == n))
+        {
+            Ok(())
+        } else {
+            Err(CodecError::InvalidEnum)
+        }
+    }
+    pub fn skip_field(&mut self, f: &FieldDesc, n: usize) -> Result<(), CodecError> {
+        for _ in 0..n {
+            self.skip_value(&f.type_name, &f.dimensions)?;
+        }
+        Ok(())
+    }
+    fn skip_value(&mut self, name: &str, dims: &[usize]) -> Result<(), CodecError> {
+        if !dims.is_empty() {
+            for _ in 0..dims[0] {
+                self.skip_value(name, &dims[1..])?;
+            }
+            return Ok(());
+        }
+        if self.context.schema.messages.contains_key(name) {
+            self.enter()?;
+            for f in self.fields(name)? {
+                let n = self.field_count(f)?;
+                self.skip_field(f, n)?;
+            }
+            self.leave();
+            return Ok(());
+        }
+        if name == "string" {
+            let n = self.count()?;
+            std::str::from_utf8(self.take(n)?).map_err(|_| CodecError::InvalidUtf8)?;
+            return Ok(());
+        }
+        if self.context.schema.enums.contains_key(name) {
+            let n = i32::decode_value(self, name)?;
+            return self.validate_enum(name, n);
+        }
+        if name == "bool" {
+            bool::decode_value(self, name)?;
+            return Ok(());
+        }
+        let n = match name {
+            "int8" => 1,
+            "int16" => 2,
+            "int32" | "fl32" => 4,
+            "int64" | "fl64" | "c32" => 8,
+            "c64" => 16,
+            _ => return Err(CodecError::TypeMismatch),
+        };
+        self.take(n)?;
+        Ok(())
+    }
 }
-
-fixed_integer!(i8, 1);
-fixed_integer!(i16, 2);
-fixed_integer!(i32, 4);
-fixed_integer!(i64, 8);
-
+macro_rules! numeric {
+   ($($t:ty),*)=>{$(impl WireValue for $t {
+      fn encode_value(&self,out:&mut Vec<u8>)->Result<(),CodecError>{out.extend_from_slice(&self.to_be_bytes());Ok(())}
+      fn decode_value(r:&mut Reader<'_>,_:&str)->Result<Self,CodecError>{Ok(Self::from_be_bytes(r.take(std::mem::size_of::<Self>())?.try_into().map_err(|_|CodecError::Truncated)?))}
+      fn encoded_size(&self)->Result<usize,CodecError>{Ok(std::mem::size_of::<Self>())}
+   })*};
+}
+numeric!(i8, i16, i32, i64, f32, f64);
 impl WireValue for bool {
-   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
-      Ok(vec![if *self { 1 } else { 0 }])
-   }
-
-   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
-      match payload {
-         [0] => Ok(false),
-         [1] => Ok(true),
-         [_] => Err(CodecError::InvalidBoolean),
-         _ => Err(CodecError::TypeMismatch),
-      }
-   }
+    fn encode_value(&self, out: &mut Vec<u8>) -> Result<(), CodecError> {
+        out.push(u8::from(*self));
+        Ok(())
+    }
+    fn decode_value(r: &mut Reader<'_>, _: &str) -> Result<Self, CodecError> {
+        match r.take(1)?[0] {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(CodecError::InvalidBoolean),
+        }
+    }
+    fn encoded_size(&self) -> Result<usize, CodecError> {
+        Ok(1)
+    }
 }
-
-impl FixedWire for bool {
-   const WIRE_SIZE: usize = 1;
-
-   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
-      output.push(if *self { 1 } else { 0 });
-      Ok(())
-   }
-
-   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
-      <Self as WireValue>::decode_payload(payload)
-   }
-}
-
-impl WireValue for f32 {
-   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
-      Ok(wire_u32(self.to_bits()).to_vec())
-   }
-
-   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
-      let bytes: [u8; 4] = payload.try_into().map_err(|_| CodecError::TypeMismatch)?;
-      let bits = read_u32(&bytes)?;
-      Ok(Self::from_bits(bits))
-   }
-}
-
-impl FixedWire for f32 {
-   const WIRE_SIZE: usize = 4;
-
-   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
-      output.extend_from_slice(&wire_u32(self.to_bits()));
-      Ok(())
-   }
-
-   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
-      <Self as WireValue>::decode_payload(payload)
-   }
-}
-
-impl WireValue for f64 {
-   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
-      Ok(wire_u64(self.to_bits()).to_vec())
-   }
-
-   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
-      if payload.len() != 8 {
-         return Err(CodecError::TypeMismatch);
-      }
-      let bits = read_u64(payload)?;
-      Ok(Self::from_bits(bits))
-   }
-}
-
-impl FixedWire for f64 {
-   const WIRE_SIZE: usize = 8;
-
-   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
-      output.extend_from_slice(&wire_u64(self.to_bits()));
-      Ok(())
-   }
-
-   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
-      <Self as WireValue>::decode_payload(payload)
-   }
-}
-
-impl WireValue for Complex32 {
-   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
-      let mut output = Vec::with_capacity(8);
-      output.extend_from_slice(&wire_u32(self.real.to_bits()));
-      output.extend_from_slice(&wire_u32(self.imag.to_bits()));
-      Ok(output)
-   }
-
-   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
-      if payload.len() != 8 {
-         return Err(CodecError::TypeMismatch);
-      }
-      Ok(Self {
-         real: f32::from_bits(read_u32(&payload[..4])?),
-         imag: f32::from_bits(read_u32(&payload[4..])?),
-      })
-   }
-}
-
-impl FixedWire for Complex32 {
-   const WIRE_SIZE: usize = 8;
-
-   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
-      output.extend_from_slice(&wire_u32(self.real.to_bits()));
-      output.extend_from_slice(&wire_u32(self.imag.to_bits()));
-      Ok(())
-   }
-
-   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
-      <Self as WireValue>::decode_payload(payload)
-   }
-}
-
-impl WireValue for Complex64 {
-   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
-      let mut output = Vec::with_capacity(16);
-      output.extend_from_slice(&wire_u64(self.real.to_bits()));
-      output.extend_from_slice(&wire_u64(self.imag.to_bits()));
-      Ok(output)
-   }
-
-   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
-      if payload.len() != 16 {
-         return Err(CodecError::TypeMismatch);
-      }
-      let real = read_u64(&payload[..8])?;
-      let imag = read_u64(&payload[8..])?;
-      Ok(Self {
-         real: f64::from_bits(real),
-         imag: f64::from_bits(imag),
-      })
-   }
-}
-
-impl FixedWire for Complex64 {
-   const WIRE_SIZE: usize = 16;
-
-   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
-      output.extend_from_slice(&wire_u64(self.real.to_bits()));
-      output.extend_from_slice(&wire_u64(self.imag.to_bits()));
-      Ok(())
-   }
-
-   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
-      <Self as WireValue>::decode_payload(payload)
-   }
-}
-
 impl WireValue for String {
-   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
-      Ok(self.as_bytes().to_vec())
-   }
-
-   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
-      String::from_utf8(payload.to_vec()).map_err(|_| CodecError::InvalidUtf8)
-   }
+    fn encode_value(&self, out: &mut Vec<u8>) -> Result<(), CodecError> {
+        write_count(self.len(), out)?;
+        out.extend_from_slice(self.as_bytes());
+        Ok(())
+    }
+    fn decode_value(r: &mut Reader<'_>, _: &str) -> Result<Self, CodecError> {
+        let n = r.count()?;
+        std::str::from_utf8(r.take(n)?)
+            .map(str::to_owned)
+            .map_err(|_| CodecError::InvalidUtf8)
+    }
+    fn encoded_size(&self) -> Result<usize, CodecError> {
+        add_size(self.len(), count_size(self.len())?)
+    }
 }
-
-impl<T: FixedWire, const N: usize> FixedWire for [T; N] {
-   const WIRE_SIZE: usize = T::WIRE_SIZE * N;
-
-   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
-      for value in self {
-         value.encode_fixed(output)?;
-      }
-      Ok(())
-   }
-
-   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
-      if T::WIRE_SIZE == 0 || payload.len() != Self::WIRE_SIZE {
-         return Err(CodecError::TypeMismatch);
-      }
-      let mut values = Vec::with_capacity(N);
-      for item in payload.chunks_exact(T::WIRE_SIZE) {
-         values.push(T::decode_fixed(item)?);
-      }
-      values.try_into().map_err(|_| CodecError::TypeMismatch)
-   }
+macro_rules! complex {
+    ($t:ty,$f:ty) => {
+        impl WireValue for $t {
+            fn encode_value(&self, out: &mut Vec<u8>) -> Result<(), CodecError> {
+                self.real.encode_value(out)?;
+                self.imag.encode_value(out)
+            }
+            fn decode_value(r: &mut Reader<'_>, name: &str) -> Result<Self, CodecError> {
+                Ok(Self {
+                    real: <$f>::decode_value(r, name)?,
+                    imag: <$f>::decode_value(r, name)?,
+                })
+            }
+            fn encoded_size(&self) -> Result<usize, CodecError> {
+                Ok(2 * std::mem::size_of::<$f>())
+            }
+        }
+    };
 }
-
-impl<T: FixedWire, const N: usize> WireValue for [T; N] {
-   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
-      let mut output = Vec::with_capacity(Self::WIRE_SIZE);
-      self.encode_fixed(&mut output)?;
-      Ok(output)
-   }
-
-   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
-      <Self as FixedWire>::decode_fixed(payload)
-   }
+complex!(Complex32, f32);
+complex!(Complex64, f64);
+impl<T: WireValue, const N: usize> WireValue for [T; N] {
+    fn encode_value(&self, out: &mut Vec<u8>) -> Result<(), CodecError> {
+        for x in self {
+            x.encode_value(out)?;
+        }
+        Ok(())
+    }
+    fn decode_value(r: &mut Reader<'_>, name: &str) -> Result<Self, CodecError> {
+        let mut v = Vec::new();
+        v.try_reserve(N).map_err(|_| CodecError::LengthOverflow)?;
+        for _ in 0..N {
+            v.push(T::decode_value(r, name)?);
+        }
+        v.try_into().map_err(|_| CodecError::TypeMismatch)
+    }
+    fn encoded_size(&self) -> Result<usize, CodecError> {
+        self.iter()
+            .try_fold(0, |s, x| add_size(s, x.encoded_size()?))
+    }
 }

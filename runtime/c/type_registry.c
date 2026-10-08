@@ -1,5 +1,6 @@
 #include "type_private.h"
 #include "type_registry.h"
+#include <string.h>
 
 #define SDL_REGISTRY_LIMIT 256
 
@@ -12,7 +13,7 @@ bool sdl_register_type(const SdlTypeDesc *type) {
    if (type == NULL || type->name == NULL || type->kind != SDL_TYPE_STRUCT)
       return false;
    for (i = 0; i < registry_count; ++i) {
-      if (registry[i] == type || registry[i]->hash == type->hash)
+      if (registry[i] == type || strcmp(registry[i]->name, type->name) == 0)
          return false;
    }
    if (registry_count == SDL_REGISTRY_LIMIT)
@@ -34,14 +35,5 @@ const SdlTypeDesc *sdl_lookup_type(const char *name) {
       if (candidate[n] == '\0' && name[n] == '\0')
          return registry[i];
    }
-   return NULL;
-}
-
-const SdlTypeDesc *sdl_lookup_hash(uint32_t hash) {
-   size_t i;
-
-   for (i = 0; i < registry_count; ++i)
-      if (registry[i]->hash == hash)
-         return registry[i];
    return NULL;
 }

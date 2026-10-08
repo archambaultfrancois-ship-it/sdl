@@ -33,6 +33,17 @@ public final class Main {
       return frame;
    }
 
+   // Each sample connection carries one message after its catalogue announcement.
+   private static void sendMessage(DataOutputStream out,SdlCodec.Message message)throws IOException {
+      String text=SdlCodec.description(message.getClass());
+      SdlCodec.Context ctx=SdlCodec.prepare(text,message.getClass());
+      send(out,text.getBytes(java.nio.charset.StandardCharsets.UTF_8));send(out,SdlCodec.encode(ctx,message));
+   }
+   private static <T> T receiveMessage(DataInputStream in,Class<T> type)throws IOException {
+      String text=new String(receive(in),java.nio.charset.StandardCharsets.UTF_8);
+      SdlCodec.Context ctx=SdlCodec.prepare(text,type);return type.cast(SdlCodec.decode(ctx,receive(in)));
+   }
+
    public static void main(String[] args) throws Exception {
       final UnixPair inputPair = UnixPair.create();
       final UnixPair resultPair = UnixPair.create();
@@ -41,7 +52,7 @@ public final class Main {
       Thread display = new Thread(new Runnable() {
          public void run() {
             try {
-               abc.EquationResult result = abc.EquationResult.decode(receive(new DataInputStream(resultPair.rightIn)));
+               abc.EquationResult result = receiveMessage(new DataInputStream(resultPair.rightIn),abc.EquationResult.class);
                switch (result.kind) {
                   case TWO_REAL:
                      System.out.printf("Two real roots: x1 = %.12g, x2 = %.12g%n", result.x1, result.x2); break;
@@ -62,7 +73,7 @@ public final class Main {
       Thread solver = new Thread(new Runnable() {
          public void run() {
             try {
-               abc.EquationInput input = abc.EquationInput.decode(receive(new DataInputStream(inputPair.rightIn)));
+               abc.EquationInput input = receiveMessage(new DataInputStream(inputPair.rightIn),abc.EquationInput.class);
                System.out.println("Solver received:\n" + input);
                abc.EquationResult result = new abc.EquationResult();
                if (input.a == 0.0) {
@@ -83,7 +94,7 @@ public final class Main {
                   }
                }
                System.out.println("Solver sending:\n" + result);
-               send(new DataOutputStream(resultPair.leftOut), result.encode());
+               sendMessage(new DataOutputStream(resultPair.leftOut), result);
                resultPair.left.close();
             } catch (Exception e) { failure[1] = e; }
          }
@@ -99,7 +110,7 @@ public final class Main {
                if (!Double.isFinite(a) || !Double.isFinite(b) || !Double.isFinite(c)) throw new IOException("Please enter three finite real numbers.");
                abc.EquationInput message = new abc.EquationInput();
                message.a = a; message.b = b; message.c = c;
-               send(new DataOutputStream(inputPair.leftOut), message.encode());
+               sendMessage(new DataOutputStream(inputPair.leftOut), message);
                inputPair.left.close();
             } catch (Exception e) { failure[0] = e; }
          }

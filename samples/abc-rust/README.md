@@ -3,7 +3,7 @@
 This Rust implementation mirrors [`abc-c`](../abc-c/README.md): three threads
 perform input, solving, and display stages. The stages exchange the same SDL
 `EquationInput` and `EquationResult` messages over two Unix-domain socket
-pairs, with a four-byte length prefix around each encoded SDL frame.
+pairs, with a four-byte length prefix around each encoded SDL2 data buffer.
 
 Build and run from this directory:
 
@@ -17,5 +17,11 @@ result messages before the display thread prints the solution.
 
 Requires Rust/Cargo, Python 3 for binding generation, and a Unix platform that
 provides `UnixStream::pair`. `make clean` removes generated bindings and build
-artifacts. Use `make WIRE_ENDIAN=big run` or `make WIRE_ENDIAN=little run` to
-select the SDL wire byte order.
+artifacts.
+
+## SDL2 catalogue
+
+Each socket direction sends one length-prefixed UTF-8 catalogue at opening,
+then length-prefixed SDL2 data. The receiving stage prepares the catalogue
+once. This example sends one message per connection. The four-byte big-endian
+lengths belong to the stream transport; the runtime receives data separately.

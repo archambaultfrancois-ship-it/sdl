@@ -1,52 +1,113 @@
-use sdl_runtime::{decode, encode, Complex32, SdlMessage};
+use sdl_runtime::{decode, description, encode, prepare, Complex32, SdlMessage};
+use sdl_schema_tests::bench_cases::{BenchEntry, BenchOptionals, BenchSmall, BenchVariable};
 use sdl_schema_tests::benchmark::BenchPayload;
-use std::hint::black_box;
 use std::time::Instant;
-
-fn report_rate(operation: &str, iterations: usize, bytes_per_message: usize,
-   seconds: f64) {
-   if seconds <= 0.0 {
-      println!("{:<6} below timer resolution", operation);
-      return;
-   }
-   let messages_per_second = iterations as f64 / seconds;
-   let mebibytes_per_second = messages_per_second * bytes_per_message as f64 /
-      (1024.0 * 1024.0);
-   println!("{:<6} {:>10.0} msg/s  {:>8.2} MiB/s  ({} bytes/message)",
-      operation, messages_per_second, mebibytes_per_second, bytes_per_message);
+fn bench<T: SdlMessage>(case: &str, message: T, useful: usize) {
+    let text = description(&[T::type_info()]).unwrap();
+    let start = Instant::now();
+    let ctx = prepare(&text, &[T::type_info()]).unwrap();
+    let preparation = start.elapsed().as_secs_f64() * 1e6;
+    let bytes = encode(&ctx, &message).unwrap();
+    let _: T = decode(&ctx, &bytes).unwrap();
+    for _ in 0..100 {
+        encode(&ctx, &message).unwrap();
+        decode::<T>(&ctx, &bytes).unwrap();
+    }
+    let min_iterations = std::env::var("SDL_BENCH_ITERATIONS")
+        .ok()
+        .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(200);
+    println!(
+        "{} metadata: {} description bytes, {:.1} us prepare",
+        case,
+        text.len(),
+        preparation
+    );
+    for operation in ["encode", "decode"] {
+        let mut rates = Vec::new();
+        for _ in 0..3 {
+            let start = Instant::now();
+            let mut n = 0usize;
+            while n < min_iterations || start.elapsed().as_secs_f64() < 0.1 {
+                if operation == "encode" {
+                    std::hint::black_box(encode(&ctx, &message).unwrap());
+                } else {
+                    std::hint::black_box(decode::<T>(&ctx, &bytes).unwrap());
+                }
+                n += 1;
+            }
+            rates.push(n as f64 / start.elapsed().as_secs_f64());
+        }
+        rates.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let rate = rates[1];
+        println!(
+            "{} {} {:.1} msg/s {:.4} MiB/s ({} bytes/message)",
+            case,
+            operation,
+            rate,
+            rate * useful as f64 / 1048576.,
+            bytes.len()
+        );
+    }
 }
-
 fn main() {
-   let iterations = std::env::var("SDL_BENCH_ITERATIONS")
-      .ok()
-      .filter(|value| !value.is_empty() && value.bytes().all(|digit|
-         digit >= b'0' && digit <= b'9'))
-      .and_then(|value| value.parse::<usize>().ok())
-      .filter(|value| *value != 0)
-      .unwrap_or(200);
-   let message = BenchPayload {
-      header: "H".repeat(200),
-      samples: (0..5000).map(|index| Complex32 {
-         real: index as f32 * 0.25,
-         imag: -((index % 97) as f32) * 0.5,
-      }).collect(),
-   };
-   let wire = encode(&message).expect("encode benchmark message");
-   assert_eq!(wire.len(), 40224 + BenchPayload::DESCRIPTOR.len());
-
-   let start = Instant::now();
-   for _ in 0..iterations {
-      let encoded = encode(black_box(&message)).expect("encode message");
-      assert_eq!(encoded.len(), wire.len());
-      black_box(encoded);
-   }
-   report_rate("encode", iterations, wire.len(), start.elapsed().as_secs_f64());
-
-   let start = Instant::now();
-   for _ in 0..iterations {
-      let decoded: BenchPayload = decode(black_box(&wire)).expect("decode message");
-      black_box(decoded);
-   }
-   report_rate("decode", iterations, wire.len(), start.elapsed().as_secs_f64());
-   println!("iterations: {}, wire endian: big", iterations);
+    bench(
+        "small",
+        BenchSmall {
+            active: true,
+            sequence: 123,
+            code: -2,
+        },
+        7,
+    );
+    bench(
+        "optional_sparse",
+        BenchOptionals {
+            a: Some(1),
+            ..Default::default()
+        },
+        4,
+    );
+    bench(
+        "optional_dense",
+        BenchOptionals {
+            a: Some(1),
+            b: Some(2),
+            c: Some(3),
+            d: Some(4),
+            e: Some(5),
+            f: Some(6),
+            g: Some(7),
+            h: Some(8),
+        },
+        32,
+    );
+    bench(
+        "variable",
+        BenchVariable {
+            header: "V".repeat(40),
+            entries: (0..8)
+                .map(|i| BenchEntry {
+                    label: Some(format!("entry{}", i)),
+                    number: i,
+                })
+                .collect(),
+        },
+        152,
+    );
+    bench(
+        "packed",
+        BenchPayload {
+            header: "H".repeat(200),
+            samples: (0..5000)
+                .map(|i| Complex32 {
+                    real: i as f32 * 0.25,
+                    imag: -(i % 97) as f32 * 0.5,
+                })
+                .collect(),
+        },
+        40200,
+    );
 }

@@ -1,51 +1,49 @@
-# SDL test report
+# SDL2 validation report
 
-This report describes the test coverage and results for commit `0ff3a20`.
+Validation performed on 2026-10-08 in the Termux development environment.
+Java was run after sourcing `~/.bashrc`. SDL2 uses big endian throughout.
 
-## What `make test` runs
+## Runtime suite
 
-The Makefile runs these components in order: C, Rust, Python, Matlab/Octave,
-then Java. C, Rust, Python, Matlab/Octave, and Java run in both big- and
-little-endian wire modes. The target does not run programs or smoke checks
-from `samples/`.
+`make test` passed for all five runtimes:
 
-Within C, the executable groups typed codec behavior, runtime storage and
-dynamic descriptors, then malformed wire data and numeric boundaries. Rust
-tests run serially and use `t01_codec`, `t02_invalid`, and `t03_limits`
-prefixes. Python's `tst/python/run_tests.py` runs codec behavior, schema and
-backend validation, malformed input, and limits in that order. Matlab/Octave
-and Java run their codec checks once per wire byte order. The generator tests
-also compile generated Java bindings; the Java codec suite is a separate
-Makefile component.
+- C: typed/dynamic fixture checks, scalar and composite values, schema
+  evolution, one-allocation storage, cloning, and malformed data.
+- Rust: 11 integration tests passed.
+- Python: 47 tests passed (14 codec/limit tests and 33 generator tests).
+- Matlab/Octave: fixture, catalogue, evolution, arrays, and malformed-input
+  checks passed using Octave; proprietary Matlab was unavailable.
+- Java: generated sources compiled and the runtime checks passed.
 
-## Coverage matrix
+All five implementations check the same 132-byte catalogue and 16-byte data
+fixture. Cases include optional presence, ULEB boundaries, big-endian signed
+numbers, UTF-8, enums, complex values, nested messages, fixed arrays, and empty
+messages. Evolution cases cover renamed fields, unknown validated fields,
+missing local defaults, incompatible types/cardinality, and nested layouts.
+Malformed cases include truncated data, trailing bytes, invalid counters,
+booleans, enums, UTF-8, recursive schemas, and invalid fixed element types.
+Shared-subtype and depth cases ensure preparation reuses computed graph values
+and rejects overly deep graphs, including paths through previously visited
+nodes. Generator tests cover naming, collisions, safe regeneration, and size
+limits; large generated Java descriptions avoid the constant-pool string limit.
 
-| Area | C | Rust | Python | Matlab/Octave and Java |
-| --- | --- | --- | --- | --- |
-| Typed round-trips and composite values | Scalars, optional values, enums, repeated and packed fields, fixed arrays, nested messages, and complex values | Scalars, optionals, enums, repeated and packed fields, fixed arrays, nested messages, and complex values | Scalars, optionals, enums, repeated and packed fields, fixed arrays, nested messages, and complex values | Both suites cover scalar and composite codec round-trips, arrays, enums, strings, and complex values |
-| Empty and absent values | Empty messages; absent required values decode to defaults | Empty messages, absent optionals and arrays, and absent required values | Empty messages, absent optionals and arrays, and absent required values | Both cover empty messages and absent values; Java also checks default required values |
-| Shared wire fixtures | C verifies root payload fixtures in both byte orders | Rust compares encoded data to the C fixtures and decodes them | Python compares encoded data to the C fixtures and decodes them | Java verifies the root payload fixture in each byte order; Matlab/Octave exercises codec round-trips |
-| Field order and repeated occurrences | Reordered fields, duplicate singular fields, packed occurrence concatenation, unknown fields, and maximum field ID | Reordered fields, duplicate singular fields, packed occurrence concatenation, unknown fields, and maximum field ID | Reordered fields, duplicate singular fields, packed occurrence concatenation, unknown fields, and maximum field ID | Java checks reordered fields, duplicate and packed occurrences, and unknown fields; Matlab/Octave checks duplicate singular fields and repeated appends |
-| Invalid wire data and bounds | Truncated frames, malformed lengths, primitive payload widths, invalid booleans, enums, and UTF-8 | Truncated frames, malformed lengths, primitive payload widths, invalid booleans, enums, and UTF-8 | Truncated frames, malformed lengths, primitive payload widths, invalid booleans, enums, and UTF-8 | Java checks malformed frames, primitive widths, booleans, enums, UTF-8, and descriptor limits; Matlab/Octave checks malformed frames, payloads, and fixed-array lengths |
-| Dynamic descriptors | Recursive, NUL, invalid UTF-8, oversized and hash-mismatched descriptors; invalid fixed layouts, type-name collisions, and empty enums | Recursive, NUL, invalid UTF-8, and malformed descriptor layouts, including empty enums and type-name collisions | Matching malformed descriptor and invalid-layout cases | — |
-| C storage validation | Rejects nonzero repeated counts with null storage across sizing, encode, clone, and display | — | — | — |
-| Integer and enum boundaries | Signed integer and enum `int32` minimum and maximum values | Signed integer and enum `int32` boundaries, including negative enum values | Signed integer and enum `int32` boundaries, including negative enum values | Java checks integer and enum boundaries; Matlab/Octave checks enum `int32` boundaries and integer round-trips |
-| Strings and floating-point edges | UTF-8 validation, embedded and trailing NUL, infinities, NaNs, subnormals, and signed zero | UTF-8 validation, embedded and trailing NUL, infinities, NaNs, subnormals, and signed zero | UTF-8 validation, embedded and trailing NUL, infinities, NaNs, subnormals, signed zero, and out-of-range encoder inputs | Java checks UTF-8, embedded NUL, infinities, NaNs, subnormals, and signed zero; Matlab/Octave checks ordinary strings and complex values |
-| Generator validation | — | — | Schema parser and C, Rust, Python, Matlab, and Java backend validation, including safe regeneration, identifier collisions, and descriptor and array limits | Java source generation is compiled in the Python backend suite |
+## Examples and tools
 
-## Latest full run
+The C, Rust, Python, Java, and Octave equation examples produced roots 1 and 2
+for input `1 -3 2`, with description exchange separate from data. Radio capture
+interop passed all six C/Rust/Python encoder/decoder pairings; all emitted the
+same 135-byte data and a separate catalogue sidecar.
 
-Command: `make test` from the repository root, with the required environment
-configured.
+The sample UDP captures were regenerated for SDL2. The Lua dissector passes
+`luac -p`. A Lua API mock decoded the five valid data packets, rejected all
+three malformed packets, and preserved the original catalogue during packet
+redissection after a later announcement. This does not replace a Wireshark run. The C Wireshark plugin was not compiled: Wireshark development
+headers/pkg-config metadata are unavailable in this environment. Runtime suite
+success does not validate the Wireshark API integration.
 
-- C: both endian executables passed.
-- Rust: 33 integration tests passed per byte order.
-- Python: 71 tests passed per byte order (13 codec, 25 schema/backend,
-  17 invalid-input, and 16 limits tests).
-- Matlab/Octave: both byte orders passed.
-- Java: generated and test sources compiled; the codec suite passed in both
-  byte orders.
+## Performance
 
-The full `make test` passed. Rust ran 33 integration tests per byte order;
-Python ran 71 tests per byte order. Both Octave codec runs reported success.
-No sample executable or sample smoke check was run.
+`make bench BENCH_ITERATIONS=200` covers small, sparse optional, dense optional,
+variable nested, and packed complex workloads across all five runtimes. See
+[benchmark methodology and results](../docs/benchmarks.md). Measurements are
+local codec throughput with allocations, without network transport.

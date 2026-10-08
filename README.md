@@ -1,84 +1,56 @@
 # SDL encoder
 
-SDL is a schema-driven message encoder with C, Rust, Python, Matlab/Octave, and Java runtimes.
-The generator reads `.sdl` schemas and emits bindings for the selected
-languages. The runtimes share a language-neutral wire descriptor; the wire
-format does not depend on a target language's in-memory layout.
+SDL generates message bindings for C99, Rust, Python 3, Java 7+, and
+Matlab/Octave from `.sdl` schemas.
 
-## Requirements
-
-- Python 3 for code generation and the Python runtime tests.
-- A C99 compiler with 8-bit bytes and IEEE-754 `float`/`double` support for
-  the C runtime and examples.
-- Rust and Cargo for the Rust tests and the cross-language sample.
-- A Java Development Kit for Java generation tests and benchmarks. Generated
-  Java sources target Java 7 language and library features; `make test-java`
-  defaults to source/target 8 because recent JDKs have removed Java 7 compiler
-  mode. Set `JAVA_SOURCE=1.7` when using a JDK that supports it.
-- POSIX threads and Unix-domain sockets for the `abc` sample.
-
-The Python runtime uses only the standard library. From the repository root,
-run the complete test suite with:
-
-```sh
-make test
-```
-
-This runs the C, Rust, Python, Matlab/Octave, and Java unit tests in both wire byte orders. The
-examples are intended for learning and can be run separately; their commands
-are documented below. Run the throughput measurements with `make bench`; see
-[`docs/benchmarks.md`](docs/benchmarks.md) for the measured message and timing
-methodology.
-
-## Examples
-
-- [`samples/abc-c`](samples/abc-c/README.md),
-  [`samples/abc-rust`](samples/abc-rust/README.md),
-  [`samples/abc-java`](samples/abc-java/README.md), and
-  [`samples/abc-python`](samples/abc-python/README.md) demonstrate the same
-  three-stage equation solver using Unix-domain socket pairs;
-  [`samples/abc-matlab`](samples/abc-matlab/README.md) demonstrates the same
-  SDL workflow with three sequential stages.
-- [`samples/radio_capture`](samples/radio_capture/README.md) uses one schema
-  with all three backends and checks each encoder against the other two
-  decoders.
-
-For example, run the thread pipeline with `make -C samples/abc run`, or run the
-radio capture round trips with `make -C samples/radio_capture demo`. Run its
-cross-language checks with:
-
-```sh
-make -C samples/radio_capture interop
-make -C samples/radio_capture WIRE_ENDIAN=little interop
-```
-
-See [`docs/schema.md`](docs/schema.md) for the accepted SDL syntax and its
-constraints, and [`docs/runtime.md`](docs/runtime.md) for typed and
-descriptor-driven runtime APIs.
+SDL2 exchanges a UTF-8 schema catalogue when a connection opens. The runtime
+prepares that catalogue separately from message data. Each data buffer carries
+a compact message type ID followed by positional values. Numbers use big endian.
+Field IDs remain in the catalogue to support schema evolution.
 
 ## Generate bindings
-
-Select one or more backends with `-c`, `-rust`, `-python`, `-matlab`, and `-java`. The input can
-be one SDL file or a directory containing SDL files. Generated files are
-written under a language-specific subdirectory of the output directory:
 
 ```sh
 python3 gen/generator.py -c -rust -python -matlab -java sdl build/generated
 ```
 
-This writes language bindings under `build/generated/<language>`. Regeneration removes stale
-source files left by SDL files that were deleted from the input directory.
-Generated files should be treated as build artifacts; edit the SDL schema and
-regenerate instead.
+Select any combination of backends. The input can be a file or directory;
+outputs go under `build/generated/<language>`. Regeneration removes stale
+bindings. Edit schemas and regenerate instead of editing generated files.
 
-## Wire byte order
+## Build and validation
 
-The default wire byte order is big endian. Little endian is a build/runtime
-option, and communicating peers must use the same setting because frames do
-not carry a byte-order marker. Select it with `-DSDL_WIRE_LITTLE_ENDIAN` when
-building C, the Cargo feature `wire-little-endian` for Rust, or the environment
-variable `SDL_WIRE_ENDIAN=little` for Python, Matlab/Octave, and Java. The
-example Makefiles coordinate the setting with `WIRE_ENDIAN=big` or
-`WIRE_ENDIAN=little`. See
-[`docs/wire_descriptor.md`](docs/wire_descriptor.md) for the frame and
-language-neutral descriptor format.
+The generator and Python runtime use Python 3 and its standard library. Other
+backends need a C99 compiler, Rust/Cargo, a JDK, and Matlab or GNU Octave.
+C requires 8-bit bytes and IEEE-754 binary32/binary64. Java bindings target Java
+7 features; tests default to source/target 8 for recent JDKs.
+
+```sh
+make test
+make bench
+```
+
+The suite covers all five runtimes with the shared SDL2 fixture. Benchmarks
+report messages/s, useful MiB/s, catalogue size, and preparation time across
+five workloads. See [benchmarks](docs/benchmarks.md) for methodology and limits.
+On the Termux development environment, source `~/.bashrc` before using the JDK.
+
+## Examples
+
+- [C](samples/abc-c/README.md), [Rust](samples/abc-rust/README.md),
+  [Python](samples/abc-python/README.md), and [Java](samples/abc-java/README.md)
+  equation solvers exchange a catalogue at socket opening, then message data.
+- [Matlab/Octave](samples/abc-matlab/README.md) runs the same stages sequentially.
+- [Radio capture](samples/radio_capture/README.md) checks all six C/Rust/Python
+  encoder/decoder pairings using separate catalogue files.
+- [Wireshark](tools/wireshark/README.md) decodes catalogue announcements and
+  subsequent UDP messages.
+
+```sh
+make -C samples/abc-c run
+make -C samples/radio_capture interop
+```
+
+Read the [schema syntax](docs/schema.md), [runtime APIs](docs/runtime.md), and
+[complete wire layout](docs/wire_descriptor.md), including a byte-by-byte
+catalogue and data example. SDL2 replaces the previous format completely.

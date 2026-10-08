@@ -46,11 +46,9 @@ the input schema set and cannot reuse built-in type names. Enum item names and
 numeric values must each be unique within their enum. Enums must declare at
 least one item; values are signed 32-bit integers written with ASCII decimal
 digits. Field IDs are positive unsigned 32-bit integers written with ASCII
-decimal digits and must be unique within their message. The wire descriptor
-stores counts and UTF-8 string lengths in `u16` fields, so declaration counts
-and encoded names must each fit in 65535; a field can have at most 255
-fixed-array dimensions. The complete descriptor for any message is limited to
-1 MiB to match the dynamic decoders.
+decimal digits and must be unique within their message. The generator and runtimes limit declaration counts and UTF-8 identifier
+lengths to 65535; a field can have at most 255
+fixed-array dimensions. The complete textual catalogue is limited to 1 MiB.
 
 ## Field types and modifiers
 
@@ -60,16 +58,17 @@ type. SDL `bool` values encode as one byte (`0` for false and `1` for true);
 Python encoding requires actual `bool` objects, and all decoders reject other
 wire byte values. The four field modifiers are:
 
-- `required`: a singular field without a presence flag. Encoders emit it, but
-  decoders currently accept it when absent and leave the target-language
-  default value.
+- `required`: a singular field without a presence flag. Every field declared required by the sender must be
+  present in data. A new local field absent from an older sender catalogue
+  retains its generated default.
 - `optional`: one value may be present or absent, with absence represented
   explicitly (`has_` flag in C, `Option` in Rust, and `None` in Python).
-- `repeated`: zero or more values, each in its own wire field occurrence.
-- `packed`: zero or more fixed-width values contiguous in one field payload.
+- `repeated`: zero or more contiguous values following one ULEB128 element count.
+- `packed`: the same wire representation as repeated, constrained to fixed-width
+  elements so runtimes can use bulk conversion.
 
 For example, `4: repeated int16 samples;` declares a dynamic-length list, while
-`5: packed int16 samples;` uses a contiguous payload. `packed` requires an
+`5: packed int16 samples;` uses the same positional sequence layout. `packed` requires an
 element type with a fixed wire size. Primitive values (including one-byte
 `bool` values), enums, and fixed-size messages can be packed; strings and
 dynamically sized messages cannot.
@@ -119,8 +118,7 @@ not contain strings, optional fields, repeated fields, or other variable-size
 values. The generator reports the field whose fixed-size constraint fails.
 
 Fixed-array dimensions are positive unsigned 32-bit values written with ASCII
-decimal digits. The total wire size of an array field must fit in an unsigned
-32-bit field length. Empty messages are valid as standalone messages but do not
+decimal digits. The total wire size of an array field must fit in an unsigned 32-bit wire size. Empty messages are valid as standalone messages but do not
 qualify as fixed-size array elements. The C backend adds a
 `uint8_t sdl_empty_placeholder` member to an empty generated struct because
 C99 does not permit a struct with no members; the placeholder is not part of
@@ -131,5 +129,4 @@ the SDL schema or wire representation.
 The generator currently has C99, Rust, Python 3, Matlab/Octave, and Java
 backends. Schema syntax and the wire descriptor are language-neutral, so each
 backend maps the same logical schema to its target language without inheriting
-another language's memory-layout assumptions. The wire descriptor leaves room
-for additional future backends.
+another language's memory-layout assumptions. Additional backends can implement the same catalogue and positional values.
