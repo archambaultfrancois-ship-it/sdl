@@ -63,6 +63,12 @@ bench-c: $(BUILD_DIR)/sdl_bench
 bench-rust: $(GENERATED_DIR)/.stamp
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(CARGO) run --release --manifest-path tst/rust/Cargo.toml --bin bench
 
+python-native: $(GENERATED_DIR)/.stamp
+	CC="$(CC)" $(PYTHON) tst/python/build_native.py "$(PYTHON_GENERATED_DIR)"
+
+bench-python-buffers: $(GENERATED_DIR)/.stamp
+	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) tst/python/bench_buffers.py
+
 bench-python: $(GENERATED_DIR)/.stamp
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) tst/python/bench.py
 
@@ -74,6 +80,9 @@ test-java: $(GENERATED_DIR)/.stamp
 	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
 	$(RUN_TEST) env $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaTests
 
+matlab-mex: $(GENERATED_DIR)/.stamp
+	$(matlab) $(MATLAB_FLAGS) -r "try, addpath('tst/matlab'); build_mex('$(matlab_generated_dir)'); catch err, disp(getReport(err, 'extended')); exit(1); end; exit(0)"
+
 bench-matlab: $(GENERATED_DIR)/.stamp
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(matlab_bench_run)
 
@@ -82,7 +91,7 @@ bench-java: $(GENERATED_DIR)/.stamp
 	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaBench
 
-$(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m Makefile
+$(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m runtime/matlab/sdl_mex_context.m Makefile
 	mkdir -p $(GENERATED_DIR)
 	$(PYTHON) gen/generator.py -c -rust -python -matlab -java sdl $(GENERATED_DIR)
 	touch $@
@@ -100,4 +109,4 @@ $(BUILD_DIR)/sdl_bench: runtime/c/type_engine.c runtime/c/type_registry.c runtim
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all clean check test test-c test-rust test-python test-matlab test-java bench bench-c bench-rust bench-python bench-matlab bench-java
+.PHONY: bench-python-buffers python-native matlab-mex all clean check test test-c test-rust test-python test-matlab test-java bench bench-c bench-rust bench-python bench-matlab bench-java

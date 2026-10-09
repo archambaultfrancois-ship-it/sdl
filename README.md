@@ -39,6 +39,22 @@ make bench
 The suite covers all five runtimes with the shared SDL2 fixture. Benchmarks
 report messages/s, useful MiB/s, catalogue size, and preparation time across
 six workloads. See [benchmarks](docs/benchmarks.md) for methodology and limits.
+Python has an optional native Packed adapter. Build it with
+`make python-native`, then run `make test-python bench-python`. The list/message
+API remains available, with a Python fallback when native code is unavailable.
+The optional `PackedArray` buffer API and `decode(..., packed='view')` avoid
+per-value Python objects; `encode_into` writes into caller storage. `make bench`
+prints these buffer measurements separately; `make bench-python-buffers` runs
+only that comparison. See [benchmarks](docs/benchmarks.md) for the API and limits.
+Set `SDL_PYTHON_NO_NATIVE=1` before preparing contexts to compare the Python path.
+
+MATLAB has an optional MEX adapter for the complete `BenchPayload` and `BenchRecordBatch` messages.
+Build it with `make matlab-mex`, then run `make test-matlab bench-matlab`.
+It retains a native C context and creates MATLAB outputs directly. Other
+schemas retain the normal MATLAB path. See [benchmarks](docs/benchmarks.md)
+for the supported platform and switches to compare the full MEX, payload-only
+MEX and MATLAB implementations.
+
 On the Termux development environment, source `~/.bashrc` before using the JDK.
 
 ## Examples

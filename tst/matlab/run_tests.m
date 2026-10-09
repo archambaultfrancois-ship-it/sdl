@@ -32,6 +32,8 @@ for shared=[false true]
  end
  if shared,sdl_matlab_runtime('prepare',text,{});else,must_fail(@() sdl_matlab_runtime('prepare',text,{}));end
 end
+test_mex();
+test_mex_records();
 fprintf('Matlab/Octave SDL2 fixtures, catalogues, evolution and malformed input passed.\n');
 end
 function must_fail(f)

@@ -10,6 +10,7 @@ case 'prepare'
  s=parse_catalogue(varargin{1});types={};if numel(varargin)>1,types=varargin{2};end;if ischar(types),types={types};end
  localmessages=containers.Map();localenums=containers.Map();
  for k=1:numel(types),local=parse_catalogue(feval(types{k},'description'));[localmessages,localenums]=merge_schema(localmessages,localenums,local);end
+ s.mex=exist('sdl_packed_mex','file')==3&&isempty(getenv('SDL_MATLAB_NO_MEX'));
  s.local=containers.Map();s.bindings=containers.Map();s.sizes=containers.Map();s.exact=containers.Map();s.exact_cache=containers.Map();
  names=keys(localmessages);
  for k=1:numel(names),fn=identifier(names{k});if exist(fn,'file'),s.local(names{k})=feval(fn,'fields');end,end
@@ -26,12 +27,41 @@ case 'prepare'
   s.bindings(name)=binding;s.exact(name)=exact;
  end
  for k=1:numel(s.names),exact_type(s,s.names{k},{});end
+ s.native=[];s.native_id=uint64(0);s.native_name='';
+ if s.mex&&isempty(getenv('SDL_MATLAB_MEX_PAYLOAD_ONLY'))&&numel(s.names)==1&&strcmp(s.names{1},'BenchPayload')&&isKey(s.local,'BenchPayload')
+  local=s.local('BenchPayload');
+  if numel(local)==2&&strcmp(local{1}.name,'header')&&strcmp(local{2}.name,'samples')
+   s.native=sdl_mex_context.prepare(varargin{1});
+   if ~isempty(s.native),s.native_id=s.native.Id;s.native_name='BenchPayload';end
+  end
+ end
+ if s.mex&&isempty(getenv('SDL_MATLAB_MEX_PAYLOAD_ONLY'))&&isKey(s.local,'BenchRecordBatch')&&all(cellfun(@(n) s.exact(n),s.names))
+  candidate=sdl_mex_context.prepare(feval('BenchRecordBatch','description'));
+  if ~isempty(candidate)
+   s.native=sdl_mex_context.prepare(varargin{1});
+   if ~isempty(s.native),s.native_id=s.native.Id;s.native_name='BenchRecordBatch';end
+  end
+  clear candidate;
+ end
  varargout{1}=s;
 case 'encode'
- ctx=varargin{1};name=varargin{2};value=varargin{3};id=find(strcmp(ctx.names,name),1);if isempty(id),error('SDL:SchemaMismatch','unknown type');end
+ ctx=varargin{1};name=varargin{2};value=varargin{3};
+ if ctx.native_id~=0&&strcmp(ctx.native_name,'BenchPayload')&&strcmp(name,'BenchPayload')&&ischar(value.header)&&isfloat(value.samples)
+  varargout{1}=sdl_packed_mex('encode',ctx.native_id,value);return;
+ end
+ if ctx.native_id~=0&&strcmp(ctx.native_name,'BenchRecordBatch')&&strcmp(name,'BenchRecordBatch')&&records_native(value)
+  varargout{1}=sdl_packed_mex('encode',ctx.native_id,value);return;
+ end
+ id=find(strcmp(ctx.names,name),1);if isempty(id),error('SDL:SchemaMismatch','unknown type');end
  body=write_message(ctx,name,value);varargout{1}=[count_bytes(id);body(:)];
 case 'decode'
- ctx=varargin{1};data=uint8(varargin{2}(:));[id,pos]=read_count(data,1);if id<1||id>numel(ctx.names),error('SDL:Malformed','unknown message ID');end
+ ctx=varargin{1};
+ if ctx.native_id~=0&&(strcmp(ctx.native_name,'BenchPayload')||(~isempty(varargin{2})&&varargin{2}(1)==5))
+  data=varargin{2};if ~isa(data,'uint8'),data=uint8(data);end
+  varargout{1}=sdl_packed_mex('decode',ctx.native_id,data);
+  if nargout>1,varargout{2}=ctx.native_name;end;return;
+ end
+ data=uint8(varargin{2}(:));[id,pos]=read_count(data,1);if id<1||id>numel(ctx.names),error('SDL:Malformed','unknown message ID');end
  name=ctx.names{id};[value,pos]=read_message(ctx,name,data,pos,0,false);
  if pos~=numel(data)+1,error('SDL:Malformed','trailing bytes');end
  varargout{1}=value;if nargout>1,varargout{2}=name;end
@@ -136,7 +166,7 @@ for k=1:numel(fields)
   if strcmp(l.modifier,'packed'),if isempty(l.terminal),n=numel(x);else,n=packed_length(x,l.terminal);end
   else,n=numel(x);end
   p=p+1;parts{p}=count_bytes(n);
-  if strcmp(l.modifier,'packed'),validate_packed_enums(ctx,l,x);payload=pack_packed_field(l,x);
+  if strcmp(l.modifier,'packed'),validate_packed_enums(ctx,l,x);payload=pack_packed_field(l,x,ctx.mex);
   else,items=cell(n,1);for j=1:n,items{j}=write_value(ctx,f.type,x{j},f.dims);end;payload=vertcat(items{:});end
   p=p+1;parts{p}=payload;continue
  end
@@ -158,7 +188,10 @@ if strcmp(type,'string'),bytes=unicode2native(char(x),'UTF-8');valid_utf8(bytes)
 if isKey(ctx.enums,type),e=ctx.enums(type);if ~isscalar(x)||~ismember(x,e.values),error('SDL:InvalidEnum','invalid enum');end;type='int32';end
 if ~isscalar(x),error('SDL:InvalidValue','scalar required');end;b=pack_packed(type,x,false);
 end
-function b=pack_packed_field(f,x)
+function b=pack_packed_field(f,x,use_mex)
+if use_mex&&isempty(f.terminal)&&strcmp(f.type,'c32')&&~iscell(x)
+ b=sdl_packed_mex('encode_c32',single(x));return;
+end
 if isfield(f,'terminal')&&~isempty(f.terminal)
  n=packed_length(x,f.terminal);record_size=0;parts=cell(numel(f.terminal),1);field_sizes=zeros(numel(f.terminal),1);
  for z=1:numel(f.terminal)
@@ -279,7 +312,10 @@ for k=1:numel(fields)
   l=[];if ~discard,l=local{binding(k)};end
   if ~discard&&strcmp(l.modifier,'packed')&&exact_type(ctx,f.type,{})
    bytes=size*n;if pos+bytes-1>numel(data),error('SDL:Malformed','truncated packed array');end
-   x=unpack_packed_field(l,data(pos:pos+bytes-1));validate_packed_enums(ctx,l,x);pos=pos+bytes;value.(l.name)=x;
+   if ctx.mex&&isempty(l.terminal)&&strcmp(f.type,'c32')
+    x=sdl_packed_mex('decode_c32',data,double(pos),double(n));
+   else,x=unpack_packed_field(l,data(pos:pos+bytes-1));end
+   validate_packed_enums(ctx,l,x);pos=pos+bytes;value.(l.name)=x;
   else
    items=cell(n,1);for j=1:n,[items{j},pos]=read_value(ctx,f.type,f.dims,data,pos,depth+1,discard);end
    if ~discard
@@ -337,5 +373,14 @@ p=1;while p<=numel(b)
  if n>numel(b)-p+1,error('SDL:Malformed','truncated UTF-8');end
  for j=1:n,y=b(p);p=p+1;if y<128||y>191,error('SDL:Malformed','invalid UTF-8 continuation');end;v=v*64+mod(y,64);end
  if v<minimum||v>1114111||(v>=55296&&v<=57343),error('SDL:Malformed','invalid UTF-8 scalar');end
+end
+end
+
+function yes=records_native(v)
+yes=false;
+try
+ r=v.records;p=r.pose;
+ yes=isa(r.id,'int32')&&isa(p.position.values,'single')&&isa(p.rotation,'single')&&isa(r.measures,'single');
+catch
 end
 end

@@ -188,3 +188,232 @@ including raw floating-point bits, malformed values, truncations and evolving
 schemas. The shared nested workload still constructs an object graph on decode;
 primitive storage eliminates numeric boxing, but does not eliminate record,
 substructure or array allocations.
+
+## Optional MATLAB full-message MEX adapter
+
+Run `make matlab-mex` to compile `sdl_packed_mex` into the generated MATLAB
+folder, then run `make test-matlab bench-matlab` (or `make bench`). The Linux
+prototype uses the separate-complex C Matrix API, validated on MATLAB R2017a,
+and builds with `-O3` and link-time optimization. Build the MEX binary for the
+MATLAB installation in use. It links the SDL C runtime and the generated
+`benchmark` descriptors.
+
+Prepared contexts select a complete native path for the exact, singleton
+`BenchPayload` catalogue. The MATLAB context owns a handle object that retains
+a prepared C context. Context copies share the owner; its destructor releases
+the native resources. Opaque uint64 tokens are checked in a native registry,
+released tokens are rejected, a monotonic token epoch prevents reuse across
+MEX reloads, and `mexLock`/`mexAtExit` handle module lifetime and shutdown.
+Tokens are cached in the MATLAB context to avoid property access on every call.
+
+Generated `BenchPayload` bindings call MEX directly for the complete message.
+Encode measures UTF-8 directly from MATLAB UTF-16 characters, allocates one
+final uint8 buffer, and writes framing, counts, string bytes and packed c32
+samples into it. Single and double sample arrays are supported. Decode reuses
+`type_decode_size` to validate the complete wire message before allocating the
+final MATLAB structure, UTF-16 string and complex single component planes.
+No decoded native object tree or intermediate sample array is constructed.
+
+Other catalogues and schema evolution retain MATLAB decoding. The earlier c32
+payload converter remains available for those paths. Packed types and
+structures outside the complete adapters retain their existing conversion.
+Cell samples use the MATLAB path.
+The complete adapters currently cover `BenchPayload` and `BenchRecordBatch`;
+other message types retain the existing paths.
+
+Set `SDL_MATLAB_NO_MEX=1` before preparing a context to disable MEX entirely.
+Set `SDL_MATLAB_MEX_PAYLOAD_ONLY=1` to retain only payload acceleration. For
+example, `SDL_MATLAB_NO_MEX=1 make bench-matlab` measures the MATLAB fallback.
+Without a MEX binary, MATLAB and Octave continue to use their normal runtime.
+
+Regression tests cover independent wire oracles, NaN/negative-zero raw bits,
+unaligned payload offsets, all message truncations, malicious counters, UTF-8
+and UTF-16 validity, embedded NUL and supplementary Unicode characters,
+unsupported schema fallback, context sharing/release, and stale tokens after
+module reload. `make test-matlab` runs these when the binary is present.
+
+On the same machine, medians of three executions of the standard MATLAB
+benchmark give these decimal MB/s, rounded to integers:
+
+| Packed c32 path | Encode MB/s | Decode MB/s |
+|---|---:|---:|
+| MATLAB runtime | 110 | 78 |
+| Payload-only MEX | 185 | 135 |
+| Complete-message MEX | 891 | 1060 |
+
+The complete path improves this workload by approximately 8 times on encode
+and 14 times on decode over MATLAB alone. Other benchmark cases retain their
+existing paths. The build sets `COPTIMFLAGS=-O3` and `LDOPTIMFLAGS=-O3`
+explicitly, because MATLAB's default optimization flags otherwise override
+an `-O3` supplied through `CFLAGS`.
+
+For a separate fixed-loop diagnostic, add `build/generated/matlab` and
+`tst/matlab` to the MATLAB path and run `bench_mex` (default: 20000 iterations,
+three trials). With the same 5000-sample message, it measured 1717 / 2589 MB/s
+through the generated MATLAB binding and 2883 / 7122 MB/s through direct MEX
+calls. These rates exclude the standard harness's repeated timing checks and
+dispatch, so they must not replace its measurements in the language matrix.
+
+The `packed_struct` adapter selects the exact compiled `bench_cases` catalogue
+and local schema. `BenchRecordBatch` has root ID 5 in this catalogue; other
+roots retain normal MATLAB encode/decode. Four SoA leaves (`id`,
+`pose.position.values`, `pose.rotation`, `measures`) are interleaved directly
+into 40-byte wire records on encode. Decode validates the complete message
+with the persistent C context, then creates the nested scalar structures and
+final int32/single arrays directly. No per-record MATLAB structures or
+intermediate byte matrices are created. Full int32 IDs and real single leaves
+use this adapter; other input classes retain MATLAB conversion.
+
+The packed-struct tests compare raw wire bytes against an independent
+big-endian oracle, including NaNs and negative zero, empty arrays, counter
+boundaries and 1000-record batches. They also verify all truncations of a
+small message, trailing bytes, invalid/overflowing counters, mismatched leaf
+lengths, other roots in the same catalogue and changed-schema fallback.
+
+The full language benchmark measured `packed_struct` at 708 / 675 MB/s
+(encode / decode) with this adapter, versus 24 / 27 MB/s in the preceding
+MATLAB measurement, approximately 30 times / 25 times faster. The same run
+measured `packed` at 894 / 1064 MB/s. These are standard harness measurements
+with unchanged useful-byte workloads, rounded to integers; normal machine
+load and measurement variation still apply.
+
+## Optional Python native Packed adapter
+
+Run `make python-native` to build `_sdl_native` in the generated Python folder
+using the invoking CPython's headers and ABI suffix. The current build is
+validated on Linux with CPython 3.9 and GCC, using `-O3` and LTO; it requires
+Python development headers, but no NumPy or setuptools. Add both
+`runtime/python` and the generated Python folder to `PYTHONPATH`, as the
+Makefile already does. Build again after changing the C extension or Python
+installation. `make bench` uses the extension when present; it does not build
+optional native adapters automatically.
+
+Contexts retain opaque capsule-owned fixed conversion plans, with cached
+field names, local classes and nested array dimensions. The C extension uses
+the SDL C wire helpers to write and read big-endian words directly. It handles
+primitive numeric/complex Packed leaves, fixed arrays, and exact fixed
+structures with nested structures. Fixed-size repeated fields can also use
+these plans. No benchmark-specific message name or catalogue is embedded.
+For the list/message API, framing and strings remain in the Python runtime.
+The buffer API below also prepares complete native roots containing required
+strings and Packed fields. Plans derive from the validated catalogue and exact
+local bindings, without generated benchmark-specific C descriptors. They use
+SDL C wire and UTF-8 helpers, rather than the C context/object-tree API.
+
+The public list/message API is preserved: encode walks Python objects in C,
+and decode constructs the final Python list, nested messages and component
+values. It avoids intermediate flattened Python component lists and per-record
+Python conversion closures. Generated fixed messages and the runtime's complex
+value objects are populated directly. Native plans retain the classes they
+need and release their allocations when the owning capsules are destroyed.
+The GIL remains held because conversion accesses and creates Python objects.
+
+Enums, schema evolution requiring unmatched local fields, zero-size records,
+variable-size fields, and fixed records beyond the native plan limits retain
+the ordinary Python path. Disable native selection with
+`SDL_PYTHON_NO_NATIVE=1` before preparing a context. An unavailable extension
+also selects the ordinary runtime.
+
+Three alternating executions per mode of the unchanged standard Python
+benchmark produced these median decimal MB/s, rounded to integers:
+
+| Case | Python encode / decode | Native encode / decode |
+|---|---:|---:|
+| packed | 59 / 20 | 160 / 37 |
+| packed_struct | 12 / 8 | 108 / 34 |
+
+Decode still allocates a Python object graph, limiting its throughput compared
+with runtimes using contiguous numeric storage. Rates vary with machine load;
+these comparisons use runs from the same measurement session.
+
+Tests compare independent big-endian primitive wire oracles, signed integer
+limits, floating-point signs/nonfinite values, nested records, empty arrays,
+counter boundaries, complete-message truncations, trailing bytes, malformed
+native plans, invalid booleans, overflow, buffer bounds, context lifetime,
+schema evolution and input mutation during numeric conversion. The Python
+suite runs with native selection enabled and disabled. Address/undefined
+sanitizer validation was attempted, but this host lacks the sanitizer runtime
+libraries, so no sanitizer result is claimed.
+
+## Python Packed buffer API
+
+`PackedArray` stores immutable, tightly packed numeric records and their
+prepared native layout. `decode(ctx, wire, packed='view')` returns PackedArray
+leaves for supported Packed fields. For immutable `bytes` input, the views
+retain the original message and do not copy or convert the numeric payload.
+Mutable input, including a readonly view of mutable storage, is snapshotted
+before validation. Ordinary `decode(ctx, wire)` still returns lists/objects.
+Unsupported layouts and schema evolution retain the ordinary reader.
+
+`PackedArray.from_values(ctx, type_name, values)` converts an existing list
+once. `PackedArray.from_buffer(ctx, type_name, buffer, byteorder='native')`
+accepts contiguous buffer-protocol storage, including `array.array`, and
+converts its scalar words in bulk. Input records must follow SDL field order,
+without padding, with every scalar using the specified byte order. Conversion
+preserves raw floating-point bits, including signaling NaN payloads. Mutable
+input is copied into immutable storage; later mutations do not change the
+PackedArray.
+
+With `defer=True`, from_buffer retains an immutable snapshot in the supplied
+byte order. Complete native encoders swap its words directly into the final
+message on every call, avoiding an intermediate converted payload. `buffer`
+exposes source storage in `byteorder`; `wire_buffer` provides big-endian bytes
+and converts when necessary. Slicing retains the representation, indexing
+materializes one record, and `tolist()` builds the ordinary object graph.
+Views retain their message bytes and layout independently of the Context.
+
+For exact roots made only of required strings and supported Packed fields,
+native encoding allocates one final bytes object, or writes directly into
+caller storage with `encode_into(ctx, message, output, offset=0)`. The return
+value is the number of bytes written. The general encode_into fallback may
+leave a prefix on error. Complete native decoding validates message ID,
+canonical uint32 counters, strict UTF-8, payload bounds, boolean values and
+trailing bytes before creating the returned message and PackedArray views.
+Numeric types accept every wire bit pattern, so those payloads need only size
+validation; booleans are scanned. Nested/general roots retain Python framing
+while benefiting from Packed views and bulk conversion where supported.
+
+For example, interleaved native-order c32 components can be supplied without
+creating a Complex32 object for each sample:
+
+```python
+from array import array
+from benchmark import BenchPayload
+from sdl_runtime import PackedArray, description, prepare, encode, decode
+
+ctx = prepare(description(BenchPayload), BenchPayload)
+message = BenchPayload(header='samples', samples=PackedArray.from_buffer(
+    ctx, 'c32', array('f', [1, 2, 3, 4]), defer=True))
+wire = encode(ctx, message)
+received = decode(ctx, wire, packed='view')
+assert received.samples.tolist() == message.samples.tolist()
+```
+
+`make bench-python-buffers` uses the same messages, useful-byte counts and
+wire bytes as the ordinary benchmark. It reports this alternate API separately;
+`make bench` also prints this table when the extension is enabled. Measurements
+are stored in `build/python-buffer-benchmarks.json`, separate from the ordinary
+language matrix in `build/benchmarks.json`. Three executions gave these median
+decimal MB/s, rounded to integers:
+
+| Case | Encode wire buffer | Encode native buffer | Encode native into | Decode view |
+|---|---:|---:|---:|---:|
+| packed | 22750 | 17074 | 16286 | 26172 |
+| packed_struct | 23536 | 16784 | 15965 | 29844 |
+
+The native-buffer encoders include endian conversion on every call. Input
+creation and freezing occur before timing, as message creation does in the
+other workloads. Wire-buffer encode reuses already big-endian input. Decode
+view keeps the numeric wire representation; subsequent host-order conversion
+or object materialization is outside this measurement. These rates therefore
+must be distinguished from ordinary object API decode, which constructs all
+values. The full-message path and buffer conversions hold the GIL.
+
+Additional regressions cover independent complex/nested-record wire oracles,
+both byte orders, mixed scalar widths, deferred direct conversion, raw NaN
+bits, signed zero, mutable-buffer snapshots, zero-copy byte ownership,
+slices/indexing, context release, native/generic nested roots, every truncation
+of small messages, noncanonical/overflowing counters, invalid UTF-8, invalid
+booleans, layout mismatches, output offsets/capacity, multi-byte message IDs,
+and disabled/absent native binaries. Incompatible old extension versions are
+ignored so that stale binaries preserve the ordinary Python fallback.
