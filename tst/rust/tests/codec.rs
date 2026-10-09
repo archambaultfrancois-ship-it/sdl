@@ -444,3 +444,68 @@ fn optimized_paths_reject_invalid_values_at_the_end() {
     wire[last_flag] = 2;
     assert_eq!(decode::<CodecCases>(&ctx, &wire), Err(CodecError::InvalidBoolean));
 }
+
+#[test]
+fn packed_complex_bulk_bits_bounds_and_unaligned_input() {
+    use sdl_runtime::{write_count, CodecError, Complex64, WireValue};
+    use sdl_schema_tests::benchmark::BenchPayload;
+    let ctx = prepare(BenchPayload::DESCRIPTOR, &[BenchPayload::type_info()]).unwrap();
+    let mut seed = 0x12345678u32;
+    for count in [0, 1, 2, 3, 7, 8, 15, 16, 17, 127, 128, 1000, 5000] {
+        let mut wire = vec![1, 0]; // Root ID and empty header.
+        write_count(count, &mut wire).unwrap();
+        let start = wire.len();
+        let mut bits = Vec::new();
+        for i in 0..count * 2 {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            let value = match i % 8 {
+                0 => 0x80000000, // Negative zero.
+                1 => 0x7fc01234, // Quiet NaN with a payload.
+                2 => 0x7fa05678, // Signalling NaN with a payload.
+                3 => 0xff800000, // Negative infinity.
+                _ => seed,
+            };
+            bits.push(value);
+            wire.extend_from_slice(&value.to_be_bytes());
+        }
+        let mut unaligned = vec![0];
+        unaligned.extend_from_slice(&wire);
+        let decoded: BenchPayload = decode(&ctx, &unaligned[1..]).unwrap();
+        assert_eq!(decoded.samples.len(), count);
+        for (value, pair) in decoded.samples.iter().zip(bits.chunks_exact(2)) {
+            assert_eq!(value.real.to_bits(), pair[0]);
+            assert_eq!(value.imag.to_bits(), pair[1]);
+        }
+        assert_eq!(encode(&ctx, &decoded).unwrap(), wire);
+        let direct = Complex32::decode_fixed_sequence(&wire[start..]).unwrap();
+        for (value, pair) in direct.iter().zip(bits.chunks_exact(2)) {
+            assert_eq!(value.real.to_bits(), pair[0]);
+            assert_eq!(value.imag.to_bits(), pair[1]);
+        }
+        for missing in 1..=8.min(wire.len()) {
+            assert_eq!(decode::<BenchPayload>(&ctx, &wire[..wire.len() - missing]),
+                       Err(CodecError::Truncated));
+        }
+        let mut trailing = wire.clone(); trailing.push(0);
+        assert_eq!(decode::<BenchPayload>(&ctx, &trailing), Err(CodecError::TypeMismatch));
+    }
+    // Bounds must be checked before attempting allocation for a hostile count.
+    assert_eq!(decode::<BenchPayload>(&ctx, &[1, 0, 255, 255, 255, 255, 15]),
+               Err(CodecError::Truncated));
+    for len in 1..8 {
+        assert_eq!(Complex32::decode_fixed_sequence(&vec![0; len]), Err(CodecError::Truncated));
+    }
+    let bits64 = [0x8000000000000000u64, 0x7ff8000000001234, 0x7ff0000000005678,
+                  0xfff0000000000000, 0x0000000000000001, 0xffffffffffffffff];
+    let mut wire64 = vec![0];
+    wire64.extend(bits64.iter().flat_map(|bits| bits.to_be_bytes()));
+    let values64 = Complex64::decode_fixed_sequence(&wire64[1..]).unwrap();
+    for (value, pair) in values64.iter().zip(bits64.chunks_exact(2)) {
+        assert_eq!(value.real.to_bits(), pair[0]);
+        assert_eq!(value.imag.to_bits(), pair[1]);
+    }
+    assert!(Complex64::decode_fixed_sequence(&[]).unwrap().is_empty());
+    for len in 1..16 {
+        assert_eq!(Complex64::decode_fixed_sequence(&vec![0; len]), Err(CodecError::Truncated));
+    }
+}

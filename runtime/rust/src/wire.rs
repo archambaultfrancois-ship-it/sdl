@@ -30,6 +30,16 @@ pub trait WireValue: Sized {
     fn decode_fixed(_bytes: &[u8]) -> Result<Self, CodecError> {
         Err(CodecError::TypeMismatch)
     }
+    /// Decode a validated fixed-layout block. Types may provide a bulk conversion loop.
+    fn decode_fixed_sequence(bytes: &[u8]) -> Result<Vec<Self>, CodecError> {
+        let size = Self::FIXED_SIZE.filter(|size| *size != 0)
+            .ok_or(CodecError::TypeMismatch)?;
+        if bytes.len() % size != 0 { return Err(CodecError::Truncated); }
+        let mut values = Vec::new();
+        values.try_reserve(bytes.len() / size).map_err(|_| CodecError::LengthOverflow)?;
+        for record in bytes.chunks_exact(size) { values.push(Self::decode_fixed(record)?); }
+        Ok(values)
+    }
     fn encode_fixed(&self, _bytes: &mut [u8]) -> Result<(), CodecError> {
         Err(CodecError::TypeMismatch)
     }
@@ -491,12 +501,7 @@ impl<'a> Reader<'a> {
                 let bytes = count.checked_mul(size).ok_or(CodecError::LengthOverflow)?;
                 // Bounds are checked before allocation, even for hostile counts.
                 let payload = self.take(bytes)?;
-                let mut values = Vec::new();
-                values.try_reserve(count).map_err(|_| CodecError::LengthOverflow)?;
-                for record in payload.chunks_exact(size) {
-                    values.push(T::decode_fixed(record)?);
-                }
-                return Ok(values);
+                return T::decode_fixed_sequence(payload);
             }
         }
         let mut values = Vec::new();
@@ -620,6 +625,7 @@ impl<'a> Reader<'a> {
 macro_rules! numeric {
    ($($t:ty),*)=>{$(impl WireValue for $t {
       const FIXED_SIZE: Option<usize> = Some(std::mem::size_of::<Self>());
+      #[inline]
       fn decode_fixed(bytes: &[u8])->Result<Self,CodecError>{
          Ok(Self::from_be_bytes(bytes.try_into().map_err(|_|CodecError::Truncated)?))
       }
@@ -636,6 +642,7 @@ macro_rules! numeric {
 numeric!(i8, i16, i32, i64, f32, f64);
 impl WireValue for bool {
     const FIXED_SIZE: Option<usize> = Some(1);
+    #[inline]
     fn decode_fixed(bytes: &[u8]) -> Result<Self, CodecError> {
         match bytes { [0] => Ok(false), [1] => Ok(true), [_] => Err(CodecError::InvalidBoolean),
                       _ => Err(CodecError::Truncated) }
@@ -680,11 +687,25 @@ macro_rules! complex {
     ($t:ty,$f:ty) => {
         impl WireValue for $t {
             const FIXED_SIZE: Option<usize> = Some(2 * std::mem::size_of::<$f>());
+            #[inline]
             fn decode_fixed(bytes: &[u8]) -> Result<Self, CodecError> {
                 let size = std::mem::size_of::<$f>();
                 if bytes.len() != 2 * size { return Err(CodecError::Truncated); }
                 Ok(Self { real: <$f>::decode_fixed(&bytes[..size])?,
                           imag: <$f>::decode_fixed(&bytes[size..])? })
+            }
+            fn decode_fixed_sequence(bytes: &[u8]) -> Result<Vec<Self>, CodecError> {
+                let size = 2 * std::mem::size_of::<$f>();
+                if bytes.len() % size != 0 { return Err(CodecError::Truncated); }
+                let count = bytes.len() / size;
+                let mut values = Vec::new();
+                values.try_reserve_exact(count).map_err(|_| CodecError::LengthOverflow)?;
+                values.resize(count, Self::default());
+                // A fixed output slice avoids the capacity/length update on every push.
+                for (value, record) in values.iter_mut().zip(bytes.chunks_exact(size)) {
+                    *value = Self::decode_fixed(record)?;
+                }
+                Ok(values)
             }
             #[inline]
             fn encode_fixed(&self, bytes: &mut [u8]) -> Result<(), CodecError> {
@@ -725,6 +746,7 @@ impl<T: WireValue, const N: usize> WireValue for [T; N] {
         }
         Ok(())
     }
+    #[inline]
     fn decode_fixed(bytes: &[u8]) -> Result<Self, CodecError> {
         let size = T::FIXED_SIZE.filter(|s| *s != 0).ok_or(CodecError::TypeMismatch)?;
         if Some(bytes.len()) != Self::FIXED_SIZE { return Err(CodecError::Truncated); }

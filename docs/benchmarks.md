@@ -41,7 +41,11 @@ before filling one allocation. Rust prepares layout/enum compatibility checks
 and uses generated fixed codecs for compatible packed records. The codecs use
 binary offsets and endian conversion, preserving the native Rust layout without
 raw struct copies. Fixed encoders are marked inline across crates so the
-compiler can fuse endian conversions and output writes; fixed arrays inside
+compiler can fuse endian conversions and output writes. Fixed complex decoders
+also expose their scalar conversion to the compiler and fill a pre-sized output
+slice instead of pushing each sample individually. This safe Rust path checks
+the full input block before allocation, retains raw IEEE-754 bits and permits
+vectorization of the big-endian conversion; fixed arrays inside
 generated records require no temporary
 heap allocations. Schema changes retain generic typed decoding;
 Python prepares bulk binary layouts for fixed-size packed structures;
