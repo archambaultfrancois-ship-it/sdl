@@ -1,0 +1,38 @@
+// Mixed fixed records and primitive arrays for packed codec validation.
+enum PackedState {
+   ZERO = 0;
+   NEGATIVE = -7;
+}
+
+message PackedLeaf {
+   1: required bool enabled;
+   2: required int8 tiny;
+   3: required int16 small;
+   4: required int32 signed_value;
+   5: required int64 wide;
+   6: required fl32 ratio;
+   7: required fl64 precise;
+   8: required c32 point;
+   9: required c64 position;
+   10: required PackedState state;
+}
+
+message PackedRecord {
+   1: required PackedLeaf leaf;
+   2: required fl32[2][3] grid;
+}
+
+message PackedBatch {
+   1: packed PackedRecord records;
+}
+
+message PrimitiveBatch {
+   1: packed bool flags;
+   2: packed int8 tiny;
+   3: packed int16 small;
+   4: packed int32 signed_values;
+   5: packed int64 wide;
+   6: packed fl32 ratios;
+   7: packed fl64 precise;
+   8: packed c64 positions;
+}

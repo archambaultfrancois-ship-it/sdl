@@ -91,9 +91,9 @@ public final class SdlJavaBench {
       for (int i = 0; i < 1000; i++) {
          bench_cases.BenchRecord record = new bench_cases.BenchRecord();
          record.id = i;
-         record.pose.position.values = new Float[]{i * .25f, -i * .5f, (float)(i % 97)};
-         record.pose.rotation = new Float[]{0.f, 0.f, 0.f, 1.f};
-         record.measures = new Float[]{i * .125f, -(i % 31) * .5f};
+         record.pose.position.values = new float[]{i * .25f, -i * .5f, (float)(i % 97)};
+         record.pose.rotation = new float[]{0.f, 0.f, 0.f, 1.f};
+         record.measures = new float[]{i * .125f, -(i % 31) * .5f};
          batch.records.add(record);
       }
       bench("packed_struct", batch, 40000);

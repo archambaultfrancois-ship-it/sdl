@@ -127,7 +127,7 @@ values are nullable boxed values, most sequences are mutable Lists, and fixed
 arrays native arrays. Complex scalars use `Complex32`/`Complex64`; packed complex
 fields use `Complex32Array`/`Complex64Array` with equal-length primitive `re`
 and `im` arrays to avoid an object per element. Codec errors throw
-`SdlCodec.CodecException`. The tests default to `JAVA_SOURCE=8`.
+`SdlCodec.CodecException`. The tests use the compiler’s default source/target settings.
 
 ## Matlab / GNU Octave
 
