@@ -588,7 +588,123 @@ class Context:
             if local and (local[3] != f['type'] or tuple(f['dimensions']) != local[4] or
                   _cardinality(local[2]) != _cardinality(f['modifier'])):
                raise CodecError('incompatible field: %s.%s' % (name, f['name']))
+      self.packed_codecs = {}
+      for fields in self.messages.values():
+         for field in fields:
+            name = field['type']
+            dimensions = tuple(field['dimensions'])
+            key = (name, dimensions)
+            if (field['modifier'] in ('packed', 'repeated') and key not in self.packed_codecs
+                  and (name in self.messages or name in self.enums or name == 'bool' or dimensions)):
+               plan = _fixed_codec(self, name, dimensions)
+               if plan is not None:
+                  self.packed_codecs[key] = plan
       self.description = text
+
+
+def _fixed_codec(ctx, name, dimensions=()):
+   """Compile fixed records once; binary conversion uses one Struct per record.
+
+   Object construction preserves the public list/message API. Incompatible
+   catalogues use the generic decoder so schema evolution remains supported.
+   """
+   formats = {'bool': 'B', 'int8': 'b', 'int16': 'h', 'int32': 'i',
+      'int64': 'q', 'fl32': 'f', 'fl64': 'd', 'c32': 'ff', 'c64': 'dd'}
+
+   def node(type_name, dimensions=()):
+      if dimensions:
+         child = node(type_name, dimensions[1:])
+         if child is None or dimensions[0] * len(child[0]) > 65536:
+            return None
+         fmt, emit, read = child
+         length = dimensions[0]
+         def emit_array(value, output):
+            if len(value) != length:
+               raise CodecError('invalid fixed array dimensions')
+            for item in value:
+               emit(item, output)
+         def read_array(values):
+            return [read(values) for unused in range(length)]
+         return fmt * length, emit_array, read_array
+      if type_name in ctx.messages:
+         cls = ctx.classes.get(type_name)
+         fields = ctx.local_fields.get(type_name, {})
+         remote = ctx.messages[type_name]
+         if cls is None or ctx.fixed_sizes[type_name] is None or len(fields) != len(remote):
+            return None
+         children = []
+         for field in remote:
+            local = fields.get(field['id'])
+            child = node(field['type'], field['dimensions'])
+            if local is None or child is None:
+               return None
+            children.append((local[1], child))
+         fmt = ''.join(child[0] for unused, child in children)
+         if len(fmt) > 65536:
+            return None
+         def emit_message(value, output):
+            if not isinstance(value, SdlMessage) or value._SDL_NAME != type_name:
+               raise CodecError('wrong message type')
+            for field_name, child in children:
+               child[1](getattr(value, field_name), output)
+         def read_message(values):
+            result = cls.__new__(cls)
+            for field_name, child in children:
+               setattr(result, field_name, child[2](values))
+            return result
+         return fmt, emit_message, read_message
+      if type_name in ctx.enums:
+         enum_cls = next((ns.get(re.sub(r'\W', '_', type_name)) for ns in ctx.namespaces.values()
+            if re.sub(r'\W', '_', type_name) in ns), None)
+         if enum_cls is None:
+            return None
+         def emit_enum(value, output):
+            if not isinstance(value, enum_cls):
+               raise CodecError('invalid enum value for ' + type_name)
+            output.append(int(value))
+         def read_enum(values):
+            value = next(values)
+            if value not in ctx.enums[type_name]:
+               raise CodecError('invalid enum value')
+            try:
+               return enum_cls(value)
+            except ValueError as error:
+               raise CodecError('enum value missing from local schema') from error
+         return 'i', emit_enum, read_enum
+      fmt = formats.get(type_name)
+      if fmt is None:
+         return None
+      if type_name == 'bool':
+         def emit_bool(value, output):
+            if not isinstance(value, bool):
+               raise CodecError('boolean field requires bool')
+            output.append(value)
+         def read_bool(values):
+            value = next(values)
+            if value not in (0, 1):
+               raise CodecError('invalid boolean value')
+            return bool(value)
+         return fmt, emit_bool, read_bool
+      if type_name in ('c32', 'c64'):
+         cls = Complex32 if type_name == 'c32' else Complex64
+         def emit_complex(value, output):
+            output.extend((value.real, value.imag))
+         def read_complex(values):
+            return cls(next(values), next(values))
+         return fmt, emit_complex, read_complex
+      def emit_scalar(value, output):
+         output.append(value)
+      def read_scalar(values):
+         return next(values)
+      return fmt, emit_scalar, read_scalar
+
+   if ctx.fixed_sizes.get(name) is None:
+      return None
+   plan = node(name, dimensions)
+   if plan is None:
+      return None
+   fmt, emit, read = plan
+   return struct.Struct('>' + fmt), emit, read
 
 
 def _cardinality(modifier):
@@ -672,16 +788,32 @@ def _write_message(ctx, name, message, output):
          values = (value,)
       # One struct conversion per numeric array instead of one per element.
       fmt = {'int8':'b', 'int16':'h', 'int32':'i', 'int64':'q', 'fl32':'f', 'fl64':'d'}.get(f['type'])
-      if modifier in ('packed', 'repeated') and fmt and value:
+      plan = ctx.packed_codecs.get((f['type'], tuple(f['dimensions']))) if modifier in ('packed', 'repeated') else None
+      if plan is not None:
+         record, emit, unused_read = plan
+         try:
+            components = []
+            for item in value:
+               emit(item, components)
+            output.extend(struct.pack('>' + record.format[1:] * len(value), *components))
+         except (struct.error, TypeError, AttributeError, OverflowError) as error:
+            raise CodecError('invalid packed record') from error
+      elif modifier in ('packed', 'repeated') and fmt and not f['dimensions'] and value:
          try:
             output.extend(struct.pack('>' + str(len(value)) + fmt, *value))
          except (struct.error, TypeError, OverflowError) as error:
             raise CodecError('invalid numeric array') from error
-      elif modifier in ('packed', 'repeated') and f['type'] in ('c32', 'c64') and value:
+      elif modifier in ('packed', 'repeated') and f['type'] in ('c32', 'c64') and not f['dimensions'] and value:
          try:
-            components = [part for z in value for part in (z.real, z.imag)]
-            fmt = 'f' if f['type'] == 'c32' else 'd'
-            output.extend(struct.pack('>' + str(len(components)) + fmt, *components))
+            # Convert each component column in bulk, then interleave raw words.
+            # Native integer views only copy bytes; wire endianness stays big-endian.
+            single = f['type'] == 'c32'
+            payload = bytearray(len(value) * (8 if single else 16))
+            words = memoryview(payload).cast('I' if single else 'Q')
+            fmt = '>' + str(len(value)) + ('f' if single else 'd')
+            words[::2] = memoryview(struct.pack(fmt, *[z.real for z in value])).cast('I' if single else 'Q')
+            words[1::2] = memoryview(struct.pack(fmt, *[z.imag for z in value])).cast('I' if single else 'Q')
+            output.extend(payload)
          except (struct.error, AttributeError, TypeError, OverflowError) as error:
             raise CodecError('invalid complex array') from error
       else:
@@ -756,11 +888,17 @@ def _read_message(ctx, name, reader, dynamic=False, skip=False):
       discard = skip or (not dynamic and local is None)
       values = []
       fmt = {'int8':'b', 'int16':'h', 'int32':'i', 'int64':'q', 'fl32':'f', 'fl64':'d'}.get(f['type'])
-      if modifier in ('packed', 'repeated') and fmt:
+      plan = ctx.packed_codecs.get((f['type'], tuple(f['dimensions']))) if modifier in ('packed', 'repeated') and not dynamic else None
+      if plan is not None:
+         record, unused_emit, read = plan
+         payload = reader.take(count * record.size)
+         if not discard:
+            values = [read(iter(parts)) for parts in record.iter_unpack(payload)]
+      elif modifier in ('packed', 'repeated') and fmt and not f['dimensions']:
          payload = reader.take(count * size)
          if not discard:
             values = list(struct.unpack('>' + str(count) + fmt, payload))
-      elif modifier in ('packed', 'repeated') and f['type'] in ('c32', 'c64'):
+      elif modifier in ('packed', 'repeated') and f['type'] in ('c32', 'c64') and not f['dimensions']:
          payload = reader.take(count * size)
          if not discard:
             cls = Complex32 if f['type'] == 'c32' else Complex64

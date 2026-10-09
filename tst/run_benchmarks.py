@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare five SDL2 workloads across runtimes, reporting useful throughput."""
+"""Compare six SDL2 workloads across runtimes, reporting useful throughput."""
 import json
 import os
 import re
@@ -8,9 +8,9 @@ import shutil
 import subprocess
 import sys
 
-RATE = re.compile(r'^(small|optional_sparse|optional_dense|variable|packed) (encode|decode) ([0-9.]+) msg/s ([0-9.]+) MiB/s \(([0-9]+) bytes/message\)', re.MULTILINE)
+RATE = re.compile(r'^(small|optional_sparse|optional_dense|variable|packed|packed_struct) (encode|decode) ([0-9.]+) msg/s ([0-9.]+) MiB/s \(([0-9]+) bytes/message\)', re.MULTILINE)
 META = re.compile(r'^(\w+) metadata: ([0-9]+) description bytes, ([0-9.]+) us prepare', re.MULTILINE)
-CASES = ('small', 'optional_sparse', 'optional_dense', 'variable', 'packed')
+CASES = ('small', 'optional_sparse', 'optional_dense', 'variable', 'packed', 'packed_struct')
 
 
 def main():

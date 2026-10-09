@@ -21,3 +21,18 @@ message BenchVariable {
   1: required string header;
   2: repeated BenchEntry entries;
 }
+message BenchVector {
+  1: required fl32[3] values;
+}
+message BenchPose {
+  1: required BenchVector position;
+  2: required fl32[4] rotation;
+}
+message BenchRecord {
+  1: required int32 id;
+  2: required BenchPose pose;
+  3: required fl32[2] measures;
+}
+message BenchRecordBatch {
+  1: packed BenchRecord records;
+}

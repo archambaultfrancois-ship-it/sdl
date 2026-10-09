@@ -1,6 +1,6 @@
 PYTHON ?= python3
 CC ?= cc
-CFLAGS ?= -std=c99 -Wall -Wextra -pedantic -O2
+CFLAGS ?= -std=c99 -Wall -Wextra -pedantic -O3
 
 ROOT := ../..
 BUILD_DIR := build

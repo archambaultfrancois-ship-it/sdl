@@ -81,6 +81,80 @@ class CodecTests(unittest.TestCase):
       value.metadata.code = 7
       self.assertEqual(decode(ctx, encode(ctx, value)), value)
 
+   def test_01_packed_records_match_generic_codec(self):
+      # The optimized path must preserve bytes, nested shape and public types.
+      row = FixedRow()
+      row.vectors[0].coords = [1, -2]
+      row.vectors[1].grid = [[-32768, 0, 32767], [4, 5, 6]]
+      cases = [
+         RootPayload(fixed_array=[FixedItem(x=1, y=-2), FixedItem(x=3, y=4)]),
+         FixedBoard(packed_rows=[row, FixedRow()]),
+         EnumRecordBatch(records=[EnumRecord(state=State.MINIMUM, code=-7),
+            EnumRecord(state=State.MAXIMUM, code=2147483647)]),
+         CodecCases(packed_flags=[False, True], packed_states=[State.NEGATIVE]),
+      ]
+      for message in cases:
+         with self.subTest(type=type(message).__name__):
+            ctx = context(type(message))
+            plans = ctx.packed_codecs
+            fast_wire = encode(ctx, message)
+            fast_copy = decode(ctx, fast_wire)
+            ctx.packed_codecs = {}
+            self.assertEqual(fast_wire, encode(ctx, message))
+            self.assertEqual(fast_copy, decode(ctx, fast_wire))
+            self.assertEqual(fast_copy, message)
+            ctx.packed_codecs = plans
+            for n in range(len(fast_wire)):
+               with self.assertRaises(CodecError):
+                  decode(ctx, fast_wire[:n])
+
+   def test_01_packed_fixed_array_wire_layout(self):
+      class PackedArrays(SdlMessage):
+         _SDL_NAME = 'PackedArrays'
+         _SDL_DESCRIPTOR = ('SDL2\nmessage PackedArrays {\n'
+            '  1: packed int16[2] pairs;\n}\n')
+         _SDL_FIELDS = ((1, 'pairs', 'packed', 'int16', (2,)),)
+      ctx = context(PackedArrays)
+      message = PackedArrays(pairs=[[-32768, 32767], [1, -2]])
+      expected = b'\x01\x02' + struct.pack('>hhhh', -32768, 32767, 1, -2)
+      self.assertEqual(encode(ctx, message), expected)
+      self.assertEqual(decode(ctx, expected), message)
+      with self.assertRaises(CodecError):
+         encode(ctx, PackedArrays(pairs=[[1]]))
+
+   def test_01_packed_complex_wire_layout(self):
+      class PackedComplex(SdlMessage):
+         _SDL_NAME = 'PackedComplex'
+         _SDL_DESCRIPTOR = ('SDL2\nmessage PackedComplex {\n'
+            '  1: packed c32 narrow;\n  2: packed c64 wide;\n}\n')
+         _SDL_FIELDS = ((1, 'narrow', 'packed', 'c32', ()),
+            (2, 'wide', 'packed', 'c64', ()))
+      ctx = context(PackedComplex)
+      message = PackedComplex(narrow=[Complex32(1, -2), Complex32(-0.0, float('inf'))],
+         wide=[Complex64(3, -4), Complex64(float('-inf'), -0.0)])
+      expected = (b'\x01\x02' + struct.pack('>ffff', 1, -2, -0.0, float('inf')) +
+         b'\x02' + struct.pack('>dddd', 3, -4, float('-inf'), -0.0))
+      self.assertEqual(encode(ctx, message), expected)
+      copy = decode(ctx, expected)
+      self.assertEqual(copy, message)
+      self.assertEqual(math.copysign(1, copy.narrow[1].real), -1)
+      self.assertEqual(math.copysign(1, copy.wide[1].imag), -1)
+      self.assertEqual(encode(ctx, PackedComplex()), b'\x01\x00\x00')
+
+   def test_02_packed_record_enum_validation(self):
+      ctx = context(EnumRecordBatch)
+      wire = bytes([ctx.ids['EnumRecordBatch'], 1]) + struct.pack('>ii', 123, 7)
+      with self.assertRaises(CodecError):
+         decode(ctx, wire)
+      with self.assertRaises(CodecError):
+         encode(ctx, EnumRecordBatch(records=[EnumRecord(state=123, code=7)]))
+      ctx = context(CodecCases)
+      with self.assertRaises(CodecError):
+         encode(ctx, CodecCases(packed_flags=[1]))
+      valid = encode(ctx, CodecCases(packed_flags=[True]))
+      with self.assertRaises(CodecError):
+         decode(ctx, valid[:-2] + bytes([2]) + valid[-1:])
+
    def test_01_codec_evolution(self):
       remote = Packet._SDL_DESCRIPTOR.replace('bool active;', 'bool enabled;').replace(
          'packed int16 samples;', 'repeated int16 samples;\n  5: required string extra;')

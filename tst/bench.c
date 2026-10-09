@@ -41,6 +41,12 @@ static void bench(const char *label, const char *name, const void *value, size_t
    assert(wire);
    copy = type_decode(ctx, wire, n);
    assert(copy);
+   {
+      size_t roundtrip_size;
+      void *roundtrip = type_encode(ctx, name, copy, &roundtrip_size);
+      assert(roundtrip && roundtrip_size == n && memcmp(roundtrip, wire, n) == 0);
+      type_free(roundtrip);
+   }
    type_free(copy);
    for (i = 0; i < 100; ++i) {
       size_t sz;
@@ -145,5 +151,21 @@ int main(void) {
    for (i = 0; i < 5000; ++i)
       samples[i] = (float)i * .25f + I * (-(float)(i % 97) * .5f);
    bench("packed", "BenchPayload", &packed, 40200);
+   {
+      BenchRecordBatch batch = {0};
+      BenchRecord records[1000] = {0};
+      batch.records_count = 1000;
+      batch.records = records;
+      for (i = 0; i < 1000; ++i) {
+         records[i].id = (int32_t)i;
+         records[i].pose.position.values[0] = (float)i * .25f;
+         records[i].pose.position.values[1] = -(float)i * .5f;
+         records[i].pose.position.values[2] = (float)(i % 97);
+         records[i].pose.rotation[3] = 1.f;
+         records[i].measures[0] = (float)i * .125f;
+         records[i].measures[1] = -(float)(i % 31) * .5f;
+      }
+      bench("packed_struct", "BenchRecordBatch", &batch, 40000);
+   }
    return 0;
 }

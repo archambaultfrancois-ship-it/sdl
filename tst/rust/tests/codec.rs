@@ -280,3 +280,167 @@ fn context_rejects_other_local_rust_type_with_same_logical_name() {
     assert!(decode::<Packet>(&ctx, FIXTURE).is_err());
     assert!(encode(&ctx, &Packet::default()).is_err());
 }
+
+#[test]
+fn packed_struct_binary_layout_and_truncation() {
+    use sdl_schema_tests::bench_cases::{BenchPose, BenchRecord, BenchRecordBatch, BenchVector};
+    let text = description(&[BenchRecordBatch::type_info()]).unwrap();
+    let ctx = prepare(&text, &[BenchRecordBatch::type_info()]).unwrap();
+    let message = BenchRecordBatch {
+        records: (0..3).map(|i| BenchRecord {
+            id: i - 1,
+            pose: BenchPose {
+                position: BenchVector { values: [i as f32 * 0.25, -0.0, -2.0] },
+                rotation: [0.0, 0.0, 0.0, 1.0],
+            },
+            measures: [i as f32 * 0.125, -3.0],
+        }).collect(),
+    };
+    // Independent wire oracle: numeric endian conversion, no generated codec.
+    let mut expected = vec![ctx_id(&text, "BenchRecordBatch"), 3];
+    for record in &message.records {
+        expected.extend_from_slice(&record.id.to_be_bytes());
+        for value in record.pose.position.values.iter().chain(&record.pose.rotation).chain(&record.measures) {
+            expected.extend_from_slice(&value.to_be_bytes());
+        }
+    }
+    assert_eq!(encode(&ctx, &message).unwrap(), expected);
+    let copy: BenchRecordBatch = decode(&ctx, &expected).unwrap();
+    assert_eq!(copy, message);
+    assert!(copy.records[0].pose.position.values[1].is_sign_negative());
+    for end in 0..expected.len() {
+        assert!(decode::<BenchRecordBatch>(&ctx, &expected[..end]).is_err());
+    }
+    let mut trailing = expected.clone(); trailing.push(0);
+    assert!(decode::<BenchRecordBatch>(&ctx, &trailing).is_err());
+    let empty = BenchRecordBatch::default();
+    assert_eq!(decode::<BenchRecordBatch>(&ctx, &encode(&ctx, &empty).unwrap()).unwrap(), empty);
+    let hostile = [expected[0], 255, 255, 255, 255, 15];
+    assert!(decode::<BenchRecordBatch>(&ctx, &hostile).is_err());
+    // A field added to each record must retain the generic evolution path.
+    let remote = text.replace("  3: required fl32[2] measures;", "  3: required fl32[2] measures;\n  4: required int8 extra;");
+    let changed = prepare(&remote, &[BenchRecordBatch::type_info()]).unwrap();
+    let mut evolved = expected[..2].to_vec();
+    for record in expected[2..].chunks_exact(40) {
+        evolved.extend_from_slice(record); evolved.push(7);
+    }
+    assert_eq!(decode::<BenchRecordBatch>(&changed, &evolved).unwrap(), message);
+    assert!(encode(&changed, &message).is_err());
+}
+
+#[test]
+fn packed_fixed_enum_validation_and_evolution() {
+    use sdl_runtime::CodecError;
+    let text = description(&[EnumRecordBatch::type_info()]).unwrap();
+    let ctx = prepare(&text, &[EnumRecordBatch::type_info()]).unwrap();
+    let value = EnumRecordBatch { records: vec![EnumRecord { state: State::Ready, code: -7 }] };
+    let mut wire = encode(&ctx, &value).unwrap();
+    assert_eq!(decode::<EnumRecordBatch>(&ctx, &wire).unwrap(), value);
+    wire[2..6].copy_from_slice(&123i32.to_be_bytes());
+    assert_eq!(decode::<EnumRecordBatch>(&ctx, &wire), Err(CodecError::InvalidEnum));
+    // The enum subset differs although the structure layout itself is identical.
+    let subset = text.replace("  READY = 1;\n", "");
+    let subset_ctx = prepare(&subset, &[EnumRecordBatch::type_info()]).unwrap();
+    let valid_wire = encode(&ctx, &value).unwrap();
+    assert_eq!(decode::<EnumRecordBatch>(&subset_ctx, &valid_wire), Err(CodecError::InvalidEnum));
+}
+
+#[test]
+fn fixed_codec_preserves_float_bits_and_rejects_invalid_bool() {
+    use sdl_runtime::{CodecError, WireValue};
+    use sdl_schema_tests::bench_cases::BenchSmall;
+    let bits = [0x80000000u32, 0x7fc01234u32];
+    let wire: Vec<u8> = bits.iter().flat_map(|value| value.to_be_bytes()).collect();
+    let value = Complex32::decode_fixed(&wire).unwrap();
+    assert_eq!(value.real.to_bits(), bits[0]);
+    assert_eq!(value.imag.to_bits(), bits[1]);
+    let mut encoded = [0u8; 8];
+    value.encode_fixed(&mut encoded).unwrap();
+    assert_eq!(encoded.as_slice(), wire.as_slice());
+    assert_eq!(BenchSmall::decode_fixed(&[2, 0, 0, 0, 0, 0, 0]), Err(CodecError::InvalidBoolean));
+    assert_eq!(BenchSmall::decode_fixed(&[0; 6]), Err(CodecError::Truncated));
+}
+
+#[test]
+fn packed_struct_varied_bits_match_generic_decoder() {
+    use sdl_runtime::write_count;
+    use sdl_schema_tests::bench_cases::BenchRecordBatch;
+    let text = description(&[BenchRecordBatch::type_info()]).unwrap();
+    let fast = prepare(&text, &[BenchRecordBatch::type_info()]).unwrap();
+    let mut state = 0x123456789abcdefu64;
+    for trial in 0..64 {
+        let mut wire = vec![ctx_id(&text, "BenchRecordBatch")];
+        write_count(1000, &mut wire).unwrap();
+        let start = wire.len();
+        for _ in 0..40000 {
+            state ^= state << 13; state ^= state >> 7; state ^= state << 17;
+            wire.push(match trial { 0 => 0, 1 => 255, _ => (state >> 24) as u8 });
+        }
+        let fast_value: BenchRecordBatch = decode(&fast, &wire).unwrap();
+        assert_eq!(fast_value.records.len(), 1000);
+        let mut reconstructed = Vec::new();
+        for record in &fast_value.records {
+            reconstructed.extend_from_slice(&record.id.to_be_bytes());
+            for field in record.pose.position.values.iter().chain(&record.pose.rotation).chain(&record.measures) {
+                reconstructed.extend_from_slice(&field.to_bits().to_be_bytes());
+            }
+        }
+        assert_eq!(reconstructed, wire[start..], "trial {trial}");
+        // The independent dynamic decoder uses descriptor traversal, not fixed codecs.
+        let generic = decode_dynamic(&fast, &wire).unwrap();
+        fn message(value: &DynamicValue) -> &sdl_runtime::DynamicMessage {
+            match value { DynamicValue::Message(value) => value, _ => panic!("expected message") }
+        }
+        fn floats(value: &DynamicValue, expected: &[f32]) {
+            let DynamicValue::Array(values) = value else { panic!("expected array") };
+            assert_eq!(values.len(), expected.len());
+            for (value, expected) in values.iter().zip(expected) {
+                let DynamicValue::Float(value) = value else { panic!("expected float") };
+                if expected.is_nan() { assert!(value.is_nan()); }
+                else { assert_eq!((*value as f32).to_bits(), expected.to_bits()); }
+            }
+        }
+        let DynamicValue::Array(records) = &generic.fields["records"] else { panic!("expected records") };
+        assert_eq!(records.len(), 1000);
+        for (decoded, dynamic) in fast_value.records.iter().zip(records) {
+            let record = message(dynamic);
+            assert_eq!(record.fields["id"], DynamicValue::Integer(decoded.id as i64));
+            let pose = message(&record.fields["pose"]);
+            let position = message(&pose.fields["position"]);
+            floats(&position.fields["values"], &decoded.pose.position.values);
+            floats(&pose.fields["rotation"], &decoded.pose.rotation);
+            floats(&record.fields["measures"], &decoded.measures);
+        }
+        // Also cross-check encoding against the independent original bytes.
+        assert_eq!(encode(&fast, &fast_value).unwrap(), wire);
+    }
+}
+
+#[test]
+fn optimized_paths_reject_invalid_values_at_the_end() {
+    use sdl_runtime::CodecError;
+    use sdl_schema_tests::bench_cases::BenchSmall;
+    let text = description(&[BenchSmall::type_info()]).unwrap();
+    let ctx = prepare(&text, &[BenchSmall::type_info()]).unwrap();
+    let bad = [ctx_id(&text, "BenchSmall"), 2, 0, 0, 0, 0, 0, 0];
+    assert_eq!(decode::<BenchSmall>(&ctx, &bad), Err(CodecError::InvalidBoolean));
+
+    let text = description(&[EnumRecordBatch::type_info()]).unwrap();
+    let ctx = prepare(&text, &[EnumRecordBatch::type_info()]).unwrap();
+    let value = EnumRecordBatch { records: vec![
+        EnumRecord { state: State::Ready, code: 1 },
+        EnumRecord { state: State::Negative, code: 2 },
+    ] };
+    let mut wire = encode(&ctx, &value).unwrap();
+    wire[10..14].copy_from_slice(&123i32.to_be_bytes());
+    assert_eq!(decode::<EnumRecordBatch>(&ctx, &wire), Err(CodecError::InvalidEnum));
+
+    let text = description(&[CodecCases::type_info()]).unwrap();
+    let ctx = prepare(&text, &[CodecCases::type_info()]).unwrap();
+    let flags = CodecCases { packed_flags: vec![false, true], ..Default::default() };
+    let mut wire = encode(&ctx, &flags).unwrap();
+    let last_flag = wire.len() - 2; // Final optional field has a zero count.
+    assert_eq!(wire[last_flag], 1);
+    wire[last_flag] = 2;
+    assert_eq!(decode::<CodecCases>(&ctx, &wire), Err(CodecError::InvalidBoolean));
+}

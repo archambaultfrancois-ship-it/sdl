@@ -1,5 +1,5 @@
 use sdl_runtime::{decode, description, encode, prepare, Complex32, SdlMessage};
-use sdl_schema_tests::bench_cases::{BenchEntry, BenchOptionals, BenchSmall, BenchVariable};
+use sdl_schema_tests::bench_cases::{BenchEntry, BenchOptionals, BenchSmall, BenchVariable, BenchVector, BenchPose, BenchRecord, BenchRecordBatch};
 use sdl_schema_tests::benchmark::BenchPayload;
 use std::time::Instant;
 fn bench<T: SdlMessage>(case: &str, message: T, useful: usize) {
@@ -8,7 +8,8 @@ fn bench<T: SdlMessage>(case: &str, message: T, useful: usize) {
     let ctx = prepare(&text, &[T::type_info()]).unwrap();
     let preparation = start.elapsed().as_secs_f64() * 1e6;
     let bytes = encode(&ctx, &message).unwrap();
-    let _: T = decode(&ctx, &bytes).unwrap();
+    let copy: T = decode(&ctx, &bytes).unwrap();
+    assert_eq!(encode(&ctx, &copy).unwrap(), bytes);
     for _ in 0..100 {
         encode(&ctx, &message).unwrap();
         decode::<T>(&ctx, &bytes).unwrap();
@@ -32,9 +33,9 @@ fn bench<T: SdlMessage>(case: &str, message: T, useful: usize) {
             let mut n = 0usize;
             while n < min_iterations || start.elapsed().as_secs_f64() < 0.1 {
                 if operation == "encode" {
-                    std::hint::black_box(encode(&ctx, &message).unwrap());
+                    std::hint::black_box(encode(std::hint::black_box(&ctx), std::hint::black_box(&message)).unwrap());
                 } else {
-                    std::hint::black_box(decode::<T>(&ctx, &bytes).unwrap());
+                    std::hint::black_box(decode::<T>(std::hint::black_box(&ctx), std::hint::black_box(&bytes)).unwrap());
                 }
                 n += 1;
             }
@@ -109,5 +110,19 @@ fn main() {
                 .collect(),
         },
         40200,
+    );
+    bench(
+        "packed_struct",
+        BenchRecordBatch {
+            records: (0..1000).map(|i| BenchRecord {
+                id: i,
+                pose: BenchPose {
+                    position: BenchVector { values: [i as f32 * 0.25, -(i as f32) * 0.5, (i % 97) as f32] },
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                },
+                measures: [i as f32 * 0.125, -((i % 31) as f32) * 0.5],
+            }).collect(),
+        },
+        40000,
     );
 }
