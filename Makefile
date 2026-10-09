@@ -11,6 +11,7 @@ PYTHON_GENERATED_DIR := $(GENERATED_DIR)/python
 matlab_generated_dir := $(GENERATED_DIR)/matlab
 OCTAVE ?= octave
 matlab ?= matlab
+MATLAB_FLAGS ?= -nodisplay -nosplash -nodesktop -nojvm
 JAVAC ?= javac
 JAVA ?= java
 JAVA_SOURCE ?= 8
@@ -19,11 +20,12 @@ JAVA_TEST_CLASSES := $(BUILD_DIR)/java-test-classes
 SDL_FILES := $(wildcard sdl/*.sdl)
 CHECK_SILENT := $(findstring s,$(firstword $(MAKEFLAGS)))
 RUN_TEST := $(if $(CHECK_SILENT),$(PYTHON) tst/run_quiet.py --,)
-matlab_available := $(shell command -v $(matlab) >/dev/null 2>&1 && echo yes)
+matlab_available := $(if $(strip $(matlab)),$(shell command -v $(matlab) >/dev/null 2>&1 && echo yes))
 ifeq ($(matlab_available),yes)
 matlab_bench_label := Matlab
-matlab_run = $(matlab) -nodisplay -nosplash -nodesktop -r "try, addpath('$(matlab_generated_dir)'); addpath('tst/matlab'); run_tests; catch err, disp(getReport(err, 'extended')); exit(1); end; exit(0)"
-matlab_bench_run = $(matlab) -nodisplay -nosplash -nodesktop -r "try, addpath('$(matlab_generated_dir)'); addpath('tst/matlab'); bench; catch err, disp(getReport(err, 'extended')); exit(1); end; exit(0)"
+# R2017a supports -r, not -batch; these codecs do not require the JVM.
+matlab_run = $(matlab) $(MATLAB_FLAGS) -r "try, addpath('$(matlab_generated_dir)'); addpath('tst/matlab'); run_tests; catch err, disp(getReport(err, 'extended')); exit(1); end; exit(0)"
+matlab_bench_run = $(matlab) $(MATLAB_FLAGS) -r "try, addpath('$(matlab_generated_dir)'); addpath('tst/matlab'); bench; catch err, disp(getReport(err, 'extended')); exit(1); end; exit(0)"
 else
 matlab_bench_label := Octave
 matlab_run = $(OCTAVE) --quiet --no-gui --eval "addpath('$(matlab_generated_dir)'); addpath('tst/matlab'); run_tests"
