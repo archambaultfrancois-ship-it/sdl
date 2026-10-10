@@ -1645,3 +1645,114 @@ SdlDynamicMessage *type_decode_dynamic(const SdlContext *c, const void *data, si
    }
    return out;
 }
+
+/* Descriptor-only queries used by foreign-language typed bindings. */
+bool type_context_validate(const SdlContext *c, const void *data, size_t size) {
+   SdlDynamicReader r;
+   const SdlDynamicMessageDesc *m = start_message(c, data, size, &r);
+   return m && read_native_message(&c->schema, m, NULL, &r, NULL, 0) && r.offset == size;
+}
+uint32_t type_context_message_id(const SdlContext *c, const char *name) {
+   const SdlDynamicMessageDesc *m = c ? schema_message_const(&c->schema, name) : NULL;
+   return m ? (uint32_t)(m - c->schema.messages + 1) : 0;
+}
+static bool foreign_field_match(const SdlDynamicFieldDesc *a, const SdlDynamicFieldDesc *b) {
+   return !strcmp(a->type_name, b->type_name) &&
+      (a->modifier == b->modifier || (a->modifier >= 2 && b->modifier >= 2)) &&
+      a->dimension_count == b->dimension_count &&
+      (!a->dimension_count || !memcmp(a->dimensions, b->dimensions,
+                                      a->dimension_count * sizeof(uint32_t)));
+}
+bool type_context_compatible(const SdlContext *remote, const SdlContext *local) {
+   size_t i, j, k;
+   if (!remote || !local)
+      return false;
+   /* A shared type name must not change between enum and message. */
+   for (i = 0; i < local->schema.enum_count; ++i)
+      if (schema_message_const(&remote->schema, local->schema.enums[i].name))
+         return false;
+   for (i = 0; i < local->schema.message_count; ++i) {
+      const SdlDynamicMessageDesc *l = &local->schema.messages[i];
+      const SdlDynamicMessageDesc *r = schema_message_const(&remote->schema, l->name);
+      if (schema_enum(&remote->schema, l->name))
+         return false;
+      if (!r)
+         continue;
+      for (j = 0; j < l->field_count; ++j)
+         for (k = 0; k < r->field_count; ++k)
+            if (l->fields[j].id == r->fields[k].id &&
+                !foreign_field_match(&l->fields[j], &r->fields[k]))
+               return false;
+   }
+   return true;
+}
+bool type_context_exact_message(const SdlContext *remote, const SdlContext *local, const char *name) {
+   const SdlDynamicMessageDesc *r = remote ? schema_message_const(&remote->schema, name) : NULL;
+   const SdlDynamicMessageDesc *l = local ? schema_message_const(&local->schema, name) : NULL;
+   size_t i;
+   if (!r || !l || r->field_count != l->field_count)
+      return false;
+   for (i = 0; i < l->field_count; ++i)
+      if (l->fields[i].id != r->fields[i].id || !foreign_field_match(&l->fields[i], &r->fields[i]))
+         return false;
+   return true;
+}
+const SdlDynamicValue *type_dynamic_get_id(const SdlContext *c, const SdlDynamicMessage *message,
+                                          uint32_t id) {
+   const SdlDynamicMessageDesc *m = c && message ?
+      schema_message_const(&c->schema, message->type_name) : NULL;
+   size_t i;
+   if (m)
+      for (i = 0; i < m->field_count; ++i)
+         if (m->fields[i].id == id)
+            return type_dynamic_get(message, m->fields[i].name);
+   return NULL;
+}
+
+/* Memoize the reachable type graph once, including shared substructures. */
+static bool direct_layout_match(const SdlContext *remote, const SdlContext *local,
+                                const SdlDynamicMessageDesc *m, uint8_t *memo) {
+   size_t index = (size_t)(m - local->schema.messages), i;
+   if (memo[index])
+      return memo[index] == 2;
+   memo[index] = 1; /* A cycle is incompatible as well. */
+   if (!type_context_exact_message(remote, local, m->name))
+      return false;
+   for (i = 0; i < m->field_count; ++i) {
+      const SdlDynamicMessageDesc *child = schema_message_const(&local->schema, m->fields[i].type_name);
+      const SdlDynamicEnumDesc *e = schema_enum(&local->schema, m->fields[i].type_name);
+      if (child && !direct_layout_match(remote, local, child, memo))
+         return false;
+      if (e) {
+         const SdlDynamicEnumDesc *r = schema_enum(&remote->schema, e->name);
+         size_t j;
+         if (!r || r->item_count != e->item_count)
+            return false;
+         for (j = 0; j < e->item_count; ++j)
+            if (!enum_item(&remote->schema, e->name, e->items[j].value))
+               return false;
+      }
+   }
+   memo[index] = 2;
+   return true;
+}
+uint8_t *type_context_direct_layouts(const SdlContext *remote, const SdlContext *local, size_t *count) {
+   uint8_t *flags, *memo;
+   size_t i;
+   if (!remote || !local || !count)
+      return NULL;
+   *count = remote->schema.message_count;
+   flags = calloc(*count ? *count : 1, 1);
+   memo = calloc(local->schema.message_count ? local->schema.message_count : 1, 1);
+   if (!flags || !memo) {
+      free(flags);
+      free(memo);
+      return NULL;
+   }
+   for (i = 0; i < *count; ++i) {
+      const SdlDynamicMessageDesc *m = schema_message_const(&local->schema, remote->schema.messages[i].name);
+      flags[i] = m && direct_layout_match(remote, local, m, memo);
+   }
+   free(memo);
+   return flags;
+}

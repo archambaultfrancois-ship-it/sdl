@@ -10,6 +10,7 @@ from generator import MsgParser, canonical_type_descriptor
 from rust_backend import RustBackend, generate_rust
 from python_backend import PythonBackend, generate_python
 from java_backend import JavaBackend, generate_java
+from ada_backend import AdaBackend, generate_ada
 
 
 class GeneratorValidationTests(unittest.TestCase):
@@ -680,6 +681,42 @@ message Container {
    1: required Unit[4294967295][2] items;
 }
 ''')
+
+   def test_02_backend_ada_case_insensitive_names_and_composite_names(self):
+      sources = (
+         'message Foo {\n}\nmessage foo {\n}\n',
+         'message X {\n 1: required int32 item;\n 2: required int32 Item;\n}\n',
+         'enum X {\n A = 0;\n a = 1;\n}\n',
+         'message A_B {\n 1: repeated int32 C;\n}\nmessage A {\n 1: repeated int32 B_C;\n}\n',
+         'enum A_B {\n C = 0;\n}\nenum A {\n B_C = 1;\n}\n',
+      )
+      for source in sources:
+         with self.subTest(source=source):
+            with self.assertRaisesRegex(ValueError, 'collision'):
+               schema = MsgParser()
+               schema.parse_text(source)
+               AdaBackend(schema, 'SDL_Test').validate()
+
+   def test_02_backend_ada_regeneration_and_validation_preserve_files(self):
+      with tempfile.TemporaryDirectory() as directory:
+         root = pathlib.Path(directory)
+         source = root / 'input'
+         output = root / 'output'
+         source.mkdir()
+         (source / 'one.sdl').write_text('message Foo {\n}\n')
+         generate_ada(str(source), str(output))
+         self.assertTrue((output / 'sdl_one.ads').exists())
+         custom = output / 'manual.ads'
+         custom.write_text('-- hand written\n')
+         (source / 'one.sdl').rename(source / 'two.sdl')
+         generate_ada(str(source), str(output))
+         self.assertFalse((output / 'sdl_one.ads').exists())
+         self.assertTrue(custom.exists())
+         (source / 'TWO.sdl').write_text('message Other {\n}\n')
+         with self.assertRaisesRegex(ValueError, 'Ada package name collision'):
+            generate_ada(str(source), str(output))
+         self.assertTrue((output / 'sdl_two.ads').exists())
+         self.assertTrue(custom.exists())
 
 
 if __name__ == '__main__':

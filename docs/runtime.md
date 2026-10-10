@@ -154,3 +154,12 @@ strings where empty character text is a present empty string. Use the generated
 of arrays; their generated field metadata supplies row-major wire traversal.
 Packed primitives and complex values use bulk conversion. `make test-matlab`
 uses Matlab if available, otherwise Octave; override `matlab` or `OCTAVE` paths.
+
+## Ada 2012
+
+Generated packages expose typed `T_<message>` records, a `Description`
+catalogue, `Prepare`, and overloaded `Encode`/`Decode`. Use
+`SDL_Runtime.Context` to retain the prepared catalogue, with automatic cleanup.
+Fixed arrays are nested Ada arrays; repeated/Packed fields are typed vectors;
+optional fields have `H_<field>` presence flags. See the [Ada API](ada.md)
+for examples, compiler settings, validation and schema evolution behavior.

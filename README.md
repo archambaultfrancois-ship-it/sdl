@@ -1,6 +1,6 @@
 # SDL encoder
 
-SDL generates message bindings for C99, Rust, Python 3, Java 7+, and
+SDL generates message bindings for C99, Rust, Python 3, Java 7+, Ada 2012, and
 Matlab/Octave from `.sdl` schemas.
 
 SDL2 exchanges a UTF-8 schema catalogue when a connection opens. The runtime
@@ -11,7 +11,7 @@ Field IDs remain in the catalogue to support schema evolution.
 ## Generate bindings
 
 ```sh
-python3 gen/generator.py -c -rust -python -matlab -java sdl build/generated
+python3 gen/generator.py -c -rust -python -matlab -java -ada sdl build/generated
 ```
 
 Select any combination of backends. The input can be a file or directory;
@@ -21,7 +21,7 @@ bindings. Edit schemas and regenerate instead of editing generated files.
 ## Build and validation
 
 The generator and Python runtime use Python 3 and its standard library. Other
-backends need a C99 compiler, Rust/Cargo, a JDK, and Matlab or GNU Octave.
+backends need a C99 compiler, Rust/Cargo, a JDK, GNAT, and Matlab or GNU Octave.
 C requires 8-bit bytes and IEEE-754 binary32/binary64. Java bindings target Java
 7 features; tests use the compiler’s default source/target settings. Java required
 numeric/bool fields and fixed numeric/bool arrays use primitive types;
@@ -36,7 +36,7 @@ make test
 make bench
 ```
 
-The suite covers all five runtimes with the shared SDL2 fixture. Benchmarks
+The suite covers all six runtimes with the shared SDL2 fixture. Benchmarks
 report messages/s, useful MiB/s, catalogue size, and preparation time across
 six workloads. See [benchmarks](docs/benchmarks.md) for methodology and limits.
 Python has an optional native Packed adapter. Build it with
@@ -55,12 +55,21 @@ schemas retain the normal MATLAB path. See [benchmarks](docs/benchmarks.md)
 for the supported platform and switches to compare the full MEX, payload-only
 MEX and MATLAB implementations.
 
+Ada bindings use typed records, fixed arrays, `Ada.Containers.Vectors` for
+repeated/Packed fields and UTF-8 `Unbounded_String` values. Optional fields
+have an explicit presence flag. Messages containing Packed fields use generated
+Ada codecs for matching layouts; schema evolution retains C dynamic decoding through an opaque context
+with automatic lifetime management. See [Ada API and build instructions](docs/ada.md).
+`make test-ada bench-ada` uses `~/opt/gnat-21.1` by default, with `-O3` and
+range checks enabled. Override `GNAT_HOME`, `GNATMAKE` or `ADA_RTS` as needed.
+
 On the Termux development environment, source `~/.bashrc` before using the JDK.
 
 ## Examples
 
 - [C](samples/abc-c/README.md), [Rust](samples/abc-rust/README.md),
-  [Python](samples/abc-python/README.md), and [Java](samples/abc-java/README.md)
+  [Python](samples/abc-python/README.md), [Java](samples/abc-java/README.md),
+  and [Ada](samples/abc-ada/README.md)
   equation solvers exchange a catalogue at socket opening, then message data.
 - [Matlab/Octave](samples/abc-matlab/README.md) runs the same stages sequentially.
 - [Radio capture](samples/radio_capture/README.md) checks all six C/Rust/Python
@@ -70,6 +79,7 @@ On the Termux development environment, source `~/.bashrc` before using the JDK.
 
 ```sh
 make -C samples/abc-c run
+make -C samples/abc-ada run
 make -C samples/radio_capture interop
 ```
 

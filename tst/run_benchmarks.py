@@ -14,7 +14,7 @@ CASES = ('small', 'optional_sparse', 'optional_dense', 'variable', 'packed', 'pa
 
 
 def print_matrix(rows):
-   preferred = ('C', 'Rust', 'Java', 'Python', 'Matlab', 'Octave')
+   preferred = ('C', 'Rust', 'Java', 'Ada', 'Python', 'Matlab', 'Octave')
    present = list(dict.fromkeys(row['backend'] for row in rows))
    backends = [name for name in preferred if name in present]
    backends += [name for name in present if name not in preferred]
@@ -57,7 +57,7 @@ def main():
    matlab = sys.argv[3] if len(sys.argv)>3 else ('Matlab' if shutil.which('matlab') else 'Octave')
    rows=[];sizes={};buffer_table=None
    for label, target in (('C','bench-c'), ('Rust','bench-rust'), ('Python','bench-python'),
-         (matlab,'bench-matlab'), ('Java','bench-java')):
+         (matlab,'bench-matlab'), ('Java','bench-java'), ('Ada','bench-ada')):
       print('Running {} benchmark...'.format(label), flush=True)
       process=subprocess.run(make+['--no-print-directory','BENCH_ITERATIONS='+iterations,target],
          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)

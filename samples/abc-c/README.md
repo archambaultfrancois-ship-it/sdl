@@ -1,9 +1,10 @@
 # Quadratic equation example (C)
 
 This C implementation uses three POSIX threads and the SDL C runtime. Matching
-Rust, Java, and Python programs are in [`abc-rust`](../abc-rust/README.md),
-[`abc-java`](../abc-java/README.md), and
-[`abc-python`](../abc-python/README.md). Each follows the same input, solve,
+Rust, Java, Python, and Ada programs are in [`abc-rust`](../abc-rust/README.md),
+[`abc-java`](../abc-java/README.md),
+[`abc-python`](../abc-python/README.md), and
+[`abc-ada`](../abc-ada/README.md). Each follows the same input, solve,
 and display pipeline with the same SDL message types. The simplified,
 sequential Matlab/Octave version is in
 [`abc-matlab`](../abc-matlab/README.md).
