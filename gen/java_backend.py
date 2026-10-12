@@ -32,6 +32,7 @@ class JavaBackend:
    def __init__(self, schema, outer_name):
       self.schema = schema
       self.outer_name = outer_name
+      self._fixed_sizes = {}
       self._validate_names()
 
    def _validate_names(self):
@@ -62,7 +63,7 @@ class JavaBackend:
          seen = set()
          for field in self.schema.messages[message_name].fields:
             result = java_identifier(field.name)
-            if result in ('SDL_FIELDS', 'SDL_DESCRIPTOR', 'SDL_NAME'):
+            if result in ('SDL_FIELDS', 'SDL_DESCRIPTOR', 'SDL_NAME', 'SDL_FIXED'):
                raise ValueError('Java field conflicts with generated metadata in ' +
                   message_name + ': ' + field.name)
             if result in seen:
@@ -76,12 +77,96 @@ class JavaBackend:
          'string':'String'}
       return builtin.get(name, self.outer_name + '.' + java_type_name(name))
 
+   def _primitive(self, name):
+      return {'bool':'boolean','int8':'byte','int16':'short','int32':'int',
+         'int64':'long','fl32':'float','fl64':'double'}.get(name)
+
+   def _array_type(self, name):
+      return self._primitive(name) or self._type(name)
+
+   def _fixed_size(self, name, active=None):
+      if name in self._fixed_sizes: return self._fixed_sizes[name]
+      sizes = {'bool':1,'int8':1,'int16':2,'int32':4,'int64':8,
+         'fl32':4,'fl64':8,'c32':8,'c64':16}
+      if name in sizes: return sizes[name]
+      if name in self.schema.enums: return 4
+      active = set() if active is None else active
+      if name not in self.schema.messages or name in active: return None
+      active = active | {name}
+      total = 0
+      for f in self.schema.messages[name].fields:
+         size = self._fixed_size(f.type_name, active)
+         if f.modifier != 'required' or size is None: return None
+         for dim in f.array_dimensions: size *= dim
+         total += size
+         if total > 2147483647: return None
+      self._fixed_sizes[name] = total or None
+      return total or None
+
+   def _fixed_codec(self, message, cls):
+      size = self._fixed_size(message.name)
+      if size is None: return ''
+      out = ['  public static final SdlCodec.FixedCodec SDL_FIXED = new SdlCodec.FixedCodec(){\n',
+         '   public int size(){return %d;}\n' % size,
+         '   public void write(Object value, byte[] bytes, int offset){\n',
+         '    if(!(value instanceof %s)) throw new SdlCodec.CodecException("invalid fixed record");\n' % cls,
+         '    %s v=(%s)value;\n' % (cls, cls)]
+      def emit(name, dims, expr, decode, indent='    ', level=0):
+         if dims:
+            if decode:
+               out.append(indent + expr + '=new ' + self._array_type(name) +
+                  '[%d]' % dims[0] + '[]' * (len(dims)-1) + ';\n')
+            else:
+               out.append(indent + 'if('+expr+'==null || '+expr+'.length!='+str(dims[0])+') throw new SdlCodec.CodecException("invalid fixed array");\n')
+            var = 'i%d' % level
+            out.append(indent+'for(int '+var+'=0;'+var+'<'+str(dims[0])+';'+var+'++){\n')
+            emit(name,dims[1:],expr+'['+var+']',decode,indent+' ',level+1)
+            out.append(indent+'}\n'); return
+         n = self._fixed_size(name)
+         if not decode and not self._primitive(name):
+            out.append(indent+'if('+expr+'==null) throw new SdlCodec.CodecException("null required value");\n')
+         if name in self.schema.messages:
+            codec=self._type(name)+'.SDL_FIXED'
+            line=(expr+'=('+self._type(name)+')'+codec+'.read(bytes,offset);' if decode else
+               codec+'.write('+expr+',bytes,offset);')
+         elif decode:
+            read='SdlCodec.getWord(bytes,offset,%d)' % n
+            if name in self.schema.enums: rhs=self._type(name)+'.fromWire((int)'+read+')'
+            elif name=='bool': rhs='SdlCodec.getBool(bytes,offset)'
+            elif name=='fl32': rhs='Float.intBitsToFloat((int)'+read+')'
+            elif name=='fl64': rhs='Double.longBitsToDouble('+read+')'
+            elif name in ('c32','c64'):
+               half=n//2; conv='Float.intBitsToFloat((int)' if half==4 else 'Double.longBitsToDouble('
+               rhs='new '+self._type(name)+'('+conv+'SdlCodec.getWord(bytes,offset,%d)), '%half+conv+'SdlCodec.getWord(bytes,offset+%d,%d)))'%(half,half)
+            else: rhs='('+self._primitive(name)+')'+read
+            line=expr+'='+rhs+';'
+         else:
+            if name in self.schema.enums: val=expr+'.wireValue()'
+            elif name=='bool': val=expr+'?1:0'
+            elif name=='fl32': val='Float.floatToRawIntBits('+expr+')'
+            elif name=='fl64': val='Double.doubleToRawLongBits('+expr+')'
+            elif name in ('c32','c64'):
+               half=n//2; conv='Float.floatToRawIntBits' if half==4 else 'Double.doubleToRawLongBits'
+               line='SdlCodec.putWord(bytes,offset,'+conv+'('+expr+'.real),%d); '%half+'SdlCodec.putWord(bytes,offset+%d,'%half+conv+'('+expr+'.imag),%d);'%half
+               out.append(indent+line+' offset+=%d;\n'%n); return
+            else: val=expr
+            line='SdlCodec.putWord(bytes,offset,'+val+',%d);'%n
+         out.append(indent+line+' offset+=%d;\n'%n)
+      fields=sorted(message.fields,key=lambda f:f.index)
+      for f in fields: emit(f.type_name,f.array_dimensions,'v.'+java_identifier(f.name),False)
+      out.append('   }\n   public Object read(byte[] bytes,int offset){\n    '+cls+' v=new '+cls+'(false);\n')
+      for f in fields: emit(f.type_name,f.array_dimensions,'v.'+java_identifier(f.name),True)
+      out.append('    return v;\n   }\n  };\n')
+      return ''.join(out)
+
    def _field_type(self, field):
       if field.modifier == 'packed' and field.type_name == 'c32':
          return 'SdlCodec.Complex32Array'
       if field.modifier == 'packed' and field.type_name == 'c64':
          return 'SdlCodec.Complex64Array'
-      result = self._type(field.type_name)
+      if field.modifier == 'packed' and self._primitive(field.type_name):
+         return self._primitive(field.type_name) + '[]'
+      result = self._array_type(field.type_name) if field.array_dimensions or field.modifier == 'required' else self._type(field.type_name)
       for unused in field.array_dimensions:
          result += '[]'
       if field.modifier in ('packed', 'repeated'):
@@ -104,6 +189,8 @@ class JavaBackend:
 
    def _default_array(self, type_name, dims, level=0):
       length = dims[level]
+      if self._primitive(type_name):
+         return 'new ' + self._primitive(type_name) + ''.join('[%d]' % n for n in dims[level:])
       if level + 1 < len(dims):
          child_type = self._type(type_name) + '[]' * (len(dims) - level)
          child = self._default_array(type_name, dims, level + 1)
@@ -114,7 +201,7 @@ class JavaBackend:
    def _field_metadata(self, field):
       dimensions = 'new int[]{' + ','.join(str(item) for item in field.array_dimensions) + '}'
       enum_type = 'true' if field.type_name in self.schema.enums else 'false'
-      value_type = self._field_type(field) if field.modifier == 'packed' and field.type_name in ('c32', 'c64') else self._type(field.type_name)
+      value_type = self._field_type(field) if field.modifier == 'packed' and field.type_name in ('c32', 'c64') else (self._array_type(field.type_name) if field.array_dimensions or field.modifier in ('packed', 'required') else self._type(field.type_name))
       return ('new SdlCodec.Field(' + str(field.index) + 'L,"' +
          java_identifier(field.name) + '","' + field.modifier + '","' +
          field.type_name + '",' + value_type + '.class,' +
@@ -153,7 +240,8 @@ class JavaBackend:
          chunks = [text[i:i + 12000] for i in range(0, len(text), 12000)]
          expression = 'new StringBuilder()' + ''.join('.append(' + json.dumps(chunk, ensure_ascii=False) + ')' for chunk in chunks) + '.toString()'
          out.append('  public static final String SDL_DESCRIPTOR = ' + expression + ';\n')
-         out.append('  public ' + cls + '() {\n')
+         out.append('  public ' + cls + '() { this(true); }\n')
+         out.append('  private ' + cls + '(boolean defaults) { if(!defaults) return;\n')
          for field in fields:
             fname = java_identifier(field.name)
             if field.array_dimensions:
@@ -163,6 +251,8 @@ class JavaBackend:
                if field.modifier == 'packed' and field.type_name in ('c32', 'c64'):
                   complex_array = 'Complex32Array' if field.type_name == 'c32' else 'Complex64Array'
                   out.append('   this.' + fname + '=new SdlCodec.' + complex_array + '();\n')
+               elif field.modifier == 'packed' and self._primitive(field.type_name):
+                  out.append('   this.' + fname + '=new ' + self._primitive(field.type_name) + '[0];\n')
                else:
                   out.append('   this.' + fname + '=new java.util.ArrayList<' +
                      self._type(field.type_name) + '>();\n')
@@ -171,6 +261,7 @@ class JavaBackend:
             else:
                out.append('   this.' + fname + '=' + self._default_value(field.type_name) + ';\n')
          out.append('  }\n')
+         out.append(self._fixed_codec(message, cls))
          out.append('  public byte[] encode(SdlCodec.Context context) { return SdlCodec.encode(context,this); }\n')
          out.append('  public static ' + cls + ' decode(SdlCodec.Context context,byte[] bytes) { return (' + cls + ')SdlCodec.decode(context,bytes); }\n')
          out.append('  public String toString() { return SdlCodec.display(this,SDL_FIELDS); }\n }\n')

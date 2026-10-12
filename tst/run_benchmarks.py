@@ -13,6 +13,44 @@ META = re.compile(r'^(\w+) metadata: ([0-9]+) description bytes, ([0-9.]+) us pr
 CASES = ('small', 'optional_sparse', 'optional_dense', 'variable', 'packed', 'packed_struct')
 
 
+def print_matrix(rows):
+   preferred = ('C', 'Rust', 'Java', 'Python', 'Matlab', 'Octave')
+   present = list(dict.fromkeys(row['backend'] for row in rows))
+   backends = [name for name in preferred if name in present]
+   backends += [name for name in present if name not in preferred]
+   measurements = {(row['case'], row['backend']): row for row in rows}
+   values = {(case, backend): tuple(
+      '{:.0f}'.format(row[op + '_mib_s'] * 1048576 / 1000000)
+      for op in ('encode', 'decode'))
+      for (case, backend), row in measurements.items() if case in CASES}
+   number_widths = {backend: tuple(
+      max((len(pair[i]) for (case, name), pair in values.items() if name == backend),
+          default=1) for i in range(2)) for backend in backends}
+   table = [['Case'] + backends]
+   for case in CASES:
+      cells = [case]
+      for backend in backends:
+         pair = values.get((case, backend))
+         if pair is None:
+            cells.append('—')
+            continue
+         enc_width, dec_width = number_widths[backend]
+         cells.append(pair[0].rjust(enc_width) + ' / ' + pair[1].rjust(dec_width))
+      table.append(cells)
+   widths = [max(len(row[i]) for row in table) for i in range(len(table[0]))]
+   def line(cells):
+      return '| ' + ' | '.join(
+         cell.ljust(widths[i]) if i == 0 else cell.rjust(widths[i])
+         for i, cell in enumerate(cells)) + ' |'
+   print('\nSDL2 median throughput — MB/s (Enc / Dec), rounded to integers')
+   print(line(table[0]))
+   print('| ' + ' | '.join('-' * widths[0] if i == 0 else '-' * (width - 1) + ':'
+      for i, width in enumerate(widths)) + ' |')
+   for cells in table[1:]:
+      print(line(cells))
+   print('MB/s = 1,000,000 useful bytes/s; excludes wire metadata. 0 means < 0.5 MB/s.')
+
+
 def main():
    make = shlex.split(sys.argv[1]) if len(sys.argv)>1 else ['make']
    iterations = sys.argv[2] if len(sys.argv)>2 else '200'
@@ -36,10 +74,7 @@ def main():
          sizes[case]=encode[2]
          rows.append(dict(backend=label,case=case,bytes=encode[2],description_bytes=meta[case][0],
             prepare_us=meta[case][1],encode_msg_s=encode[0],encode_mib_s=encode[1],decode_msg_s=decode[0],decode_mib_s=decode[1]))
-   print('\nSDL2 median throughput; MiB/s counts useful values, excludes wire metadata')
-   print('{:<8} {:<16} {:>5} {:>11} {:>10} {:>11} {:>10}'.format('Backend','Case','Bytes','Encode msg/s','MiB/s','Decode msg/s','MiB/s'))
-   for row in rows:
-      print('{backend:<8} {case:<16} {bytes:>5} {encode_msg_s:>11.1f} {encode_mib_s:>10.4f} {decode_msg_s:>11.1f} {decode_mib_s:>10.4f}'.format(**row))
+   print_matrix(rows)
    os.makedirs('build',exist_ok=True)
    with open('build/benchmarks.json','w') as output:json.dump(rows,output,indent=2);output.write('\n')
    print('Catalogue size and preparation times: build/benchmarks.json')

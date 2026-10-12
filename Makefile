@@ -14,7 +14,6 @@ matlab ?= matlab
 MATLAB_FLAGS ?= -nojvm -nodisplay -nosplash -nodesktop
 JAVAC ?= javac
 JAVA ?= java
-JAVA_SOURCE ?= 8
 JAVA_GENERATED_DIR := $(GENERATED_DIR)/java
 JAVA_TEST_CLASSES := $(BUILD_DIR)/java-test-classes
 SDL_FILES := $(wildcard sdl/*.sdl)
@@ -72,7 +71,7 @@ test-matlab: $(GENERATED_DIR)/.stamp
 
 test-java: $(GENERATED_DIR)/.stamp
 	mkdir -p $(JAVA_TEST_CLASSES)
-	$(JAVAC) -encoding UTF-8 -source $(JAVA_SOURCE) -target $(JAVA_SOURCE) -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
+	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
 	$(RUN_TEST) env $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaTests
 
 bench-matlab: $(GENERATED_DIR)/.stamp
@@ -80,7 +79,7 @@ bench-matlab: $(GENERATED_DIR)/.stamp
 
 bench-java: $(GENERATED_DIR)/.stamp
 	mkdir -p $(JAVA_TEST_CLASSES)
-	$(JAVAC) -encoding UTF-8 -source $(JAVA_SOURCE) -target $(JAVA_SOURCE) -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
+	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaBench
 
 $(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m Makefile

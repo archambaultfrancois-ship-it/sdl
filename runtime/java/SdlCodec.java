@@ -21,6 +21,49 @@ public final class SdlCodec {
    private static final int MAX_DESCRIPTOR = 1024 * 1024;
    private SdlCodec() {}
    public interface Message {}
+   /** Generated fixed-layout codec; callers validate the complete block bounds first. */
+   public interface FixedCodec {
+      int size();
+      void write(Object value, byte[] bytes, int offset);
+      Object read(byte[] bytes, int offset);
+   }
+   public static void putInt(byte[] b, int p, int v) {
+      b[p]=(byte)(v >>> 24); b[p+1]=(byte)(v >>> 16);
+      b[p+2]=(byte)(v >>> 8); b[p+3]=(byte)v;
+   }
+   public static int getInt(byte[] b, int p) {
+      return ((b[p]&255)<<24) | ((b[p+1]&255)<<16) |
+             ((b[p+2]&255)<<8) | (b[p+3]&255);
+   }
+   public static void putLong(byte[] b, int p, long v) {
+      putInt(b,p,(int)(v >>> 32)); putInt(b,p+4,(int)v);
+   }
+   public static long getLong(byte[] b, int p) {
+      return ((long)getInt(b,p)<<32) | (getInt(b,p+4)&0xffffffffL);
+   }
+   public static void putWord(byte[] b, int p, long v, int n) {
+      switch(n) {
+      case 8: putLong(b,p,v); break;
+      case 4: putInt(b,p,(int)v); break;
+      case 2: b[p]=(byte)(v >>> 8); b[p+1]=(byte)v; break;
+      case 1: b[p]=(byte)v; break;
+      default: throw malformed("invalid word width");
+      }
+   }
+   public static long getWord(byte[] b, int p, int n) {
+      switch(n) {
+      case 8: return getLong(b,p);
+      case 4: return getInt(b,p)&0xffffffffL;
+      case 2: return ((b[p]&255L)<<8) | (b[p+1]&255L);
+      case 1: return b[p]&255L;
+      default: throw malformed("invalid word width");
+      }
+   }
+   public static boolean getBool(byte[] b, int p) {
+      int v=b[p]&255;
+      if(v>1) throw malformed("invalid bool");
+      return v==1;
+   }
    public interface EnumValue {
       int wireValue();
    }
@@ -188,11 +231,17 @@ public final class SdlCodec {
    }
    private static final class Binding {
       final Class<?> type;
+      final FixedCodec fixed;
       final Map<Long, Field> fields = new HashMap<Long, Field>();
       final Map<Long, java.lang.reflect.Field> access =
           new HashMap<Long, java.lang.reflect.Field>();
       Binding(Class<?> t) {
          type = t;
+         FixedCodec codec=null;
+         try { codec=(FixedCodec)t.getField("SDL_FIXED").get(null); }
+         catch (NoSuchFieldException e) { /* Handwritten and variable messages use generic codecs. */ }
+         catch (Exception e) { throw new CodecException("invalid fixed codec",e); }
+         fixed=codec;
          for (Field f : messageFields(t)) {
             fields.put(f.id, f);
             try {
@@ -207,6 +256,7 @@ public final class SdlCodec {
       private final Schema schema, localSchema;
       private final String[] names;
       private final Map<String, Binding> bindings = new HashMap<String, Binding>();
+      private final Map<String, FixedCodec> fixed = new HashMap<String, FixedCodec>();
       private final Map<String, Integer> sizes = new HashMap<String, Integer>();
       private Context(Schema schema, Schema local) {
          this.schema = schema;
@@ -491,6 +541,26 @@ public final class SdlCodec {
    private static String cardinality(String m) {
       return m.equals("packed") || m.equals("repeated") ? "sequence" : m;
    }
+   private static boolean fixedCompatible(Schema remote, Schema local, String name,
+                                          Map<String, Boolean> cache) {
+      Boolean known=cache.get(name);
+      if(known!=null) return known;
+      if(wireSize(name)>0) return true;
+      if(remote.enums.containsKey(name))
+         return local.enums.containsKey(name) &&
+             remote.enums.get(name).keySet().equals(local.enums.get(name).keySet());
+      Declaration a=remote.messages.get(name), b=local.messages.get(name);
+      boolean ok=a!=null && b!=null && a.fields.size()==b.fields.size();
+      if(ok) for(int i=0;i<a.fields.size();i++) {
+         Field x=a.fields.get(i), y=b.fields.get(i);
+         if(x.id!=y.id || !x.typeName.equals(y.typeName) ||
+            !x.modifier.equals("required") || !y.modifier.equals("required") ||
+            !Arrays.equals(x.dimensions,y.dimensions) ||
+            !fixedCompatible(remote,local,x.typeName,cache)) { ok=false; break; }
+      }
+      cache.put(name,ok);
+      return ok;
+   }
    public static Context prepare(String text, Class<?>... localTypes) {
       Schema local = new Schema();
       for (Class<?> t : localTypes)
@@ -511,6 +581,12 @@ public final class SdlCodec {
                throw malformed("incompatible field");
          }
       }
+      Map<String,Boolean> matches=new HashMap<String,Boolean>();
+      for(Map.Entry<String,Binding> item:ctx.bindings.entrySet()) {
+         Binding binding=item.getValue();
+         if(binding.fixed!=null && fixedCompatible(ctx.schema,ctx.localSchema,item.getKey(),matches))
+            ctx.fixed.put(item.getKey(),binding.fixed);
+      }
       return ctx;
    }
 
@@ -526,9 +602,7 @@ public final class SdlCodec {
       }
       void integer(long v, int n) {
          reserve(n);
-         if (bytes != null)
-            for (int i = 0; i < n; i++)
-               bytes[offset + i] = (byte)(v >>> ((n - 1 - i) * 8));
+         if (bytes != null) putWord(bytes,offset,v,n);
          offset += n;
       }
       void data(byte[] b) {
@@ -548,6 +622,101 @@ public final class SdlCodec {
             integer(b, 1);
          } while (n != 0);
       }
+   }
+   private static void writePrimitiveArray(String name,Object value,Sink sink) {
+      if(name.equals("bool")) {
+         boolean[] a=(boolean[])value;
+         sink.count(a.length); sink.reserve(a.length);
+         if(sink.bytes!=null) for(int i=0,p=sink.offset;i<a.length;i++,p+=1)
+            putWord(sink.bytes,p,a[i]?1:0,1);
+         sink.offset+=a.length;
+      }
+      else if(name.equals("int8")) {
+         byte[] a=(byte[])value;
+         sink.count(a.length); sink.reserve(a.length);
+         if(sink.bytes!=null) for(int i=0,p=sink.offset;i<a.length;i++,p+=1)
+            putWord(sink.bytes,p,a[i],1);
+         sink.offset+=a.length;
+      }
+      else if(name.equals("int16")) {
+         short[] a=(short[])value;
+         if(a.length>Integer.MAX_VALUE/2) throw malformed("array overflow");
+         sink.count(a.length); sink.reserve(a.length*2);
+         if(sink.bytes!=null) for(int i=0,p=sink.offset;i<a.length;i++,p+=2)
+            putWord(sink.bytes,p,a[i],2);
+         sink.offset+=a.length*2;
+      }
+      else if(name.equals("int32")) {
+         int[] a=(int[])value;
+         if(a.length>Integer.MAX_VALUE/4) throw malformed("array overflow");
+         sink.count(a.length); sink.reserve(a.length*4);
+         if(sink.bytes!=null) for(int i=0,p=sink.offset;i<a.length;i++,p+=4)
+            putWord(sink.bytes,p,a[i],4);
+         sink.offset+=a.length*4;
+      }
+      else if(name.equals("int64")) {
+         long[] a=(long[])value;
+         if(a.length>Integer.MAX_VALUE/8) throw malformed("array overflow");
+         sink.count(a.length); sink.reserve(a.length*8);
+         if(sink.bytes!=null) for(int i=0,p=sink.offset;i<a.length;i++,p+=8)
+            putWord(sink.bytes,p,a[i],8);
+         sink.offset+=a.length*8;
+      }
+      else if(name.equals("fl32")) {
+         float[] a=(float[])value;
+         if(a.length>Integer.MAX_VALUE/4) throw malformed("array overflow");
+         sink.count(a.length); sink.reserve(a.length*4);
+         if(sink.bytes!=null) for(int i=0,p=sink.offset;i<a.length;i++,p+=4)
+            putWord(sink.bytes,p,Float.floatToRawIntBits(a[i]),4);
+         sink.offset+=a.length*4;
+      }
+      else if(name.equals("fl64")) {
+         double[] a=(double[])value;
+         if(a.length>Integer.MAX_VALUE/8) throw malformed("array overflow");
+         sink.count(a.length); sink.reserve(a.length*8);
+         if(sink.bytes!=null) for(int i=0,p=sink.offset;i<a.length;i++,p+=8)
+            putWord(sink.bytes,p,Double.doubleToRawLongBits(a[i]),8);
+         sink.offset+=a.length*8;
+      }
+      else throw malformed("invalid primitive array");
+   }
+   private static Object readPrimitiveArray(String name,int count,Cursor r) {
+      if(name.equals("bool")) {
+         boolean[] a=new boolean[count];
+         for(int i=0,p=r.offset;i<count;i++,p+=1) a[i]=getBool(r.bytes,p);
+         r.offset+=count; return a;
+      }
+      else if(name.equals("int8")) {
+         byte[] a=new byte[count];
+         for(int i=0,p=r.offset;i<count;i++,p+=1) a[i]=(byte)getWord(r.bytes,p,1);
+         r.offset+=count; return a;
+      }
+      else if(name.equals("int16")) {
+         short[] a=new short[count];
+         for(int i=0,p=r.offset;i<count;i++,p+=2) a[i]=(short)getWord(r.bytes,p,2);
+         r.offset+=count*2; return a;
+      }
+      else if(name.equals("int32")) {
+         int[] a=new int[count];
+         for(int i=0,p=r.offset;i<count;i++,p+=4) a[i]=(int)getWord(r.bytes,p,4);
+         r.offset+=count*4; return a;
+      }
+      else if(name.equals("int64")) {
+         long[] a=new long[count];
+         for(int i=0,p=r.offset;i<count;i++,p+=8) a[i]=(long)getWord(r.bytes,p,8);
+         r.offset+=count*8; return a;
+      }
+      else if(name.equals("fl32")) {
+         float[] a=new float[count];
+         for(int i=0,p=r.offset;i<count;i++,p+=4) a[i]=Float.intBitsToFloat(getInt(r.bytes,p));
+         r.offset+=count*4; return a;
+      }
+      else if(name.equals("fl64")) {
+         double[] a=new double[count];
+         for(int i=0,p=r.offset;i<count;i++,p+=8) a[i]=Double.longBitsToDouble(getLong(r.bytes,p));
+         r.offset+=count*8; return a;
+      }
+      throw malformed("invalid primitive array");
    }
    private static byte[] utf8(String value) {
       for (int i = 0; i < value.length(); i++) {
@@ -580,6 +749,13 @@ public final class SdlCodec {
       if (d == null || b == null || value == null || !b.type.isInstance(value) ||
           d.fields.size() != b.fields.size())
          throw malformed("encoding requires emission catalogue");
+      FixedCodec fixed=ctx.fixed.get(name);
+      if(fixed!=null) {
+         sink.reserve(fixed.size());
+         if(sink.bytes!=null) fixed.write(value,sink.bytes,sink.offset);
+         sink.offset+=fixed.size();
+         return;
+      }
       for (Field f : d.fields) {
          Field local = b.fields.get(f.id);
          if (local == null)
@@ -595,24 +771,52 @@ public final class SdlCodec {
                if (a.re == null || a.im == null || a.re.length != a.im.length)
                   throw malformed("invalid complex arrays");
                sink.count(a.size());
-               for (int i = 0; i < a.size(); i++) {
-                  sink.integer(Float.floatToRawIntBits(a.re[i]), 4);
-                  sink.integer(Float.floatToRawIntBits(a.im[i]), 4);
+               if(sink.bytes==null) {
+                  if(a.size()>Integer.MAX_VALUE/8) throw malformed("array overflow");
+                  sink.reserve(a.size()*8); sink.offset+=a.size()*8; continue;
                }
+               if(a.size()>Integer.MAX_VALUE/8) throw malformed("array overflow");
+               sink.reserve(a.size()*8);
+               for(int i=0,p=sink.offset;i<a.size();i++,p+=8) {
+                  putInt(sink.bytes,p,Float.floatToRawIntBits(a.re[i]));
+                  putInt(sink.bytes,p+4,Float.floatToRawIntBits(a.im[i]));
+               }
+               sink.offset+=a.size()*8;
             } else if (v instanceof Complex64Array) {
                Complex64Array a = (Complex64Array)v;
                if (a.re == null || a.im == null || a.re.length != a.im.length)
                   throw malformed("invalid complex arrays");
                sink.count(a.size());
-               for (int i = 0; i < a.size(); i++) {
-                  sink.integer(Double.doubleToRawLongBits(a.re[i]), 8);
-                  sink.integer(Double.doubleToRawLongBits(a.im[i]), 8);
+               if(sink.bytes==null) {
+                  if(a.size()>Integer.MAX_VALUE/16) throw malformed("array overflow");
+                  sink.reserve(a.size()*16); sink.offset+=a.size()*16; continue;
                }
+               if(a.size()>Integer.MAX_VALUE/16) throw malformed("array overflow");
+               sink.reserve(a.size()*16);
+               for(int i=0,p=sink.offset;i<a.size();i++,p+=16) {
+                  putLong(sink.bytes,p,Double.doubleToRawLongBits(a.re[i]));
+                  putLong(sink.bytes,p+8,Double.doubleToRawLongBits(a.im[i]));
+               }
+               sink.offset+=a.size()*16;
             } else {
+               if(v!=null && v.getClass().isArray() && f.modifier.equals("packed")) {
+                  writePrimitiveArray(f.typeName,v,sink); continue;
+               }
                if (!(v instanceof List<?>))
                   throw malformed("invalid sequence");
                List<?> xs = (List<?>)v;
                sink.count(xs.size());
+               FixedCodec codec=ctx.fixed.get(f.typeName);
+               if(codec!=null && f.dimensions.length==0) {
+                  if(xs.size()>Integer.MAX_VALUE/codec.size()) throw malformed("array overflow");
+                  sink.reserve(xs.size()*codec.size());
+                  if(sink.bytes==null) { sink.offset+=xs.size()*codec.size(); continue; }
+                  for(Object x:xs) {
+                     if(x==null) throw malformed("null required value");
+                     codec.write(x,sink.bytes,sink.offset); sink.offset+=codec.size();
+                  }
+                  continue;
+               }
                for (Object x : xs)
                   writeValue(ctx, f.typeName, f.dimensions, 0, x, sink);
             }
@@ -703,9 +907,8 @@ public final class SdlCodec {
       }
       long integer(int n) {
          need(n);
-         long v = 0;
-         for (int i = 0; i < n; i++)
-            v = (v << 8) | (bytes[offset++] & 255L);
+         long v=getWord(bytes,offset,n);
+         offset+=n;
          return v;
       }
       long count() {
@@ -723,6 +926,24 @@ public final class SdlCodec {
          }
          throw malformed("invalid counter");
       }
+   }
+   private static Complex32Array readComplex32Array(Cursor r,int count) {
+      float[] re = new float[count], im = new float[count];
+      for(int i=0,p=r.offset;i<count;i++,p+=8) {
+         re[i]=Float.intBitsToFloat(getInt(r.bytes,p));
+         im[i]=Float.intBitsToFloat(getInt(r.bytes,p+4));
+      }
+      r.offset+=count*8;
+      return new Complex32Array(re, im);
+   }
+   private static Complex64Array readComplex64Array(Cursor r,int count) {
+      double[] re = new double[count], im = new double[count];
+      for(int i=0,p=r.offset;i<count;i++,p+=16) {
+         re[i]=Double.longBitsToDouble(getLong(r.bytes,p));
+         im[i]=Double.longBitsToDouble(getLong(r.bytes,p+8));
+      }
+      r.offset+=count*16;
+      return new Complex64Array(re, im);
    }
    private static int sequenceCount(Context ctx, Field f, Cursor r) {
       long n = f.modifier.equals("required") ? 1 : r.count();
@@ -756,6 +977,12 @@ public final class SdlCodec {
       Binding b = ctx.bindings.get(name);
       if (!skip && b == null)
          throw malformed("unknown local type");
+      FixedCodec fixed=skip ? null : ctx.fixed.get(name);
+      if(fixed!=null) {
+         r.need(fixed.size());
+         Object value=fixed.read(r.bytes,r.offset); r.offset+=fixed.size();
+         return value;
+      }
       Object result = skip ? null : instance(b.type);
       for (Field f : d.fields) {
          int count = sequenceCount(ctx, f, r);
@@ -764,21 +991,20 @@ public final class SdlCodec {
          Object value = null;
          if (f.modifier.equals("packed") || f.modifier.equals("repeated")) {
             if (!discard && local.modifier.equals("packed") && f.typeName.equals("c32")) {
-               float[] re = new float[count], im = new float[count];
-               for (int i = 0; i < count; i++) {
-                  re[i] = Float.intBitsToFloat((int)r.integer(4));
-                  im[i] = Float.intBitsToFloat((int)r.integer(4));
-               }
-               value = new Complex32Array(re, im);
+               value=readComplex32Array(r,count);
             } else if (!discard && local.modifier.equals("packed") && f.typeName.equals("c64")) {
-               double[] re = new double[count], im = new double[count];
-               for (int i = 0; i < count; i++) {
-                  re[i] = Double.longBitsToDouble(r.integer(8));
-                  im[i] = Double.longBitsToDouble(r.integer(8));
-               }
-               value = new Complex64Array(re, im);
+               value=readComplex64Array(r,count);
+            } else if(!discard && local.modifier.equals("packed") && local.valueClass.isPrimitive()) {
+               value=readPrimitiveArray(f.typeName,count,r);
             } else {
+               FixedCodec codec=discard ? null : ctx.fixed.get(f.typeName);
                List<Object> xs = discard ? null : new ArrayList<Object>(count);
+               if(codec!=null && f.dimensions.length==0) {
+                  for(int i=0;i<count;i++) {
+                     xs.add(codec.read(r.bytes,r.offset)); r.offset+=codec.size();
+                  }
+                  writeAccess(b,f.id,result,xs); continue;
+               }
                for (int i = 0; i < count; i++) {
                   Object x =
                       readValue(ctx, f.typeName, f.dimensions, 0,

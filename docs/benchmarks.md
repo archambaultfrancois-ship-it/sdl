@@ -3,7 +3,12 @@
 Run `make bench` (or an individual `bench-c`, `bench-rust`, `bench-python`,
 `bench-matlab`, `bench-java` target). The aggregate checks identical wire sizes
 across the five implementations and writes `build/benchmarks.json` with
-catalogue sizes, preparation times, and throughput.
+catalogue sizes, preparation times, and throughput. The aggregate prints a
+case-by-language matrix in **MB/s (Enc / Dec)**, rounded to integers; MB/s
+means 1,000,000 useful bytes per second. A displayed zero means less than
+0.5 MB/s. Columns correspond to the runtimes executed (Matlab or Octave for
+`bench-matlab`). Individual targets and JSON retain the detailed MiB/s and
+messages/s measurements.
 
 ## Method
 
@@ -40,7 +45,17 @@ compiler can fuse endian conversions and output writes; fixed arrays inside
 generated records require no temporary
 heap allocations. Schema changes retain generic typed decoding;
 Python prepares bulk binary layouts for fixed-size packed structures;
-Java and Matlab/Octave follow runtime metadata and local mappings.
+Java generates direct fixed-layout codecs and selects them during context
+preparation when field IDs, types, dimensions and enum value sets match.
+Field/enum labels can change without disabling the fixed path. Schema evolution
+uses the generic decoder. Required numeric/bool values and fixed/packed numeric
+arrays use primitive storage; optional scalars and repeated primitives retain
+boxed types. Fixed record decoding avoids constructing defaults that would be
+immediately overwritten. Fixed sequence sizes are measured with count times
+record size; encoding still validates array shapes and required references
+while writing. Primitive and complex arrays use specialized big-endian word
+loops with block bounds checks. Matlab/Octave follow runtime metadata and local
+mappings.
 
 MiB/s counts **useful value bytes**, not catalogue, type IDs, string lengths,
 element counts, optional flags, or transport framing. A MiB is 1,048,576 bytes.
@@ -149,3 +164,23 @@ measured useful throughput or link capacity after wire/framing overhead. Tiny
 messages are normally limited by messages/s and packet/syscall overhead;
 large numeric arrays by conversion, memory traffic, and allocations. Neither
 these tests nor the wire specification establish end-to-end line rate.
+
+## Java packed codec comparison
+
+With JDK 17 on the same machine, medians of three JVM executions comparing
+commit `f942d0d` with the generated fixed codecs and primitive-array API:
+
+| Case | Before encode / decode MB/s | After encode / decode MB/s |
+|---|---:|---:|
+| packed | 1,249 / 1,239 | 2,081 / 2,419 |
+| packed_struct | 11 / 17 | 1,753 / 1,281 |
+
+MB/s here uses 1,000,000 useful bytes per second, rounded to integers. Each
+execution retains the benchmark's 1,000 warmup calls and median of three
+100 ms measurement trials. JVM compilation and garbage collection cause
+variation between runs. Wire bytes and workloads are unchanged. The mixed
+packed regression tests compare against independent big-endian wire oracles,
+including raw floating-point bits, malformed values, truncations and evolving
+schemas. The shared nested workload still constructs an object graph on decode;
+primitive storage eliminates numeric boxing, but does not eliminate record,
+substructure or array allocations.

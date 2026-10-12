@@ -23,7 +23,13 @@ bindings. Edit schemas and regenerate instead of editing generated files.
 The generator and Python runtime use Python 3 and its standard library. Other
 backends need a C99 compiler, Rust/Cargo, a JDK, and Matlab or GNU Octave.
 C requires 8-bit bytes and IEEE-754 binary32/binary64. Java bindings target Java
-7 features; tests default to source/target 8 for recent JDKs.
+7 features; tests use the compiler’s default source/target settings. Java required
+numeric/bool fields and fixed numeric/bool arrays use primitive types;
+optional scalars remain boxed to represent absence. Packed numeric/bool
+sequences use primitive arrays (`short[]`, `float[]`, etc.), while repeated
+sequences and packed records/enums use lists. Packed complex sequences use
+`Complex32Array`/`Complex64Array` with primitive component arrays. Regenerate
+Java bindings and adapt list operations when migrating to this API.
 
 ```sh
 make test

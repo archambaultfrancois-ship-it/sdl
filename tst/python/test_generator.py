@@ -426,7 +426,7 @@ message Packet {
       source = JavaBackend(schema, 'fixture').generate()
       self.assertIn('public enum State implements SdlCodec.EnumValue', source)
       self.assertIn('public static final class Packet implements SdlCodec.Message', source)
-      self.assertIn('new Integer[]{Integer.valueOf(0),Integer.valueOf(0)}', source)
+      self.assertIn('new int[2]', source)
       self.assertIn('SdlCodec.Complex32Array points;', source)
       self.assertNotIn('->', source)
       self.assertNotIn('<>', source)
