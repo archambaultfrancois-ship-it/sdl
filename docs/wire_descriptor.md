@@ -39,6 +39,10 @@ Source whitespace and line breaks do not affect the catalogue. Dimension constan
 are resolved to decimal integers before rendering; the constants themselves are
 absent from the catalogue. A named dimension and the same literal dimension
 produce identical bytes and hashes.
+Integer constant expressions are evaluated before rendering. Type aliases are
+replaced by their ultimate built-in, message or enum targets; alias declarations
+and names are absent from the catalogue. Equivalent expanded schemas produce
+identical bytes and hashes.
 Ordinary block comments and retained `/** ... */` documentation are source-only;
 they are absent from the catalogue and cannot change its hash or binary layout.
 

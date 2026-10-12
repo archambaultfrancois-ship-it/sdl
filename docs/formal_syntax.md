@@ -39,8 +39,10 @@ not delimit declarations. `//` starts an ignored comment ending at the next newl
 `/* ... */` is an ignored block, and `/** ... */` is retained documentation.
 Blocks may span lines, do not nest and end at the first `*/`. Identifiers and numeric literals cannot be
 split by whitespace or comments, including a sign or exponent in a number.
+Signs on enum and wire-option literals must remain attached; signs in constant
+expressions are operators and may be separated from their operands.
 
-Braces delimit bodies; semicolons end fields, enum items, constants and the
+Braces delimit bodies; semicolons end fields, enum items, constants, aliases and the
 optional package declaration. Named message/enum declarations end with `}`.
 Several declarations can share one line, and fields or `wire(...)` clauses can
 span several lines. Syntax errors include the unexpected token's line and column.
@@ -50,7 +52,7 @@ they are forbidden in the compact runtime catalogue.
 Documentation is allowed at declaration boundaries. A block before a declaration
 documents that declaration; a block opening on the same line after a completed
 declaration instead documents the preceding one. These completions are `;` for
-fields, enum items, constants and packages, and `}` for named messages/enums.
+fields, enum items, constants, aliases and packages, and `}` for named messages/enums.
 Anonymous fields complete at their final semicolon. Documentation before a closing
 brace or at EOF without a declaration, or inside a declaration's tokens, is rejected.
 Package documentation describes the generated schema/module, and anonymous field
@@ -98,8 +100,13 @@ schema          = [ package ], { declaration } ;
 package         = "package", package_name, ";" ;
 package_name    = package_segment, { ".", package_segment } ;
 package_segment = ? ASCII letter followed by ASCII letters, digits or underscore ? ;
-declaration     = message | enumeration | constant ;
-constant        = "const", CONSTNAME, "=", INTEGER, ";" ;
+declaration     = message | enumeration | constant | type_alias ;
+constant        = "const", CONSTNAME, "=", expression, ";" ;
+expression      = product, { ( "+" | "-" ), product } ;
+product         = unary, { ( "*" | "/" ), unary } ;
+unary           = { "+" | "-" }, primary ;
+primary         = INTEGER | constant_ref | "(", expression, ")" ;
+type_alias      = "alias", CONSTNAME, "=", type, ";" ;
 message_keyword = "message" | "structure" | "struct" ;
 
 message         = message_keyword, NAME, "{",
@@ -127,15 +134,26 @@ The aliases `message`, `structure` and `struct` have exactly the same meaning.
 `7 : int32 x;`. Distinct word tokens still require a separator:
 `message Point` is valid, while `messagePoint` is a different identifier.
 
-Dimension constants are positive uint32 decimal literals declared at top level.
+Dimension constants are integer expressions declared at top level.
 They follow the same package lookup rules as types, can be referenced before
 being declared, and are substituted before validation and generation. Constant
 names cannot reuse a built-in type name or the complete logical name of another
-type/constant in the input set. No expressions or constant aliases are accepted.
+type/alias/constant in the input set. Expressions support decimal literals,
+constant references, unary signs, `+`, `-`, `*`, `/` and parentheses. Binary
+operators associate left to right, with standard arithmetic precedence. Division
+must be exact and its divisor nonzero. Each literal and intermediate result has
+magnitude at most uint32's maximum, and the final value is a positive uint32.
+Parentheses nest at most 64 levels. Missing references and cycles are rejected
+even when unused. Hexadecimal literals, digit separators and floats are forbidden.
 Constants are absent from generated bindings and catalogues; dimensions there
 remain numeric. See [dimension constants](schema.md#dimension-constants).
 
-A field type is a built-in type or a message/enum from the input schema set.
+A field type is a built-in type, message/enum or alias from the input schema set.
+Aliases resolve transitively to built-ins, messages or enums before validation
+and generation. They have no distinct runtime identity or generated native type;
+catalogues contain only their ultimate targets. Missing targets and cycles are
+rejected even in unused aliases. Aliases share the logical namespace and package
+lookup rules of types and constants. See [type aliases](schema.md#type-aliases).
 Unqualified references select the current package without global fallback;
 qualified references are absolute, and a leading dot selects the global package.
 Forward references and references between files are allowed. There are no import
@@ -203,7 +221,7 @@ Whitespace can separate `wire`, `(`, keys, `=`, values and commas, including
 newlines. Keys may appear in any order, but each key can appear only once. An
 empty clause, a trailing comma or an unknown key is invalid. The quantum is a
 single numeric literal without internal whitespace and must convert to a finite
-positive binary64 number. Dimension constants are used only in array brackets;
+positive binary64 number. Dimension constants are used in array brackets and other constants;
 wire options still require their literal values.
 
 | Option | Validity condition |

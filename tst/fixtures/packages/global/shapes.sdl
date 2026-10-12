@@ -3,5 +3,8 @@ enum State {
    ONE = 1;
 }
 message Point {
-   int32 x;
+   Coordinate x;
 }
+alias Coordinate = int32;
+alias GlobalPosition = Point;
+const BASE_POINT_COUNT = 1;

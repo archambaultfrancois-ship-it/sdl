@@ -28,7 +28,7 @@ bytes, and hashes. The compact canonical SDL2 catalogue omits the declaration ke
 of the source spelling.
 
 Whitespace, including newlines, separates tokens without delimiting declarations.
-Braces delimit message and enum bodies; fields, enum items, packages and constants
+Braces delimit message and enum bodies; fields, enum items, packages, aliases and constants
 end with semicolons. Several declarations may share a line, and a field or
 `wire(...)` clause may span several lines. Whitespace is also allowed around
 punctuation, for example `1 : fl32 [ 3 ] coords;` and `wire ( bits = 12 )`.
@@ -78,11 +78,11 @@ block opening on the same line after a completed declaration documents that
 preceding declaration, even if the block spans additional lines. On a shared
 line this trailing rule takes precedence: `int32 x; /** X */ int32 y;` documents
 `x`. For a leading comment on `y`, put the block on a new line. Field, enum item,
-constant and package declarations complete at `;`; named message and enum
+constant, alias and package declarations complete at `;`; named message and enum
 declarations complete at `}`. An anonymous message field completes at its field
 name and semicolon, for example `} metadata; /** Metadata */`.
 
-Documentation can describe packages, constants, messages, fields, enums and enum
+Documentation can describe packages, constants, aliases, messages, fields, enums and enum
 values. An anonymous field's documentation also describes its generated message
 type. Leading `*` decorations on continuation lines are optional; indentation is
 normalized while preserving paragraphs. Multiple associated blocks are combined
@@ -99,7 +99,7 @@ position. Empty documentation blocks are accepted.
 | Ada | Comments in package specifications |
 | Matlab/Octave | Function help text containing type, field and enum-value documentation |
 
-Constants remain substituted rather than emitted as native values. Their
+Constants and aliases remain substituted rather than emitted as native values or types. Their
 documentation appears in the generated schema/module documentation. A
 documentation-only Matlab schema produces an empty `sdl_schema_doc_<file>`
 function for `help`; its name is disambiguated if another generated type uses it.
@@ -108,7 +108,7 @@ the wire catalogue, affects its hash or changes binary encoding.
 
 ## Packages and type references
 
-A file may start with one package declaration, before any message, enum or constant:
+A file may start with one package declaration, before any message, enum, alias or constant:
 
 ```sdl
 package navigation.geometry;
@@ -388,13 +388,19 @@ package acquisition;
 
 const CHANNELS = 16;
 const AXES = 3;
+const TOTAL = CHANNELS * AXES;
 
 message Capture { fl32[CHANNELS][AXES] samples; }
+message FlatCapture { fl32[TOTAL] samples; }
 ```
 
-The syntax is `const NAME = VALUE;`, where VALUE is a positive ASCII decimal
-integer from 1 through 4294967295. Leading zeros are decimal. Expressions,
-aliases to other constants and floating values are not supported. Constant
+The syntax is `const NAME = EXPRESSION;`. Expressions accept ASCII decimal
+integer literals, constant references, `+`, `-`, `*`, `/`, parentheses and unary
+`+`/`-`. Leading zeros are decimal. Multiplication and division take precedence
+over addition and subtraction; binary operators associate left to right. Unary
+signs take precedence over binary operators. Division must be exact: `6/2` is
+valid, while `3/2` and division by zero are errors. Floating literals, hexadecimal
+notation, digit separators and other operators are not supported. Constant
 names start with a word character other than a digit and continue with word
 characters; ASCII letters and underscores are recommended for portability.
 Constants are allowed anywhere among top-level declarations after the optional
@@ -404,7 +410,25 @@ or enum, or reuse built-in type names.
 Constants follow the package rules for types: `AXES` selects the current package,
 `other.AXES` selects an external package, and `.AXES` selects the global package.
 References resolve across the entire input set, without imports or an implicit
-global fallback. Constants and types share the top-level logical namespace;
+global fallback. Constant references can themselves appear in expressions,
+including forward references and references between files:
+
+```sdl
+const ROWS = (other.CHANNELS + 2) / 2;
+const COPY = ROWS;
+const TOTAL = ROWS * .AXES;
+```
+
+Every constant must evaluate to an integer from 1 through 4294967295. Intermediate
+results may be zero or negative, but each literal and intermediate result must
+have magnitude at most 4294967295; overflow is rejected even if later operations
+would bring the value back into range. Expressions allow at most 64 nested pairs
+of parentheses. Cycles and unresolved references are errors, even in unused
+constants. Arithmetic is evaluated with integers, without floating-point rounding.
+Expressions are allowed in constant declarations; array brackets still accept
+a literal dimension or a constant reference, and `wire(...)` values remain literals.
+
+Constants, aliases and types share the top-level logical namespace;
 duplicate complete names are rejected even when the values are identical.
 
 Constants are substituted before checking fixed-size constraints or generating
@@ -414,6 +438,40 @@ constant or changing whitespace does not change the catalogue, hash or generated
 bindings when the resolved dimensions stay the same. Existing dimension and
 array-size limits apply after substitution. The runtimes still receive only
 numeric dimensions.
+
+## Type aliases
+
+An alias names an existing type for use in SDL source:
+
+```sdl
+package acquisition;
+
+alias Timestamp = uint64;
+alias Position = navigation.geometry.Point;
+alias Place = Position;
+
+message Measurement { Timestamp acquired_at; Place position; }
+```
+
+The syntax is `alias NAME = TYPE;`. The target can be a built-in type, message,
+enum or another alias. Aliases follow the same package lookup rules as types:
+short references select the current package, qualified references are absolute,
+and `.Point` explicitly selects the global type. Forward references and alias
+chains across files are allowed without imports. Names follow the same naming
+rules as constants and cannot collide with a type, constant or another alias.
+An alias must follow the optional package declaration and appear at top level.
+
+Aliases are transparent source substitutions. Fields resolve to the ultimate
+type before checking wire options, fixed-array sizes, message cycles and file
+dependencies. They introduce no additional runtime identity, generated native
+type or catalogue entry: `Timestamp` above becomes `uint64`, and `Place` becomes
+`navigation.geometry.Point`. Renaming or adding an undocumented alias does not
+affect generated code or catalogue hashes for an otherwise identical input set.
+Documentation on an alias is retained in the generated schema/module documentation.
+
+Alias cycles and unknown targets are errors even when unused. A constant cannot
+be an alias target; array dimensions and inline message definitions are specified
+on fields rather than inside an alias declaration.
 
 ## Current target support
 

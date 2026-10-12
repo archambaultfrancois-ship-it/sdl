@@ -207,6 +207,90 @@ class Enum:
       self.value_docs = {}
 
 
+class Alias:
+   def __init__(self, name, target):
+      self.name = name
+      self.target = target
+      self.doc = ''
+
+
+_ConstantExpression = namedtuple('_ConstantExpression', 'items')
+
+
+def _resolve_declarations(declarations, dependencies, evaluate, label):
+   """Resolve a declaration graph without depending on Python recursion depth."""
+   values, active = {}, set()
+   for root in declarations:
+      pending = [(root, False)]
+      while pending:
+         name, ready = pending.pop()
+         if name in values:
+            continue
+         if ready:
+            values[name] = evaluate(name, declarations[name], values)
+            active.remove(name)
+            continue
+         if name in active:
+            raise ValueError('cyclic ' + label + ' dependency involving ' + name)
+         if name not in declarations:
+            raise ValueError('unknown ' + label + ' ' + name)
+         active.add(name)
+         pending.append((name, True))
+         pending.extend((dependency, False) for dependency in dependencies(declarations[name]))
+   return values
+
+
+def _resolve_constants(constants):
+   def dependencies(expression):
+      return [item[1] for item in expression.items if isinstance(item, tuple)] if isinstance(expression, _ConstantExpression) else []
+
+   def evaluate(name, expression, values):
+      stack = []
+      for item in expression.items if isinstance(expression, _ConstantExpression) else (expression,):
+         if isinstance(item, int):
+            value = item
+         elif isinstance(item, tuple):
+            value = values[item[1]]
+         elif item in ('u+', 'u-'):
+            value = stack.pop() * (-1 if item == 'u-' else 1)
+         else:
+            right, left = stack.pop(), stack.pop()
+            if item == '+':
+               value = left + right
+            elif item == '-':
+               value = left - right
+            elif item == '*':
+               value = left * right
+            else:
+               if right == 0:
+                  raise ValueError('division by zero in dimension constant ' + name)
+               if left % right:
+                  raise ValueError('non-integer division in dimension constant ' + name)
+               value = left // right
+         if abs(value) > 0xFFFFFFFF:
+            raise ValueError('dimension constant arithmetic exceeds uint32 magnitude: ' + name)
+         stack.append(value)
+      value = stack.pop()
+      if not 1 <= value <= 0xFFFFFFFF:
+         raise ValueError('dimension constant must be a positive uint32: ' + name)
+      return value
+
+   return _resolve_declarations(constants, dependencies, evaluate, 'dimension constant')
+
+
+def _resolve_aliases(aliases, messages, enums, builtins):
+   def dependencies(alias):
+      return [alias.target] if alias.target in aliases else []
+
+   def evaluate(name, alias, values):
+      target = values.get(alias.target, alias.target)
+      if target not in builtins and target not in messages and target not in enums:
+         raise ValueError('unknown type ' + target + ' in alias ' + name)
+      return target
+
+   return _resolve_declarations(aliases, dependencies, evaluate, 'type alias')
+
+
 _SourceToken = namedtuple('_SourceToken', 'text line column kind end_line', defaults=('symbol', None))
 _SOURCE_TOKENS = re.compile(
    r'(?P<space>\s+)|(?P<comment>//[^\r\n]*)|'
@@ -242,6 +326,10 @@ def schema_documentation(schema):
       for name, text in schema.constant_docs.items() if text]
    if constants:
       parts.append('Dimension constants:\n\n' + '\n\n'.join(constants))
+   aliases = [alias.name + ' = ' + alias.target + '\n' + alias.doc
+      for alias in schema.aliases.values() if alias.doc]
+   if aliases:
+      parts.append('Type aliases:\n\n' + '\n\n'.join(aliases))
    return '\n\n'.join(parts)
 
 
@@ -438,22 +526,75 @@ class _SourceParser:
          message.fields.append(field)
       self.take()
 
-   def constant(self):
-      self.take()
-      label = 'invalid dimension constant declaration'
+   def declaration_name(self, label):
       name = self.name(label)
       if not re.fullmatch(r'[^\W\d]\w*', name):
          self.fail(label)
       if name in self.schema.BUILTINS:
-         self.fail('dimension constant name conflicts with built-in type: ' + name)
-      if name in self.schema.constants or name in self.schema.messages or name in self.schema.enums:
+         self.fail('declaration name conflicts with built-in type: ' + name)
+      if any(name in table for table in (self.schema.constants, self.schema.aliases,
+            self.schema.messages, self.schema.enums)):
          self.fail('duplicate declaration name: ' + name)
+      return name
+
+   def constant_expression(self):
+      output, operators = [], []
+      precedence = {'+': 1, '-': 1, '*': 2, '/': 2, 'u+': 3, 'u-': 3}
+      operand = True
+      depth = 0
+      while self.peek().text != ';':
+         token = self.raw_peek()
+         # The shared lexer retains signed literals for enums and wire clauses.
+         # In expressions a sign is an operator, including in compact "N+1".
+         if token.kind != 'doc' and re.fullmatch(r'[+-][0-9].*', token.text):
+            self.pending.popleft()
+            self.pending.appendleft(token._replace(text=token.text[1:], column=token.column + 1))
+            self.pending.appendleft(token._replace(text=token.text[0]))
+         text = self.peek().text
+         if operand:
+            if text in ('+', '-'):
+               operators.append('u' + self.take())
+            elif text == '(':
+               self.take()
+               operators.append('(')
+               depth += 1
+               if depth > MAX_SCHEMA_NESTING:
+                  self.fail('constant expression nesting exceeds 64 levels')
+            elif re.fullmatch(r'[0-9]+', text):
+               output.append(int(self.take()))
+               operand = False
+            elif re.fullmatch(r'[^\W\d]\w*', text) or text == '.':
+               output.append(('ref', self.reference('invalid dimension constant reference')))
+               operand = False
+            else:
+               self.fail('invalid dimension constant expression')
+         elif text in ('+', '-', '*', '/'):
+            operator = self.take()
+            while operators and operators[-1] != '(' and precedence[operators[-1]] >= precedence[operator]:
+               output.append(operators.pop())
+            operators.append(operator)
+            operand = True
+         elif text == ')' and depth:
+            self.take()
+            while operators[-1] != '(':
+               output.append(operators.pop())
+            operators.pop()
+            depth -= 1
+         else:
+            self.fail('invalid dimension constant expression')
+      if operand or depth:
+         self.fail('invalid dimension constant expression')
+      output.extend(reversed(operators))
+      return output[0] if len(output) == 1 and isinstance(output[0], int) else _ConstantExpression(tuple(output))
+
+   def constant(self):
+      self.take()
+      label = 'invalid dimension constant declaration'
+      name = self.declaration_name(label)
       self.expect('=', label)
-      value = self.take()
-      if not re.fullmatch(r'[0-9]+', value) or not 1 <= int(value) <= 0xFFFFFFFF:
-         self.fail('dimension constant must be a positive uint32: ' + name)
+      value = self.constant_expression()
       self.expect(';', label)
-      self.schema.constants[name] = int(value)
+      self.schema.constants[name] = value
       return name
 
    def parse(self):
@@ -466,7 +607,7 @@ class _SourceParser:
             return
          if keyword == 'package':
             label = 'invalid, duplicate or misplaced package declaration'
-            if package_seen or self.schema.messages or self.schema.enums or self.schema.constants:
+            if package_seen or self.schema.messages or self.schema.enums or self.schema.constants or self.schema.aliases:
                self.fail(label)
             self.take()
             package = self.reference(label)
@@ -479,13 +620,22 @@ class _SourceParser:
          elif keyword == 'const':
             name = self.constant()
             self.schema.constant_docs[name] = self.finish_documentation(docs)
+         elif keyword == 'alias':
+            self.take()
+            label = 'invalid type alias declaration'
+            name = self.declaration_name(label)
+            self.expect('=', label)
+            alias = Alias(name, self.reference(label))
+            self.expect(';', label)
+            alias.doc = self.finish_documentation(docs)
+            self.schema.aliases[name] = alias
          elif keyword in ('enum', 'message', 'structure', 'struct'):
             self.take()
             name = self.name('unexpected SDL statement: ' + keyword)
             self.expect('{', 'unexpected SDL statement: ' + keyword + ' ' + name)
             if name in self.schema.messages or name in self.schema.enums:
                self.fail('duplicate type name: ' + name)
-            if name in self.schema.constants:
+            if name in self.schema.constants or name in self.schema.aliases:
                self.fail('duplicate declaration name: ' + name)
             if keyword == 'enum':
                enumeration = Enum(name)
@@ -529,6 +679,7 @@ class MsgParser:
       self.enums = TypeTable()
       self.messages = TypeTable()
       self.constants = TypeTable()
+      self.aliases = TypeTable()
       self.constant_docs = {}
       self.doc = ''
       self.message_order = []
@@ -549,18 +700,22 @@ class MsgParser:
          if name in self.BUILTINS or '.' in name or not self.package:
             return name
          return self.package + '.' + name
-      for table in (self.messages, self.enums):
+      for table in (self.messages, self.enums, self.aliases):
          declarations = list(table.values())
          table.clear()
          for declaration in declarations:
             if declaration.name in self.BUILTINS:
                raise ValueError('type name conflicts with built-in type: ' + declaration.name)
             declaration.name = qualify(declaration.name)
+            if isinstance(declaration, Alias):
+               declaration.target = qualify(declaration.target)
             table[declaration.name] = declaration
       self.message_order = [qualify(name) for name in self.message_order]
       constants = list(self.constants.items())
       self.constants.clear()
-      self.constants.update((qualify(name), value) for name, value in constants)
+      self.constants.update((qualify(name), _ConstantExpression(tuple(
+         ('ref', qualify(item[1])) if isinstance(item, tuple) else item for item in value.items))
+         if isinstance(value, _ConstantExpression) else value) for name, value in constants)
       self.constant_docs = {qualify(name): doc for name, doc in self.constant_docs.items()}
       for message in self.messages.values():
          for field in message.fields:
@@ -636,7 +791,19 @@ class MsgParser:
          visit(name, 0)
       self.message_order = ordered
 
-   def validate(self):
+   def validate(self, source_resolved=False):
+      # parse_schemas resolves the whole input set before validating individual files.
+      if not source_resolved:
+         constants = dict(self.constants.external or {})
+         constants.update(self.constants)
+         self.constants.update((name, value) for name, value in _resolve_constants(constants).items()
+            if dict.__contains__(self.constants, name))
+         aliases = dict(self.aliases.external or {})
+         aliases.update(self.aliases)
+         targets = _resolve_aliases(aliases, self.messages, self.enums, self.BUILTINS)
+         for message in self.messages.values():
+            for field in message.fields:
+               field.type_name = targets.get(field.type_name, field.type_name)
       self._resolve_dimensions()
       if len(self.constants) > 0xFFFF:
          raise ValueError('too many dimension constants in schema')
@@ -793,6 +960,7 @@ def parse_schemas(input_path):
    parsed = []
    seen_type_names = set()
    seen_constant_names = set()
+   seen_alias_names = set()
    seen_symbols = set()
    seen_bases = set()
    for schema_path in schema_paths:
@@ -806,33 +974,45 @@ def parse_schemas(input_path):
          raise ValueError('SDL filenames map to the same identifier: ' + identifier)
       seen_bases.add(identifier)
       for name in list(parser.enums) + list(parser.messages):
-         if name in seen_constant_names:
+         if name in seen_constant_names or name in seen_alias_names:
             raise ValueError('duplicate declaration name across SDL files: ' + name)
          symbol = c_identifier(name).upper()
          if name in seen_type_names or symbol in seen_symbols:
             raise ValueError('duplicate type name across SDL files: ' + name)
          seen_type_names.add(name)
          seen_symbols.add(symbol)
+      for name in parser.aliases:
+         if name in seen_type_names or name in seen_constant_names or name in seen_alias_names:
+            raise ValueError('duplicate declaration name across SDL files: ' + name)
+         seen_alias_names.add(name)
       for name in parser.constants:
-         if name in seen_type_names or name in seen_constant_names:
+         if name in seen_type_names or name in seen_constant_names or name in seen_alias_names:
             raise ValueError('duplicate declaration name across SDL files: ' + name)
          seen_constant_names.add(name)
       parsed.append((base_name, identifier, parser))
    messages = {name: message for _, _, schema in parsed for name, message in schema.messages.items()}
    enums = {name: enum for _, _, schema in parsed for name, enum in schema.enums.items()}
    constants = {name: value for _, _, schema in parsed for name, value in schema.constants.items()}
+   aliases = {name: alias for _, _, schema in parsed for name, alias in schema.aliases.items()}
+   constants = _resolve_constants(constants)
+   alias_targets = _resolve_aliases(aliases, messages, enums, MsgParser.BUILTINS)
    owners = {name: (schema.package, base) for base, _, schema in parsed
       for name in list(schema.messages) + list(schema.enums)}
    for base, _, schema in parsed:
       schema.messages.external = messages
       schema.enums.external = enums
       schema.constants.external = constants
+      schema.constants.update((name, constants[name]) for name in schema.constants)
+      schema.aliases.external = aliases
       schema.type_owners = owners
+      for message in schema.messages.values():
+         for field in message.fields:
+            field.type_name = alias_targets.get(field.type_name, field.type_name)
    # Resolve every file before validating any cross-file message dependency.
    for _, _, schema in parsed:
       schema._resolve_dimensions()
    for _, _, schema in parsed:
-      schema.validate()
+      schema.validate(source_resolved=True)
    return parsed
 
 

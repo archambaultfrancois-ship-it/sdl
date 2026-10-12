@@ -40,6 +40,10 @@ resolve only in the current package. See [packages](docs/schema.md#packages-and-
 Declarations and fields can share lines or span several lines. Top-level
 `const AXES = 3;` declarations can name fixed-array dimensions such as `fl32[AXES]`;
 the generator substitutes numeric dimensions before emitting code or catalogues.
+Constants accept integer expressions such as `const TOTAL = CHANNELS * AXES;`.
+Transparent type aliases such as `alias Timestamp = uint64;` resolve to their
+target before generation. Both support references across packages and files.
+See [constants](docs/schema.md#dimension-constants) and [aliases](docs/schema.md#type-aliases).
 `/* ... */` blocks are ignored, while `/** ... */` documentation is retained in
 the six generated languages. Documentation can precede declarations or follow
 their terminator on the same line. See [comments](docs/schema.md#comments-and-generated-documentation).

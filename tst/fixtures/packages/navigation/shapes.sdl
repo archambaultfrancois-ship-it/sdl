@@ -5,19 +5,24 @@ package navigation.geometry;
 enum State { ZERO = 0; /** Inactive. */ ONE = 1; /** Active. */ }
 /** Point coordinates. Quotes "x"; escaped text \u002a\u002f. */
 message Point { int32 x; /** Position along the axis. */ State state; }
+alias LocalPoint = Point;
+alias GlobalPoint = .GlobalPosition;
+alias RemotePoint = radio.Position;
+alias Status = State;
+alias Diagnostic = .Coordinate;
 /** Sample containing global, local and foreign points. */
 message Sample {
-   Point local; /** Local point. */
-   .Point global_point;
-   radio.Point remote;
-   State state;
+   LocalPoint local; /** Local point. */
+   GlobalPoint global_point;
+   RemotePoint remote;
+   Status state;
    .State global_state;
    radio.State remote_state;
    /** Fixed array of local points. */
-   Point [ POINT_COUNT ] points;
-   packed radio.Point remote_points;
+   LocalPoint [ POINT_COUNT ] points;
+   packed RemotePoint remote_points;
    optional struct {
-      State state; int32 code; /** Diagnostic code. */
+      Status state; Diagnostic code; /** Diagnostic code. */
    } detail; /** Optional diagnostic. */
 }
-const POINT_COUNT = 2; /** Number of points in the fixed array. */
+const POINT_COUNT = (radio.POINT_COUNT + .BASE_POINT_COUNT) * 2 / 2; /** Number of points in the fixed array. */

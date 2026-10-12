@@ -69,9 +69,9 @@ message Root {
       self.assertEqual(canonical_type_descriptor(first), canonical_type_descriptor(second))
 
    def test_invalid_constant_declarations(self):
-      for source in ('const N=0;', 'const N=-1;', 'const N=+1;', 'const N=1.5;',
+      for source in ('const N=0;', 'const N=-1;', 'const N=1.5;',
             'const N=1e2;', 'const N=4294967296;', 'const N=٢;', 'const 2N=2;',
-            'const N=OTHER;', 'const N=1+1;', 'const N=2', 'const N 2;',
+            'const N=OTHER;', 'const N=2', 'const N 2;',
             'const int32=2;', 'message X { const N=2; }', 'const N=2; package nav;'):
          with self.subTest(source=source), self.assertRaises(ValueError):
             self.parse(source)
