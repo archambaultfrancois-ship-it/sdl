@@ -1,4 +1,5 @@
 function run_tests()
+test_auto_fixed();
 for id=[uint32(0),uint32(hex2dec('89abcdef')),uint32(4294967295)]
  wire=sdl_matlab_runtime('pack_envelope',id,uint8([1 0]));
  [received,payload]=sdl_matlab_runtime('unpack_envelope',wire);
@@ -76,4 +77,39 @@ fprintf('Matlab/Octave SDL2 fixtures, catalogues, evolution and malformed input 
 end
 function must_fail(f)
 failed=false;try,f();catch,failed=true;end;assert(failed,'invalid input accepted');
+end
+function test_auto_fixed()
+ctx=sdl_matlab_runtime('prepare',AutoBatch('description'),{'AutoBatch'});
+assert(ctx.fixed_codecs('AutoRecord')==ctx.fixed_enabled&&ctx.fixed_codecs('AutoPoint')==ctx.fixed_enabled&&~ctx.fixed_codecs('AutoBatch'));
+r=AutoRecord('new');r.id=uint32(hex2dec('01020304'));r.point.coordinates=single([1.25;-2.5]);
+r.point.code=int16(-123);r.point.state=int32(-7);r.point.enabled=true;
+r.grid=reshape(int16([-1,2,-3,4,-5,6]),[3,2]);
+m=AutoBatch('new');m.label='x';m.records={r;r};m.samples={int16(-1);int16(2);int16(-3)};
+f=fopen('tst/fixtures/auto_fixed.bin','rb');wire=fread(f,Inf,'*uint8');fclose(f);
+assert(isequal(AutoBatch('encode',ctx,m),wire));assert(isequal(AutoBatch('decode',ctx,wire),m));
+root=[uint8(4);wire(5:35)];assert(isequal(AutoRecord('encode',ctx,r),root));assert(isequal(AutoRecord('decode',ctx,root),r));
+generic=ctx;generic.fixed_enabled=false;names=keys(generic.fixed_codecs);
+generic.fixed_codecs=containers.Map(names,num2cell(false(size(names))));
+assert(isequal(AutoBatch('encode',generic,m),wire));assert(isequal(AutoBatch('decode',generic,wire),m));
+badvalue=m;badvalue.samples={int16([1,2])};must_fail(@() AutoBatch('encode',ctx,badvalue));
+o=AutoOptional('new');o.record=r;o.tail=uint8(9);
+assert(isequal(AutoOptional('decode',ctx,AutoOptional('encode',ctx,o)),o));
+o.record=[];assert(isequal(AutoOptional('decode',ctx,AutoOptional('encode',ctx,o)),o));
+for n=0:numel(wire)-1,must_fail(@() AutoBatch('decode',ctx,wire(1:n)));end
+bad=wire;bad(23)=2;must_fail(@() AutoBatch('decode',ctx,bad));
+bad=wire;bad(22)=1;must_fail(@() AutoBatch('decode',ctx,bad));
+remote=strrep(AutoBatch('description'),'3:int16[2][3]:grid;','');
+older=sdl_matlab_runtime('prepare',remote,{'AutoBatch'});assert(~older.fixed_codecs('AutoRecord'));
+p=AutoRecord('decode',older,root(1:20));assert(isequal(p.grid,zeros(3,2,'int16'))&&p.point.code==-123);
+% Older generated modules have no fixed_size action and must remain usable.
+folder=tempname;mkdir(folder);cleanup=onCleanup(@() remove_legacy_fixed(folder)); %#ok<NASGU>
+source=fileread(which('AutoRecord'));source=strrep(source,'case ''fixed_size''','case ''unavailable_fixed_size''');
+f=fopen(fullfile(folder,'AutoRecord.m'),'w');fwrite(f,source);fclose(f);
+addpath(folder,'-begin');clear AutoRecord;
+legacy=sdl_matlab_runtime('prepare',AutoBatch('description'),{'AutoBatch'});
+assert(~legacy.fixed_codecs('AutoRecord'));
+assert(isequal(AutoBatch('encode',legacy,m),wire));assert(isequal(AutoBatch('decode',legacy,wire),m));
+end
+function remove_legacy_fixed(folder)
+rmpath(folder);clear AutoRecord;rmdir(folder,'s');
 end

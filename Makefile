@@ -130,6 +130,9 @@ bench-python-buffers: $(GENERATED_DIR)/.stamp
 bench-python: $(GENERATED_DIR)/.stamp
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) tst/python/bench.py
 
+bench-python-fixed: $(GENERATED_DIR)/.stamp
+	PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) tst/python/bench_fixed.py
+
 test-matlab: $(GENERATED_DIR)/.stamp
 	$(RUN_TEST) env $(matlab_run)
 
@@ -143,6 +146,13 @@ matlab-mex: $(GENERATED_DIR)/.stamp
 
 bench-matlab: $(GENERATED_DIR)/.stamp
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(matlab_bench_run)
+
+bench-matlab-fixed: $(GENERATED_DIR)/.stamp
+ifeq ($(matlab_available),yes)
+	$(matlab) $(MATLAB_FLAGS) -r "try, addpath('$(matlab_generated_dir)'); addpath('tst/matlab'); bench_fixed; catch err, disp(getReport(err, 'extended')); exit(1); end; exit(0)"
+else
+	$(OCTAVE) --quiet --no-gui --eval "addpath('$(matlab_generated_dir)'); addpath('tst/matlab'); bench_fixed"
+endif
 
 bench-java: $(GENERATED_DIR)/.stamp
 	mkdir -p $(JAVA_TEST_CLASSES)
@@ -189,7 +199,14 @@ test-ada: build/ada/sdl_ada_tests
 bench-ada: build/ada/sdl_ada_bench
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) ./build/ada/sdl_ada_bench
 
-.PHONY: test-ada bench-ada
+build/ada/sdl_ada_bench_fixed: tst/ada/bench_fixed.adb $(wildcard runtime/ada/*.ad?) $(GENERATED_DIR)/.stamp $(ADA_C_OBJECTS)
+	mkdir -p build/ada
+	PATH="$(GNAT_HOME)/bin:$(PATH)" $(GNATMAKE) $(ADA_FLAGS) -Iruntime/ada -I$(ADA_GENERATED_DIR) -D build/ada -o $@ $< -largs $(ADA_C_OBJECTS) -lm
+
+bench-ada-fixed: build/ada/sdl_ada_bench_fixed
+	./build/ada/sdl_ada_bench_fixed
+
+.PHONY: test-ada bench-ada bench-ada-fixed bench-matlab-fixed bench-python-fixed
 
 .PHONY: test-representation
 test-representation:

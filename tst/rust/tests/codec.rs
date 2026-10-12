@@ -9,6 +9,34 @@ use sdl_schema_tests::wire_example::Packet;
 const FIXTURE: &[u8] = include_bytes!("../../fixtures/packet.bin");
 
 #[test]
+fn automatic_fixed_records_without_packed_clause() {
+    use sdl_schema_tests::auto_fixed::{AutoBatch, AutoPoint, AutoRecord, AutoState};
+    use sdl_runtime::WireValue;
+    let record = AutoRecord { id: 0x01020304,
+        point: AutoPoint { coordinates: [1.25, -2.5], code: -123,
+            state: AutoState::Negative, enabled: true }, grid: [[-1,2,-3],[4,-5,6]] };
+    let value = AutoBatch { label: "x".into(), records: vec![record.clone(), record.clone()], samples: vec![-1,2,-3] };
+    let text = AutoBatch::DESCRIPTOR;
+    let types = [AutoBatch::type_info(), AutoRecord::type_info()];
+    let ctx = prepare(text, &types).unwrap();
+    let oracle = include_bytes!("../../fixtures/auto_fixed.bin");
+    assert_eq!(AutoRecord::FIXED_SIZE, Some(31));
+    assert_eq!(encode(&ctx, &value).unwrap(), oracle);
+    assert_eq!(decode::<AutoBatch>(&ctx, oracle).unwrap(), value);
+    let mut root = vec![4]; root.extend_from_slice(&oracle[4..35]);
+    assert_eq!(encode(&ctx, &record).unwrap(), root);
+    assert_eq!(decode::<AutoRecord>(&ctx, &root).unwrap(), record);
+    for end in 0..oracle.len() { assert!(decode::<AutoBatch>(&ctx, &oracle[..end]).is_err()); }
+    for (offset, byte) in [(22, 2), (21, 1)] {
+        let mut bad = oracle.to_vec(); bad[offset] = byte;
+        assert!(decode::<AutoBatch>(&ctx, &bad).is_err());
+    }
+    let evolved = prepare(&text.replace("3:int16[2][3]:grid;", ""), &types).unwrap();
+    root.truncate(20);
+    assert_eq!(decode::<AutoRecord>(&evolved, &root).unwrap().grid, [[0;3];2]);
+}
+
+#[test]
 fn directional_compatibility() {
     let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/compatibility");
     for line in include_str!("../../fixtures/compatibility/cases.tsv").lines() {

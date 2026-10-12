@@ -251,6 +251,31 @@ values. `decode_any(ctx, bytes)` dispatches to registered `TypeInfo` entries;
 its `TypedMessage` exposes the logical name and a boxed value to downcast.
 `display(value, indent_width)` remains independent of wire contexts.
 
+## Automatic fixed-layout codecs
+
+The runtimes detect fixed-size records without requiring a `packed` declaration.
+A record is fixed-size when every field is required and has a fixed-size type;
+nested records, enums and fixed arrays are included. A supported fixed root is
+handled as a whole, and variable parents can use fixed codecs for their children.
+`repeated` fixed-size elements are eligible as well. The declaration, wire bytes
+and generated field types stay unchanged; explicit `packed` can still select a
+different public array representation in Java and MATLAB.
+
+C prepares flattened record plans, Rust and Java generate fixed record codecs,
+and Python prepares native or `Struct` codecs. Ada also selects direct codecs
+for fixed records, repeated fixed elements and parents containing eligible
+records. MATLAB/Octave generate fixed record codecs and convert repeated
+primitive values in bulk while retaining ordinary structs, arrays and cells.
+MATLAB fixed generated codecs are limited to records of at most 65,536 bytes;
+larger records retain the ordinary reader and writer.
+
+Decoding selects these paths only when the relevant remote and local layouts
+match. Schema evolution retains generic handling where needed. Wire
+representation options retain the existing representation-aware paths.
+To compare the added paths with generic handling, use Ada's
+`Prepare (Use_Direct => False)` or `SDL_MATLAB_NO_FIXED=1` for MATLAB/Octave.
+See [fixed-codec benchmarks](benchmarks.md#automatic-fixed-codec-comparison).
+
 ## Python 3
 
 Put `runtime/python` and generated sources on `PYTHONPATH`.
@@ -272,6 +297,16 @@ raise `CodecError`. Nested generated classes are discovered from root types.
 `prepare(text)` suffices for `decode_dynamic`; its result has `type_name` and a
 `fields` dictionary. Text is `str` (UTF-8 bytes also accepted by preparation),
 and encoded data is `bytes`. `display(value, indent_width)` needs no context.
+
+With the optional native extension built (`make python-native`),
+`decode(ctx, data, packed='view')` returns immutable `PackedArray` views for
+supported `packed` fields instead of lists. For `bytes` input, these views
+retain the original buffer without copying the numeric payload. Mutable input
+is copied before validation. Indexing materializes one element; `tolist()`
+converts the entire array into ordinary Python objects. The default
+`decode(ctx, data)` continues to return lists and objects. See the
+[Python Packed buffer API](benchmarks.md#python-packed-buffer-api) for examples
+and supported layouts.
 
 ## Java 7+
 

@@ -49,6 +49,16 @@ case 'prepare'
   s.bindings(name)=binding;s.exact(name)=exact;
  end
  for k=1:numel(s.names),exact_type(s,s.names{k},{});end
+ s.fixed_enabled=~s.representation&&isempty(getenv('SDL_MATLAB_NO_FIXED'));
+ s.fixed_codecs=containers.Map();
+ for k=1:numel(s.names)
+  name=s.names{k};n=s.sizes(name);supported=false;
+  if s.fixed_enabled&&n>0&&n<=65536&&exact_type(s,name,{})
+   try,supported=feval(identifier(name),'fixed_size')==n;
+   catch err,if ~strcmp(err.identifier,'SDL:InvalidAction'),rethrow(err);end,end
+  end
+  s.fixed_codecs(name)=supported;
+ end
  s.native=[];s.native_id=uint64(0);s.native_name='';
  if s.mex&&isempty(getenv('SDL_MATLAB_MEX_PAYLOAD_ONLY'))&&numel(s.names)==1&&strcmp(s.names{1},'BenchPayload')&&isKey(s.local,'BenchPayload')
   local=s.local('BenchPayload');
@@ -89,6 +99,17 @@ case 'decode'
  varargout{1}=value;if nargout>1,varargout{2}=name;end
 case 'display'
  varargout{1}=evalc('disp(varargin{1})');
+case 'pack_fixed'
+ ctx=varargin{1};type=varargin{2};x=varargin{3};n=varargin{4};is_enum=varargin{5};
+ if numel(x)~=n,error('SDL:InvalidValue','fixed array dimensions');end
+ if iscell(x)&&any(~cellfun(@isscalar,x(:))),error('SDL:InvalidValue','scalar sequence elements required');end
+ if is_enum,e=ctx.enums(type);if iscell(x),values=cell2mat(x(:));else,values=x;end;if any(~ismember(values(:),e.values)),error('SDL:InvalidEnum','invalid enum');end,end
+ varargout{1}=pack_packed(type,x,is_enum);
+case 'unpack_fixed'
+ ctx=varargin{1};type=varargin{2};is_enum=varargin{4};
+ x=unpack_packed(type,varargin{3},is_enum);
+ if is_enum,e=ctx.enums(type);if any(~ismember(x(:),e.values)),error('SDL:InvalidEnum','invalid enum');end,end
+ varargout{1}=x;
 otherwise,error('SDL:InvalidAction','unknown action');
 end
 end
@@ -190,15 +211,18 @@ error('SDL:Malformed','invalid counter');
 end
 function b=write_message(ctx,name,value)
 if ~isKey(ctx.local,name)||~ctx.exact(name),error('SDL:SchemaMismatch','encoding requires emission catalogue');end
+if ctx.fixed_codecs(name),b=feval(identifier(name),'encode_fixed',ctx,value);return;end
 fields=ctx.messages(name);local=ctx.local(name);binding=ctx.bindings(name);parts=cell(numel(fields)*2,1);p=0;
 for k=1:numel(fields)
  f=fields{k};l=local{binding(k)};x=value.(l.name);
  if strcmp(f.modifier,'optional'),present=~isempty(x)||(strcmp(f.type,'string')&&ischar(x));p=p+1;parts{p}=count_bytes(present);if ~present,continue;end
  elseif any(strcmp(f.modifier,{'packed','repeated'}))
   if strcmp(l.modifier,'packed'),if isempty(l.terminal),n=numel(x);else,n=packed_length(x,l.terminal);end
-  else,n=numel(x);end
+  else,if ~iscell(x),error('SDL:InvalidValue','repeated fields require cells');end;n=numel(x);end
   p=p+1;parts{p}=count_bytes(n);
   if strcmp(l.modifier,'packed'),validate_packed_enums(ctx,l,x);payload=pack_packed_field(l,x,ctx.mex);
+  elseif ctx.fixed_enabled&&isempty(f.dims)&&~isKey(ctx.messages,f.type)&&fixed_size(ctx,f.type,{},0)>0
+   payload=sdl_matlab_runtime('pack_fixed',ctx,f.type,x,n,isKey(ctx.enums,f.type));
   else,items=cell(n,1);for j=1:n,items{j}=write_value(ctx,f.type,x{j},f.dims);end;payload=vertcat(items{:});end
   p=p+1;parts{p}=payload;continue
  end
@@ -335,6 +359,10 @@ end
 function [value,pos]=read_message(ctx,name,data,pos,depth,skip)
 if depth>64,error('SDL:Malformed','nesting too deep');end
 if ~skip&&~isKey(ctx.local,name),error('SDL:SchemaMismatch','unknown local message');end
+if ~skip&&ctx.fixed_codecs(name)
+ n=ctx.sizes(name);if n>numel(data)-pos+1,error('SDL:Malformed','truncated fixed record');end
+ value=feval(identifier(name),'decode_fixed',ctx,data(pos:pos+n-1));pos=pos+n;return
+end
 fields=ctx.messages(name);binding=ctx.bindings(name);local={};value=[];if ~skip,local=ctx.local(name);value=feval(identifier(name),'new');end
 for k=1:numel(fields)
  f=fields{k};n=1;if ~strcmp(f.modifier,'required'),[n,pos]=read_count(data,pos);end
@@ -350,6 +378,9 @@ for k=1:numel(fields)
     x=sdl_packed_mex('decode_c32',data,double(pos),double(n));
    else,x=unpack_packed_field(l,data(pos:pos+bytes-1));end
    validate_packed_enums(ctx,l,x);pos=pos+bytes;value.(l.name)=x;
+  elseif ~discard&&ctx.fixed_enabled&&strcmp(l.modifier,'repeated')&&isempty(f.dims)&&~isKey(ctx.messages,f.type)&&size>0
+   bytes=size*n;x=sdl_matlab_runtime('unpack_fixed',ctx,f.type,data(pos:pos+bytes-1),isKey(ctx.enums,f.type));
+   value.(l.name)=num2cell(x);pos=pos+bytes;
   else
    items=cell(n,1);for j=1:n,[items{j},pos]=read_value(ctx,f.type,f.dims,data,pos,depth+1,discard);end
    if ~discard

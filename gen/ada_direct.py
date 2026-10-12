@@ -11,7 +11,7 @@ class DirectCodecs:
       self.b = backend
       self.schema = backend.schema
       self.fixed = {}
-      self.packed = {}
+      self.bulk = {}
       self.direct = {}
       self.minimum = {}
       for name in self.schema.message_order:
@@ -20,10 +20,13 @@ class DirectCodecs:
          self.fixed[name] = sum(sizes) if all(f.modifier == 'required' and n is not None
             for f, n in zip(fields, sizes)) else None
          self.minimum[name] = sum(1 if f.modifier != 'required' else self.min_width(f.type_name, f.array_dimensions) for f in fields)
-         self.packed[name] = any(f.modifier == 'packed' or self.packed.get(f.type_name, False) for f in fields)
+         self.bulk[name] = any(
+            (f.modifier in ('packed', 'repeated') and n is not None) or
+            self.bulk.get(f.type_name, False) for f, n in zip(fields, sizes))
          # Scalar records need no dynamic tree or growable output buffer.
          # Runtime layout checks still guard schema evolution and wire options.
-         self.direct[name] = self.packed[name] or all(
+         self.direct[name] = self.fixed[name] is not None or self.bulk[name] or any(
+            self.direct.get(f.type_name, False) for f in fields) or all(
             f.modifier in ('required', 'optional') and f.type_name in WIDTHS
             for f in fields)
 

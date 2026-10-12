@@ -93,8 +93,9 @@ checks bool values, enums, UTF-8, canonical counters, truncation, lengths and
 trailing bytes during direct decoding or before generic typed materialization. Every temporary C dynamic tree is
 released on success or exception.
 
-Messages containing Packed fields, including through nested records, use generated
-Ada positional codecs when all reachable field IDs, types, cardinalities,
+Fixed-size messages, messages containing repeated fixed-size elements (with
+either `repeated` or `packed`), and parents containing eligible nested records
+use generated Ada positional codecs when all reachable field IDs, types, cardinalities,
 dimensions and enum value sets match the remote catalogue. Field and enum labels
 may change. Eligibility is cached during context preparation; a change inside a
 nested type disables the direct path for its parent messages.

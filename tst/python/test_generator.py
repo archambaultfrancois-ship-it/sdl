@@ -15,6 +15,29 @@ from ada_backend import AdaBackend, generate_ada
 
 
 class GeneratorValidationTests(unittest.TestCase):
+   def test_02_backend_automatic_fixed_codecs_without_packed(self):
+      from ada_direct import DirectCodecs
+      from matlab_backend import MatlabBackend
+      parser = MsgParser()
+      parser.parse_text((pathlib.Path(__file__).resolve().parents[2] / 'sdl/auto_fixed.sdl').read_text())
+      direct = DirectCodecs(AdaBackend(parser, 'auto_fixed'))
+      self.assertTrue(all(direct.direct.values()))
+      self.assertEqual(direct.fixed['AutoRecord'], 31)
+      self.assertTrue(direct.bulk['AutoBatch'])
+      matlab = MatlabBackend(parser)
+      fixed = matlab.generate_message('AutoRecord')
+      self.assertIn("case 'encode_fixed'", fixed)
+      self.assertIn("case 'decode_fixed'", fixed)
+      self.assertIn("b=zeros(31,1,'uint8')", fixed)
+      self.assertNotIn("case 'encode_fixed'", matlab.generate_message('AutoBatch'))
+      collisions = MsgParser()
+      collisions.parse_text('message sdl_fixed_encode {\n int16 value;\n}\n'
+         'message sdl_fixed_decode {\n sdl_fixed_encode child;\n}\n')
+      generated = MatlabBackend(collisions).generate_message('sdl_fixed_decode')
+      self.assertIn('function b=sdl_fixed_encode_(ctx,v)', generated)
+      self.assertIn('function v=sdl_fixed_decode_(ctx,b)', generated)
+      self.assertIn("value.child=sdl_fixed_encode('new')", generated)
+
    def test_02_backend_enum_leading_zeros_are_decimal_in_every_backend(self):
       import os
       import shlex

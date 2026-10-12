@@ -1,0 +1,25 @@
+// Fixed codecs must be selected without an explicit packed declaration.
+enum AutoState {
+   ZERO = 0;
+   NEGATIVE = -7;
+}
+message AutoPoint {
+   1: fl32[2] coordinates;
+   2: int16 code;
+   3: AutoState state;
+   4: bool enabled;
+}
+message AutoRecord {
+   1: uint32 id;
+   2: AutoPoint point;
+   3: int16[2][3] grid;
+}
+message AutoBatch {
+   1: string label;
+   2: repeated AutoRecord records;
+   3: repeated int16 samples;
+}
+message AutoOptional {
+   1: optional AutoRecord record;
+   2: uint8 tail;
+}

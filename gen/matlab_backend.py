@@ -3,6 +3,7 @@
 
 import os
 import re
+from math import prod
 
 from generator import (canonical_type_descriptor,
    clear_generated_outputs, parse_schemas)
@@ -24,6 +25,14 @@ def _quote(value):
 class MatlabBackend:
    def __init__(self, schema):
       self.schema = schema
+      symbols = {matlab_identifier(name) for name in list(schema.messages) + list(schema.enums)}
+      self.fixed_helpers = []
+      for action in ('encode', 'decode'):
+         name = 'sdl_fixed_' + action
+         while name in symbols:
+            name += '_'
+         symbols.add(name)
+         self.fixed_helpers.append(name)
 
    def generate_message(self, type_name):
       message = self.schema.messages[type_name]
@@ -61,6 +70,12 @@ class MatlabBackend:
       out.append("case 'description'\n varargout{1}=native2unicode(uint8(" + descriptor + "),'UTF-8');\n")
       out.append("case 'fields'\n varargout{1}=" + fields_meta + ";\n")
       out.append("case 'name'\n varargout{1}=" + _quote(type_name) + ";\n")
+      fixed_size = self.schema.fixed_wire_size(type_name)
+      fixed_size = fixed_size if fixed_size is not None and 0 < fixed_size <= 65536 else 0
+      out.append("case 'fixed_size'\n varargout{1}=" + str(fixed_size) + ";\n")
+      if fixed_size:
+         out.append("case 'encode_fixed'\n varargout{1}=" + self.fixed_helpers[0] + "(varargin{1},varargin{2});\n")
+         out.append("case 'decode_fixed'\n varargout{1}=" + self.fixed_helpers[1] + "(varargin{1},varargin{2});\n")
       if type_name == 'BenchPayload':
          out.append("case 'encode'\n ctx=varargin{1};value=varargin{2};\n if ctx.native_id~=0&&strcmp(ctx.native_name,'BenchPayload')&&ischar(value.header)&&isfloat(value.samples)\n  varargout{1}=sdl_packed_mex('encode',ctx.native_id,value);\n else,varargout{1}=sdl_matlab_runtime('encode',ctx," + _quote(type_name) + ",value);end\n")
          out.append("case 'decode'\n ctx=varargin{1};\n if ctx.native_id~=0&&strcmp(ctx.native_name,'BenchPayload')\n  data=varargin{2};if ~isa(data,'uint8'),data=uint8(data);end\n  varargout{1}=sdl_packed_mex('decode',ctx.native_id,data);\n else,varargout{1}=sdl_matlab_runtime('decode',ctx,varargin{2});end\n")
@@ -72,6 +87,57 @@ class MatlabBackend:
          out.append("case 'decode'\n varargout{1}=sdl_matlab_runtime('decode',varargin{1},varargin{2});\n")
       out.append("case 'display'\n varargout{1}=sdl_matlab_runtime('display',varargin{1});\n")
       out.append("otherwise, error('SDL:InvalidAction','unknown action');\nend\nend\n")
+      if fixed_size:
+         out.append(self._fixed_codec(type_name, fixed_size))
+      return ''.join(out)
+
+   def _fixed_codec(self, type_name, size):
+      """Flatten a fixed record without changing MATLAB struct/array shapes."""
+      out = []
+
+      def emit(name, dims, expr, decode, depth=0):
+         if name in self.schema.messages:
+            if dims:
+               shape = list(reversed(dims))
+               if len(shape) == 1:
+                  shape.append(1)
+               if decode:
+                  out.append(expr + '=repmat(struct(),[' + ' '.join(map(str, shape)) + ']);\n')
+               else:
+                  out.append("if numel(" + expr + ")~=" + str(prod(dims)) + ",error('SDL:InvalidValue','fixed array dimensions');end\n")
+               var = 'i' + str(depth)
+               out.append('for ' + var + '=1:' + str(prod(dims)) + '\n')
+               emit(name, (), expr + '(' + var + ')', decode, depth + 1)
+               out.append('end\n')
+               return
+            if not decode:
+               out.append("if ~isstruct(" + expr + ")||~isscalar(" + expr + "),error('SDL:InvalidValue','scalar record required');end\n")
+            for f in sorted(self.schema.messages[name].fields, key=lambda f: f.index):
+               emit(f.type_name, f.array_dimensions, expr + '.' + matlab_identifier(f.name), decode, depth)
+            return
+         count = prod(dims)
+         width = self.schema.fixed_wire_size(name) * count
+         enum = 'true' if name in self.schema.enums else 'false'
+         args = 'ctx,' + _quote(name) + ','
+         if decode:
+            out.append("x=sdl_matlab_runtime('unpack_fixed'," + args + 'b(p:p+' + str(width-1) + '),' + enum + ');\n')
+            if dims:
+               shape = list(reversed(dims))
+               if len(shape) == 1:
+                  shape.append(1)
+               out.append(expr + '=reshape(x,[' + ' '.join(map(str, shape)) + ']);\n')
+            else:
+               out.append(expr + '=x;\n')
+         else:
+            out.append("b(p:p+" + str(width-1) + ")=sdl_matlab_runtime('pack_fixed'," + args + expr + ',' + str(count) + ',' + enum + ');\n')
+         out.append('p=p+' + str(width) + ';\n')
+
+      out.append('function b=' + self.fixed_helpers[0] + '(ctx,v)\nb=zeros(' + str(size) + ",1,'uint8');p=1;\n")
+      emit(type_name, (), 'v', False)
+      out.append('end\nfunction v=' + self.fixed_helpers[1] + '(ctx,b)\n')
+      out.append("if numel(b)~=" + str(size) + ",error('SDL:Malformed','invalid fixed record size');end\nv=struct();p=1;\n")
+      emit(type_name, (), 'v', True)
+      out.append('end\n')
       return ''.join(out)
 
    def _soa_empty(self, type_name):

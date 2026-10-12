@@ -12,3 +12,5 @@ pub mod empty_message;
 pub mod wire_example;
 #[path = "../../../build/generated/rust/bench_cases.rs"]
 pub mod bench_cases;
+#[path = "../../../build/generated/rust/auto_fixed.rs"]
+pub mod auto_fixed;

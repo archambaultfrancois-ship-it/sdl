@@ -203,7 +203,36 @@ public final class SdlJavaTests {
          invalid(new Action(){public void run(){SdlCodec.decode(ctx,wire);}});
       }
    }
+   private static void automaticFixedRecords() throws Exception {
+      auto_fixed.AutoRecord record=new auto_fixed.AutoRecord();
+      record.id=0x01020304;record.point.coordinates=new float[]{1.25f,-2.5f};
+      record.point.code=-123;record.point.state=auto_fixed.AutoState.NEGATIVE;record.point.enabled=true;
+      record.grid=new short[][]{{-1,2,-3},{4,-5,6}};
+      auto_fixed.AutoBatch batch=new auto_fixed.AutoBatch();batch.label="x";
+      batch.records.add(record);batch.records.add(record);
+      batch.samples.add((short)-1);batch.samples.add((short)2);batch.samples.add((short)-3);
+      final SdlCodec.Context ctx=SdlCodec.prepare(auto_fixed.AutoBatch.SDL_DESCRIPTOR,auto_fixed.AutoBatch.class);
+      byte[] oracle=Files.readAllBytes(Paths.get("tst/fixtures/auto_fixed.bin"));
+      check(auto_fixed.AutoRecord.SDL_FIXED.size()==31);
+      check(Arrays.equals(oracle,SdlCodec.encode(ctx,batch)));
+      check(Arrays.equals(oracle,SdlCodec.encode(ctx,SdlCodec.decode(ctx,oracle))));
+      byte[] root=new byte[32];root[0]=4;System.arraycopy(oracle,4,root,1,31);
+      check(Arrays.equals(root,SdlCodec.encode(ctx,record)));
+      check(Arrays.equals(root,SdlCodec.encode(ctx,SdlCodec.decode(ctx,root))));
+      for(int end=0;end<oracle.length;end++) {
+         final byte[] bad=Arrays.copyOf(oracle,end);
+         invalid(new Action(){public void run(){SdlCodec.decode(ctx,bad);}});
+      }
+      for(int offset:new int[]{22,21}) {
+         final byte[] bad=oracle.clone();bad[offset]=(byte)(offset==22?2:1);
+         invalid(new Action(){public void run(){SdlCodec.decode(ctx,bad);}});
+      }
+      SdlCodec.Context evolved=SdlCodec.prepare(auto_fixed.AutoBatch.SDL_DESCRIPTOR.replace("3:int16[2][3]:grid;",""),auto_fixed.AutoBatch.class);
+      auto_fixed.AutoRecord older=(auto_fixed.AutoRecord)SdlCodec.decode(evolved,Arrays.copyOf(root,20));
+      check(older.grid[1][2]==0 && older.point.code==-123);
+   }
    public static void main(String[] args) throws Exception {
+      automaticFixedRecords();
       envelopeProfile();
       for (String line : Files.readAllLines(Paths.get("tst/fixtures/compatibility/cases.tsv"), StandardCharsets.UTF_8)) {
          String[] cols=line.split("\\t");

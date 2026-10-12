@@ -773,6 +773,16 @@ class Context:
                   self.native_layouts[key] = spec
       self.native_messages = {}
       self.native_message_ids = {}
+      # Select the largest exact fixed subtree, including a whole root message.
+      # Keep the declared modifiers and public object representation unchanged.
+      self.fixed_messages = {}
+      if not self.has_representation:
+         for name in self.classes:
+            plan = _fixed_codec(self, name)
+            if plan is not None:
+               spec = _native_fixed_spec(self, name) if self.native_enabled else None
+               native = _sdl_native.prepare(spec) if spec is not None else None
+               self.fixed_messages[name] = (plan, native)
       if self.native_enabled:
          for name in self.classes:
             if name not in self.messages:
@@ -1132,6 +1142,20 @@ def _write_value(ctx, type_name, value, output, namespace, dimensions=()):
 def _write_message(ctx, name, message, output):
    if not isinstance(message, SdlMessage) or message._SDL_NAME != name:
       raise CodecError('wrong message type')
+   fixed = ctx.fixed_messages.get(name)
+   if fixed is not None:
+      plan, native = fixed
+      try:
+         if native is not None:
+            output.extend(_sdl_native.encode(native, (message,)))
+         else:
+            record, emit, unused_read = plan
+            values = []
+            emit(message, values)
+            output.extend(record.pack(*values))
+      except (ValueError, TypeError, AttributeError, OverflowError, struct.error) as error:
+         raise CodecError('invalid fixed message') from error
+      return
    fields = ctx.local_fields.get(name)
    if fields is None or len(fields) != len(ctx.messages[name]):
       raise CodecError('encoding requires the local emission catalogue')
@@ -1312,6 +1336,17 @@ def _read_value(ctx, name, reader, dimensions=(), dynamic=False, skip=False):
 
 
 def _read_message(ctx, name, reader, dynamic=False, skip=False):
+   fixed = ctx.fixed_messages.get(name) if not dynamic and not skip else None
+   if fixed is not None:
+      plan, native = fixed
+      record, unused_emit, read = plan
+      payload = reader.take(record.size)
+      try:
+         if native is not None:
+            return _sdl_native.decode(native, payload, 1)[0]
+         return read(iter(record.unpack(payload)))
+      except (ValueError, TypeError, OverflowError, struct.error) as error:
+         raise CodecError('invalid fixed message') from error
    cls = ctx.classes.get(name)
    if not dynamic and not skip and cls is None:
       raise CodecError('unknown local message type: ' + name)

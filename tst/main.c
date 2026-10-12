@@ -8,6 +8,7 @@
 #include "schema.h"
 #include "empty_message.h"
 #include "bench_cases.h"
+#include "auto_fixed.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -844,6 +845,37 @@ static void invalid(void) {
       type_context_free(ctx);
    }
 }
+static void automatic_fixed_records(void) {
+   unsigned char oracle[73], bad[74];
+   FILE *file = fopen("tst/fixtures/auto_fixed.bin", "rb");
+   AutoRecord records[2] = {
+      {0x01020304, {{1.25f, -2.5f}, -123, AUTOSTATE_NEGATIVE, true}, {{-1,2,-3},{4,-5,6}}},
+      {0x01020304, {{1.25f, -2.5f}, -123, AUTOSTATE_NEGATIVE, true}, {{-1,2,-3},{4,-5,6}}}
+   };
+   int16_t samples[] = {-1,2,-3};
+   AutoBatch value = {0};
+   size_t size, i;
+   void *wire;
+   AutoBatch *copy;
+   SdlContext *ctx = type_prepare(AUTORECORD_SCHEMA_DESCRIPTOR, AUTORECORD_SCHEMA_DESCRIPTOR_SIZE);
+   assert(file && fread(oracle,1,sizeof(oracle),file)==sizeof(oracle)); fclose(file);
+   assert(ctx);
+   value.label="x";value.sdl_string_length_1=1;value.records_count=2;value.records=records;
+   value.samples_count=3;value.samples=samples;
+   wire=type_encode(ctx,"AutoBatch",&value,&size);
+   assert(wire && size==sizeof(oracle) && !memcmp(wire,oracle,size));type_free(wire);
+   copy=type_decode(ctx,oracle,sizeof(oracle));
+   assert(copy && copy->records_count==2 && copy->records[1].grid[1][2]==6 && copy->samples[2]==-3);
+   type_free(copy);
+   wire=type_encode(ctx,"AutoRecord",records,&size);
+   assert(wire && size==32 && ((unsigned char *)wire)[0]==4 && !memcmp((unsigned char *)wire+1,oracle+4,31));
+   type_free(wire);
+   for(i=0;i<sizeof(oracle);i++)assert(!type_decode(ctx,oracle,i));
+   memcpy(bad,oracle,sizeof(oracle));bad[22]=2;assert(!type_decode(ctx,bad,sizeof(oracle)));
+   memcpy(bad,oracle,sizeof(oracle));bad[21]=1;assert(!type_decode(ctx,bad,sizeof(oracle)));
+   memcpy(bad,oracle,sizeof(oracle));bad[73]=0;assert(!type_decode(ctx,bad,sizeof(bad)));
+   type_context_free(ctx);
+}
 int main(void) {
    assert(register_all_types());
    envelope_cases();
@@ -853,6 +885,7 @@ int main(void) {
    packed_records();
    wire_word_arrays();
    optional_scalar_cases();
+   automatic_fixed_records();
    invalid();
    graph_limits();
    deep_messages();

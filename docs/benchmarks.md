@@ -348,7 +348,61 @@ suite runs with native selection enabled and disabled. Address/undefined
 sanitizer validation was attempted, but this host lacks the sanitizer runtime
 libraries, so no sanitizer result is claimed.
 
+## Automatic fixed-codec comparison
+
+The codecs select fixed-size messages and subrecords without changing schema
+modifiers. C, Rust and Java already select their fixed codecs automatically.
+Python, Ada and MATLAB/Octave have focused comparisons against generic field
+traversal, with the same object representations and wire bytes:
+
+```sh
+make bench-python-fixed
+SDL_PYTHON_NO_NATIVE=1 make bench-python-fixed
+make bench-ada-fixed
+make bench-matlab-fixed
+make bench-matlab-fixed matlab=  # GNU Octave
+```
+
+The Ada and MATLAB comparisons include `AutoBatch`, a variable root with
+`repeated` fixed nested records and primitive values, without any `packed`
+declaration. `sdl/auto_fixed.sdl` and the independent
+`tst/fixtures/auto_fixed.bin` oracle also verify these layouts across all six
+backends. Malformed booleans, enums and truncated data remain rejected.
+
+A local comparison measured the following encode/decode speedup ratios against
+generic handling. These focused measurements preserve ordinary records and
+sequences and do not use the Python buffer representation:
+
+| Backend | Fixed nested record | Variable root with repeated fixed records |
+| --- | ---: | ---: |
+| Ada | 23.1x / 17.4x | 117.0x / 34.7x |
+| MATLAB R2017a | 2.5x / 4.2x | 1.9x / 3.4x |
+| GNU Octave | 3.8x / 5.1x | 3.1x / 3.8x |
+
+Ada and the variable-root comparisons use `AutoRecord`/`AutoBatch`; MATLAB and
+Octave's fixed nested case uses `BenchRecord`. The ratios describe each
+backend's own before/after workload, rather than absolute throughput across
+languages.
+
 ## Python Packed buffer API
+
+Python also prepares a codec for each exact fixed-size local message, even
+without an explicit `packed` field. Encoding and typed decoding select the
+largest fixed message encountered, including a fixed root and its nested
+records. Variable parents retain their ordinary framing and use these plans
+for fixed children. Native numeric plans are used when available; otherwise
+one Python `Struct` handles the fixed record. Schema differences and wire
+representation options retain the existing paths; dynamic decoding is unchanged.
+
+Run `PYTHONPATH=runtime/python:build/generated/python python3
+tst/python/bench_fixed.py` to compare this selection with the existing field
+codec in the same process. Add `SDL_PYTHON_NO_NATIVE=1` for the pure Python
+comparison. A local trial measured encode/decode speedups of 5.0x/6.6x for
+`BenchSmall` and 11.8x/20.4x for a single nested `BenchRecord` with native
+plans; pure Python measured 3.2x/5.7x and 5.4x/11.3x respectively. The
+1,000-record `BenchRecordBatch` remained approximately unchanged because its
+sequence already uses bulk conversion. These are local microbenchmarks,
+not updates to the full language benchmark matrix.
 
 `PackedArray` stores immutable, tightly packed numeric records and their
 prepared native layout. `decode(ctx, wire, packed='view')` returns PackedArray

@@ -13,6 +13,7 @@ with SDL_Empty_Message; use SDL_Empty_Message;
 with SDL_Packed_Validation; use SDL_Packed_Validation;
 with SDL_Benchmark;
 with SDL_Bench_Cases;
+with SDL_Auto_Fixed; use SDL_Auto_Fixed;
 procedure Run_Tests is
    use type Ada.Streams.Stream_Element;
    Passed : Natural := 0;
@@ -131,10 +132,33 @@ procedure Run_Tests is
    procedure Payload_Oracle is new Oracle (SDL_Benchmark.T_BenchPayload, SDL_Benchmark.Encode, SDL_Benchmark.Decode);
    procedure Optional_Oracle is new Oracle (SDL_Bench_Cases.T_BenchOptionals, SDL_Bench_Cases.Encode, SDL_Bench_Cases.Decode);
    procedure Small_Oracle is new Oracle (SDL_Bench_Cases.T_BenchSmall, SDL_Bench_Cases.Encode, SDL_Bench_Cases.Decode);
+   procedure Auto_Record_Oracle is new Oracle (T_AutoRecord, SDL_Auto_Fixed.Encode, SDL_Auto_Fixed.Decode);
+   procedure Auto_Batch_Oracle is new Oracle (T_AutoBatch, SDL_Auto_Fixed.Encode, SDL_Auto_Fixed.Decode);
+   procedure Auto_Optional_Oracle is new Oracle (T_AutoOptional, SDL_Auto_Fixed.Encode, SDL_Auto_Fixed.Decode);
    function Float_From_Bits is new Ada.Unchecked_Conversion (Unsigned_32, Float32);
    function Packet_Catalogue (Fields : String) return String is
    begin return "SDL2|Packet{" & Fields & "}"; end;
 begin
+   declare
+      C : constant Context := SDL_Auto_Fixed.Prepare;
+      R : constant T_AutoRecord := (16#01020304#, ((1.25, -2.5), -123, -7, True), ((-1,2,-3),(4,-5,6)));
+      M : T_AutoBatch;
+      Wire : constant Bytes := Load ("tst/fixtures/auto_fixed.bin");
+      Root : Bytes (1 .. 32);
+   begin
+      Check (Direct_Layout (C, "AutoRecord"), "fixed root selected without Packed");
+      Check (Direct_Layout (C, "AutoBatch"), "repeated fixed records selected without Packed");
+      Check (Direct_Layout (C, "AutoOptional"), "optional fixed descendant selects parent");
+      M.F_label := To_Unbounded_String ("x"); M.F_records.Append (R); M.F_records.Append (R);
+      M.F_samples.Append (-1); M.F_samples.Append (2); M.F_samples.Append (-3);
+      Check (SDL_Auto_Fixed.Encode (C, M) = Wire, "automatic fixed shared wire oracle");
+      Root (1) := 4; Root (2 .. 32) := Wire (5 .. 35);
+      Check (SDL_Auto_Fixed.Encode (C, R) = Root, "automatic fixed root wire oracle");
+      Auto_Record_Oracle (SDL_Auto_Fixed.Description, R);
+      Auto_Batch_Oracle (SDL_Auto_Fixed.Description, M);
+      Auto_Optional_Oracle (SDL_Auto_Fixed.Description, T_AutoOptional'(True, R, 9));
+      Auto_Optional_Oracle (SDL_Auto_Fixed.Description, T_AutoOptional'(False, R, 9));
+   end;
    Small_Oracle (SDL_Bench_Cases.Description, SDL_Bench_Cases.T_BenchSmall'(True, 123, -2));
    for Mask in Unsigned_16 range 0 .. 255 loop
       declare

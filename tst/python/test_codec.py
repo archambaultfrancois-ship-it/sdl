@@ -19,6 +19,81 @@ def context(*types):
 
 
 class CodecTests(unittest.TestCase):
+   def test_01_codec_automatic_fixed_shared_oracle(self):
+      from auto_fixed import AutoBatch, AutoRecord, AutoPoint, AutoState
+      record = AutoRecord(id=0x01020304, point=AutoPoint(coordinates=[1.25,-2.5],
+         code=-123, state=AutoState.NEGATIVE, enabled=True), grid=[[-1,2,-3],[4,-5,6]])
+      message = AutoBatch(label='x', records=[record, record], samples=[-1,2,-3])
+      ctx = context(AutoBatch)
+      oracle = (FIXTURES / 'auto_fixed.bin').read_bytes()
+      self.assertEqual(encode(ctx, message), oracle)
+      self.assertEqual(decode(ctx, oracle), message)
+      root = bytes([4]) + oracle[4:35]
+      self.assertEqual(encode(ctx, record), root)
+      self.assertEqual(decode(ctx, root), record)
+      for offset, value in ((22,2), (21,1)):
+         bad = bytearray(oracle); bad[offset] = value
+         with self.assertRaises(CodecError):
+            decode(ctx, bad)
+      older = prepare(description(AutoBatch).replace('3:int16[2][3]:grid;', ''), AutoBatch)
+      self.assertNotIn('AutoRecord', older.fixed_messages)
+      self.assertEqual(decode(older, root[:20]).grid, [[0,0,0],[0,0,0]])
+
+   def test_01_codec_largest_fixed_message(self):
+      import os
+      from unittest.mock import patch
+      import sdl_runtime as runtime
+      from bench_cases import BenchSmall, BenchRecord, BenchPose, BenchVector
+      cases = [
+         (BenchSmall(active=True, sequence=123, code=-2), struct.pack('>Bi h', 1, 123, -2)),
+         (BenchRecord(id=7, pose=BenchPose(position=BenchVector(values=[1., 2., 3.]),
+            rotation=[0., 0., 0., 1.]), measures=[4., 5.]),
+            struct.pack('>i9f', 7, 1., 2., 3., 0., 0., 0., 1., 4., 5.)),
+      ]
+      for disabled in ('1', ''):
+         with patch.dict(os.environ, {'SDL_PYTHON_NO_NATIVE': disabled}):
+            for message, payload in cases:
+               ctx = context(type(message))
+               name = message._SDL_NAME
+               self.assertIn(name, ctx.fixed_messages)
+               wire = bytes([ctx.ids[name]]) + payload
+               self.assertEqual(encode(ctx, message), wire)
+               self.assertEqual(decode(ctx, wire), message)
+               for end in range(len(wire)):
+                  with self.assertRaises(CodecError):
+                     decode(ctx, wire[:end])
+               baseline = context(type(message))
+               baseline.fixed_messages.clear()
+               self.assertEqual(encode(baseline, message), wire)
+               self.assertEqual(decode(baseline, wire), message)
+               self.assertEqual(decode_dynamic(ctx, wire), decode_dynamic(baseline, wire))
+               if isinstance(message, BenchSmall):
+                  with self.assertRaises(CodecError):
+                     decode(ctx, bytes([ctx.ids[name], 2]) + payload[1:])
+
+      # A variable root still selects fixed descendants and keeps its counters.
+      message = FixedBoard()
+      ctx = context(FixedBoard)
+      self.assertNotIn('FixedBoard', ctx.fixed_messages)
+      self.assertIn('FixedRow', ctx.fixed_messages)
+      wire = encode(ctx, message)
+      ctx.fixed_messages.clear()
+      self.assertEqual(encode(ctx, message), wire)
+      self.assertEqual(decode(ctx, wire), message)
+
+      # A local schema missing a remote field must retain evolution handling.
+      class OlderSmall(SdlMessage):
+         _SDL_NAME = 'BenchSmall'
+         _SDL_DESCRIPTOR = 'SDL2|BenchSmall{1:bool:active;2:int32:sequence;}'
+         _SDL_FIELDS = ((1, 'active', 'required', 'bool', ()),
+                        (2, 'sequence', 'required', 'int32', ()))
+      ctx = prepare(description(BenchSmall), OlderSmall)
+      self.assertNotIn('BenchSmall', ctx.fixed_messages)
+      wire = bytes([ctx.ids['BenchSmall']]) + struct.pack('>Bih', 1, 123, -2)
+      value = decode(ctx, wire)
+      self.assertTrue(value.active)
+      self.assertEqual(value.sequence, 123)
+
    def test_01_codec_typed_and_dynamic_display(self):
       ctx = context(Packet)
       typed = Packet(active=True, code=None, label='a\nb', samples=[1, 2, 3])
