@@ -625,11 +625,19 @@ typedef struct {
 typedef struct { char prefix; PackedTestRecord value; } PackedTestRecordAlign;
 typedef struct { uint32_t count; PackedTestRecord *records; } PackedTestBatch;
 typedef struct { char prefix; PackedTestBatch value; } PackedTestBatchAlign;
+static const SdlEnumValueDesc packed_test_state_values[] = {
+   {STATE_READY, "READY"}, {STATE_NEGATIVE, "NEGATIVE"}
+};
+static const SdlTypeDesc packed_test_state_desc = {
+   .kind = SDL_TYPE_ENUM, .size = sizeof(State),
+   .alignment = offsetof(struct { char prefix; State value; }, value), .name = "State",
+   .detail.enumeration = {2, packed_test_state_values}
+};
 static const SdlFieldDesc packed_test_record_fields[] = {
    {1, "enabled", &SDL_BOOL_DESC, offsetof(PackedTestRecord, enabled), SDL_NO_OFFSET, SDL_NO_OFFSET, SDL_NO_OFFSET, 0},
    {2, "code", &SDL_INT16_DESC, offsetof(PackedTestRecord, code), SDL_NO_OFFSET, SDL_NO_OFFSET, SDL_NO_OFFSET, 0},
    {3, "precise", &SDL_FLOAT64_DESC, offsetof(PackedTestRecord, precise), SDL_NO_OFFSET, SDL_NO_OFFSET, SDL_NO_OFFSET, 0},
-   {4, "state", &SDL_ENUM_STATE_DESC, offsetof(PackedTestRecord, state), SDL_NO_OFFSET, SDL_NO_OFFSET, SDL_NO_OFFSET, 0},
+   {4, "state", &packed_test_state_desc, offsetof(PackedTestRecord, state), SDL_NO_OFFSET, SDL_NO_OFFSET, SDL_NO_OFFSET, 0},
    {5, "point", &SDL_COMPLEX32_DESC, offsetof(PackedTestRecord, point), SDL_NO_OFFSET, SDL_NO_OFFSET, SDL_NO_OFFSET, 0},
 };
 static const SdlTypeDesc packed_test_record_desc = {
@@ -757,7 +765,7 @@ static void packed_records(void) {
       assert(wire && size == sizeof(reference));
       memcpy(reference, wire, 2);
       for (i = 0; i < 2; ++i)
-         assert(sdl_value_encode_fixed(&FIXEDROW_DESC, &rows[i], reference + 2 + 40 * i, 40));
+         assert(sdl_value_encode_fixed(sdl_lookup_type("FixedRow"), &rows[i], reference + 2 + 40 * i, 40));
       assert(!memcmp(reference, wire, size));
       result = type_decode(ctx, wire, size);
       assert(result && result->rows_count == 2 && !memcmp(result->rows, rows, sizeof(rows)));
@@ -857,7 +865,7 @@ static void automatic_fixed_records(void) {
    size_t size, i;
    void *wire;
    AutoBatch *copy;
-   SdlContext *ctx = type_prepare(AUTORECORD_SCHEMA_DESCRIPTOR, AUTORECORD_SCHEMA_DESCRIPTOR_SIZE);
+   SdlContext *ctx = context("AutoRecord");
    assert(file && fread(oracle,1,sizeof(oracle),file)==sizeof(oracle)); fclose(file);
    assert(ctx);
    value.label="x";value.sdl_string_length_1=1;value.records_count=2;value.records=records;

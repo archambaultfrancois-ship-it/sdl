@@ -180,6 +180,78 @@ int main(int argc, char **argv) {
          subprocess.run([str(executable)], check=True)
          subprocess.run([str(executable), 'conflict'], check=True)
 
+   def test_02_backend_c_private_readable_descriptors(self):
+      import os
+      import shlex
+      import shutil
+      import subprocess
+      parser = MsgParser()
+      parser.parse_text('message Point {\n fl32 x;\n fl32 y;\n}\n')
+      header, source = CBackend(parser).generate_files('point')
+      self.assertNotIn('SdlTypeDesc', header)
+      self.assertNotIn('SCHEMA_DESCRIPTOR', header)
+      self.assertNotIn('type_descriptors.h', header)
+      self.assertIn('static const uint8_t point_schema_descriptor[] =\n'
+         '   "SDL2|Point{1:fl32:x;2:fl32:y;}";', source)
+      self.assertIn('static const SdlTypeDesc point_desc =', source)
+      self.assertIn('sizeof(point_schema_descriptor) - 1', source)
+      compiler = shlex.split(os.environ.get('CC', 'cc'))
+      if not compiler or not shutil.which(compiler[0]):
+         self.skipTest('C compiler is unavailable')
+      repo = pathlib.Path(__file__).resolve().parents[2]
+      # Private names must not collide with SDL types or array field names.
+      schema_text = '''enum State {
+ READY = 1;
+}
+enum sdl_enum_state_desc {
+ READY = 2;
+}
+message Point {
+ fl32[2] x;
+ fl32[2] X;
+ State status;
+ optional sdl_enum_state_desc other;
+}
+message point_fields {
+ Point child;
+}
+message point_desc {
+ point_fields child;
+}
+'''
+      parser = MsgParser()
+      parser.parse_text(schema_text)
+      expected = canonical_type_descriptor(parser).decode('ascii')
+      with tempfile.TemporaryDirectory() as temporary:
+         root = pathlib.Path(temporary)
+         schema = root / 'private_test.sdl'
+         schema.write_text(schema_text)
+         output = root / 'generated'
+         generate_c(str(schema), str(output))
+         check = root / 'check.c'
+         check.write_text('''#include "private_test.h"
+#include "type_private.h"
+#include <assert.h>
+#include <string.h>
+int main(void) {
+   const SdlTypeDesc *descriptor;
+   assert(register_private_test_types());
+   descriptor = sdl_lookup_type("Point");
+   assert(descriptor && descriptor->schema_descriptor_size == strlen("%s"));
+   assert(!memcmp(descriptor->schema_descriptor, "%s", descriptor->schema_descriptor_size));
+   assert(sdl_lookup_type("point_fields") && sdl_lookup_type("point_desc"));
+   return 0;
+}
+''' % (expected, expected))
+         executable = root / 'private-check'
+         command = compiler + ['-std=c99', '-Wall', '-Wextra', '-Werror', '-pedantic',
+            '-I' + str(repo / 'runtime/c'), '-I' + str(output)] + [
+            str(path) for path in sorted((repo / 'runtime/c').glob('*.c'))] + [
+            str(output / 'private_test.c'), str(check), '-lm', '-o', str(executable)]
+         result = subprocess.run(command, capture_output=True, text=True)
+         self.assertEqual(result.returncode, 0, result.stderr)
+         subprocess.run([str(executable)], check=True)
+
    def test_01_schema_compact_catalogue_and_nested_hash(self):
       import hashlib
       source = '''struct Position {

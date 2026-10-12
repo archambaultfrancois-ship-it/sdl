@@ -45,8 +45,8 @@ registering local generated types.
 
 To obtain a generated type's logical name, use Python `message_name(value)` or
 `message_name(Class)`, Java `SdlCodec.messageName(Class)`, Rust `T::NAME` or
-`TypeInfo.name`, or Matlab `Type('name')`. C descriptors expose their public
-`name` member; Ada can resolve names through its context.
+`TypeInfo.name`, or Matlab `Type('name')`. C uses logical SDL name strings in
+its API; C and Ada can resolve message names through their contexts.
 
 A 32-bit identity is scoped to a catalogue registry and can collide. When an
 identity is already registered, compare the full canonical catalogue bytes.
@@ -183,6 +183,12 @@ conflicting type name. Re-registering the same static descriptor succeeds;
 registering another descriptor with the same logical name fails. Descriptors
 must remain valid for the lifetime of the process. Regenerate C bindings to use
 the checked registration API.
+
+Generated headers expose message structs, enums, and registration functions.
+Type descriptors and schema catalogues are private `static const` objects in
+the generated `.c` file, with lowercase names. Catalogues use readable C string
+literals; their runtime length excludes the terminating NUL. Obtain a catalogue
+through `type_description()` after registering the types.
 
 ```c
 if (!register_all_types()) {

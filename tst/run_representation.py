@@ -27,13 +27,16 @@ C=r'''
 #include "type_engine.h"
 #include <assert.h>
 #include <string.h>
-static void check(const char *name,const uint8_t *descriptor,size_t ds,const void *x,const char *hex){
- SdlContext *c=type_prepare(descriptor,ds);assert(c);size_t n,m;void *b=type_encode(c,name,x,&n);assert(b&&n==strlen(hex)/2&&type_encode_size(c,name,x)==n);
+static SdlContext *context(const char *name){
+ size_t size;char *descriptor=type_description(&name,1,&size);assert(descriptor&&size==strlen(descriptor));
+ SdlContext *c=type_prepare(descriptor,size);free(descriptor);assert(c);return c;
+}
+static void check(const char *name,const void *x,const char *hex){
+ SdlContext *c=context(name);size_t n,m;void *b=type_encode(c,name,x,&n);assert(b&&n==strlen(hex)/2&&type_encode_size(c,name,x)==n);
  for(size_t i=0;i<n;i++){unsigned v;assert(sscanf(hex+2*i,"%2x",&v)==1);assert(((unsigned char*)b)[i]==v);}
  void *y=type_decode(c,b,n);assert(y);void *again=type_encode(c,name,y,&m);assert(again&&m==n&&!memcmp(b,again,n));
  SdlDynamicMessage *d=type_decode_dynamic(c,b,n);assert(d);type_dynamic_free(d);
  for(size_t i=0;i<n;i++)assert(!type_context_validate(c,b,i));
- char *desc=type_description(&name,1,&m);assert(desc&&m==ds&&!memcmp(desc,descriptor,ds));free(desc);
  type_free(again);type_free(y);type_free(b);type_context_free(c);
 }
 int main(void){
@@ -41,18 +44,18 @@ int main(void){
  float qs[]={0.125f,0.375f,-0.125f,-0.375f};Quantized q={0};
  q.flag=true;q.value=0.625f;q.precise=-1.25;q.has_maybe=true;q.maybe=-1.25;
  q.samples_count=4;q.samples=qs;q.matrix[0][0]=-8;q.matrix[0][1]=7.5;q.matrix[1][0]=0.75;q.matrix[1][1]=-0.75;q.child.value=2.625;q.tail=165;
- check("Quantized",QUANTIZED_SCHEMA_DESCRIPTOR,QUANTIZED_SCHEMA_DESCRIPTOR_SIZE,&q,"@QUANTIZED@");
- SdlContext *qc=type_prepare(QUANTIZED_SCHEMA_DESCRIPTOR,QUANTIZED_SCHEMA_DESCRIPTOR_SIZE);size_t qn;
+ check("Quantized",&q,"@QUANTIZED@");
+ SdlContext *qc=context("Quantized");size_t qn;
  float invalid[]={NAN,INFINITY,-INFINITY,16,-16.5};
  for(size_t i=0;i<5;i++){q.value=invalid[i];assert(!type_encode(qc,"Quantized",&q,&qn));}
  type_context_free(qc);
- QuantWide qw={-0x1p29f,-0x1p61};check("QuantWide",QUANTWIDE_SCHEMA_DESCRIPTOR,QUANTWIDE_SCHEMA_DESCRIPTOR_SIZE,&qw,"@QUANTUM_WIDE@");
- register_all_types();Packet p={true,false,-1,UINT64_MAX,-2,42};check("Packet",PACKET_SCHEMA_DESCRIPTOR,PACKET_SCHEMA_DESCRIPTOR_SIZE,&p,"@PACKET@");
- uint64_t values[]={0,UINT64_MAX};Unsigned u={UINT8_MAX,UINT16_MAX,UINT32_MAX,UINT64_MAX,2,values};check("Unsigned",UNSIGNED_SCHEMA_DESCRIPTOR,UNSIGNED_SCHEMA_DESCRIPTOR_SIZE,&u,"@UNSIGNED@");
- uint8_t flags[]={0,7,1};Arrays a={0};a.matrix[0][0]=-2048;a.matrix[0][1]=-1;a.matrix[1][1]=2047;a.flags_count=3;a.flags=flags;a.has_code=true;a.code=-1;a.child.delta=-1;a.child.level=31;a.label="hi";check("Arrays",ARRAYS_SCHEMA_DESCRIPTOR,ARRAYS_SCHEMA_DESCRIPTOR_SIZE,&a,"@ARRAYS@");
- BitRecord items[]={{-2048,true},{2047,false}};Records records={2,items,165};check("Records",RECORDS_SCHEMA_DESCRIPTOR,RECORDS_SCHEMA_DESCRIPTOR_SIZE,&records,"@RECORDS@");
- SdlContext *rc=type_prepare(RECORDS_SCHEMA_DESCRIPTOR,RECORDS_SCHEMA_DESCRIPTOR_SIZE);size_t rn;uint8_t *rb=type_encode(rc,"Records",&records,&rn);assert(rb);for(size_t i=3;i<=5;i+=2){rb[i]|=1;assert(!type_context_validate(rc,rb,rn));rb[i]&=(uint8_t)~1;}items[0].value=2048;assert(!type_encode(rc,"Records",&records,&rn));free(rb);type_context_free(rc);
- SdlContext *c=type_prepare(PACKET_SCHEMA_DESCRIPTOR,PACKET_SCHEMA_DESCRIPTOR_SIZE);size_t n;p.level=32;assert(!type_encode(c,"Packet",&p,&n));p.level=-1;uint8_t *b=type_encode(c,"Packet",&p,&n);assert(b);b[n-1]=1;assert(!type_context_validate(c,b,n));free(b);type_context_free(c);
+ QuantWide qw={-0x1p29f,-0x1p61};check("QuantWide",&qw,"@QUANTUM_WIDE@");
+ register_all_types();Packet p={true,false,-1,UINT64_MAX,-2,42};check("Packet",&p,"@PACKET@");
+ uint64_t values[]={0,UINT64_MAX};Unsigned u={UINT8_MAX,UINT16_MAX,UINT32_MAX,UINT64_MAX,2,values};check("Unsigned",&u,"@UNSIGNED@");
+ uint8_t flags[]={0,7,1};Arrays a={0};a.matrix[0][0]=-2048;a.matrix[0][1]=-1;a.matrix[1][1]=2047;a.flags_count=3;a.flags=flags;a.has_code=true;a.code=-1;a.child.delta=-1;a.child.level=31;a.label="hi";check("Arrays",&a,"@ARRAYS@");
+ BitRecord items[]={{-2048,true},{2047,false}};Records records={2,items,165};check("Records",&records,"@RECORDS@");
+ SdlContext *rc=context("Records");size_t rn;uint8_t *rb=type_encode(rc,"Records",&records,&rn);assert(rb);for(size_t i=3;i<=5;i+=2){rb[i]|=1;assert(!type_context_validate(rc,rb,rn));rb[i]&=(uint8_t)~1;}items[0].value=2048;assert(!type_encode(rc,"Records",&records,&rn));free(rb);type_context_free(rc);
+ SdlContext *c=context("Packet");size_t n;p.level=32;assert(!type_encode(c,"Packet",&p,&n));p.level=-1;uint8_t *b=type_encode(c,"Packet",&p,&n);assert(b);b[n-1]=1;assert(!type_context_validate(c,b,n));free(b);type_context_free(c);
 }
 '''
 RUST=r'''
