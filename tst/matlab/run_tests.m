@@ -76,7 +76,7 @@ assert_throws(@() EnumRecordBatch('decode',wire));
 % Malformed fixed-array lengths must be rejected.
 assert_throws(@() CodecCases('decode_payload',[test_u32(20);test_u32(8); ...
  test_i32(1);test_i32(2)]));
-% TODO: decide whether MATLAB should reject undeclared enum values on encode/decode.
+% TODO: decide whether Matlab should reject undeclared enum values on encode/decode.
 % SoA encoding rejects terminal columns that describe different record counts.
 bad_root=RootPayload('new');
 bad_root.fixed_array=struct('x',single([1;2]),'y',single(3));
@@ -98,7 +98,7 @@ rows.rows.vectors.grid=reshape(int16(1:24),[3,2,2,2]);
 rows_wire=FixedRowBatch('encode',rows);rows_out=FixedRowBatch('decode',rows_wire);
 assert(isequal(rows_out.rows.vectors.coords,rows.rows.vectors.coords));
 assert(isequal(rows_out.rows.vectors.grid,rows.rows.vectors.grid));
-fprintf('MATLAB/Octave codec tests passed (wire endian: %s)\n', getenv('SDL_WIRE_ENDIAN'));
+fprintf('Matlab/Octave codec tests passed (wire endian: %s)\n', getenv('SDL_WIRE_ENDIAN'));
 end
 
 function assert_throws(callback)
