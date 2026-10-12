@@ -123,7 +123,7 @@ def codec_cases():
 
 
 class CodecTests(unittest.TestCase):
-   def test_display_formats_typed_objects_with_configurable_indentation(self):
+   def test_01_codec_14_display_formats_typed_objects_with_configurable_indentation(self):
       original = codec_cases()
       rendered = display(original, indent_width=2)
       self.assertTrue(rendered.startswith('CodecCases {\n'))
@@ -137,20 +137,20 @@ class CodecTests(unittest.TestCase):
       with self.assertRaises(ValueError):
          display(original, indent_width=-1)
 
-   def test_absent_required_fields_decode_to_default_values(self):
+   def test_01_codec_06_absent_required_fields_decode_to_default_values(self):
       encoded = encode(codec_cases())
       descriptor_size = int.from_bytes(encoded[:4], WIRE_ENDIAN)
       empty_body = encoded[:8 + descriptor_size]
       self.assertEqual(decode(empty_body, CodecCases), CodecCases())
       self.assertEqual(decode_dynamic(empty_body).type_name, 'CodecCases')
 
-   def test_s01_field_order_is_independent_of_schema_order(self):
+   def test_01_codec_11_s01_field_order_is_independent_of_schema_order(self):
       original = codec_cases()
       wire = reverse_body_fields(encode(original))
       self.assertEqual(decode(wire, CodecCases), original)
       self.assertEqual(decode_dynamic(wire).fields['required_zero'], 0)
 
-   def test_s02_unicode_strings_and_float_special_values_round_trip(self):
+   def test_03_limits_08_s02_unicode_strings_and_float_special_values_round_trip(self):
       text = ('SDL-é-📦-' * 128) + '\x00tail'
       original = RootPayload(header=text)
       decoded = decode(encode(original), RootPayload)
@@ -180,7 +180,7 @@ class CodecTests(unittest.TestCase):
       self.assertEqual(decoded_subnormals.position.real, smallest_f64)
       self.assertTrue(math.copysign(1.0, decoded_subnormals.position.imag) < 0.0)
 
-   def test_primitive_payload_widths_are_checked(self):
+   def test_02_invalid_03_primitive_payload_widths_are_checked(self):
       cases = ((1, 0), (1, 2), (2, 1), (2, 3), (3, 3), (3, 5),
          (4, 7), (4, 9), (5, 3), (5, 5), (6, 7), (6, 9),
          (7, 7), (7, 9), (8, 15), (8, 17), (18, 0), (18, 2))
@@ -196,7 +196,7 @@ class CodecTests(unittest.TestCase):
             with self.assertRaisesRegex(CodecError, expected_error):
                decode_dynamic(wire)
 
-   def test_s03_invalid_frame_and_field_lengths_are_rejected(self):
+   def test_02_invalid_02_s03_invalid_frame_and_field_lengths_are_rejected(self):
       valid = encode(codec_cases())
       self.assertEqual(decode(valid, CodecCases), codec_cases())
 
@@ -233,7 +233,7 @@ class CodecTests(unittest.TestCase):
       with self.assertRaises(CodecError):
          decode_dynamic(wrong_scalar_length)
 
-   def test_root_payload_matches_c_fixture_and_round_trips(self):
+   def test_01_codec_01_root_payload_matches_c_fixture_and_round_trips(self):
       original = RootPayload(
          header='Mission_Data_Packet',
          fixed_array=[
@@ -252,7 +252,7 @@ class CodecTests(unittest.TestCase):
       self.assertEqual(decode(fixture, RootPayload), original)
       self.assertIsNot(original.fixed_array, decode(wire, RootPayload).fixed_array)
 
-   def test_wire_descriptor_decodes_without_generated_message_classes(self):
+   def test_01_codec_13_wire_descriptor_decodes_without_generated_message_classes(self):
       original = RootPayload(
          header='descriptor-driven',
          fixed_array=[FixedItem(x=1.25, y=-2.5)],
@@ -267,7 +267,7 @@ class CodecTests(unittest.TestCase):
       self.assertEqual(decoded.fields['var_array'][0].fields['name'], 'nested')
       self.assertEqual(decoded.fields['var_array'][0].fields['id'], 123456789)
 
-   def test_dynamic_decode_rejects_invalid_utf8_descriptor_strings(self):
+   def test_02_invalid_05_dynamic_decode_rejects_invalid_utf8_descriptor_strings(self):
       descriptor = bytes((
          0x53, 0x44, 0x44, 0x31, 0x00, 0x01, 0xFF, 0x00,
          0x01, 0x00, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
@@ -279,7 +279,7 @@ class CodecTests(unittest.TestCase):
       with self.assertRaisesRegex(CodecError, 'schema descriptor'):
          decode_dynamic(wire)
 
-   def test_dynamic_decode_rejects_nul_in_descriptor_strings(self):
+   def test_02_invalid_06_dynamic_decode_rejects_nul_in_descriptor_strings(self):
       descriptor = bytes((
          0x53, 0x44, 0x44, 0x31, 0x00, 0x02, 0x41, 0x00,
          0x00, 0x01, 0x00, 0x02, 0x41, 0x00, 0x00, 0x00,
@@ -292,7 +292,7 @@ class CodecTests(unittest.TestCase):
       with self.assertRaisesRegex(CodecError, 'schema descriptor'):
          decode_dynamic(wire)
 
-   def test_dynamic_decode_rejects_recursive_descriptor_types(self):
+   def test_02_invalid_07_dynamic_decode_rejects_recursive_descriptor_types(self):
       descriptor = bytes((
          0x53, 0x44, 0x44, 0x31, 0x00, 0x01, 0x41, 0x00,
          0x01, 0x00, 0x01, 0x41, 0x00, 0x01, 0x00, 0x00,
@@ -306,7 +306,7 @@ class CodecTests(unittest.TestCase):
       with self.assertRaisesRegex(CodecError, 'recursive descriptor'):
          decode_dynamic(wire)
 
-   def test_dynamic_decode_rejects_modified_descriptor_hash(self):
+   def test_02_invalid_08_dynamic_decode_rejects_modified_descriptor_hash(self):
       wire = bytearray(encode(RootPayload(header='check')))
       descriptor_size = int.from_bytes(wire[:4], WIRE_ENDIAN)
       wire[4 + descriptor_size] ^= 1
@@ -314,7 +314,7 @@ class CodecTests(unittest.TestCase):
          decode_dynamic(bytes(wire))
 
 
-   def test_dynamic_descriptor_rejects_fixed_arrays_of_variable_size_messages(self):
+   def test_02_invalid_09_dynamic_descriptor_rejects_fixed_arrays_of_variable_size_messages(self):
       descriptor = bytes((
          0x53, 0x44, 0x44, 0x31, 0x00, 0x06, 0x50, 0x61,
          0x63, 0x6B, 0x65, 0x74, 0x00, 0x02, 0x00, 0x05,
@@ -336,7 +336,7 @@ class CodecTests(unittest.TestCase):
          decode_dynamic(wire)
 
 
-   def test_empty_message_round_trip(self):
+   def test_01_codec_03_empty_message_round_trip(self):
       wire = encode(EmptyMessage())
       self.assertEqual(len(wire), 8 + len(EmptyMessage._SDL_DESCRIPTOR))
       self.assertEqual(decode(wire, EmptyMessage), EmptyMessage())
@@ -344,17 +344,17 @@ class CodecTests(unittest.TestCase):
       self.assertEqual(dynamic.type_name, 'EmptyMessage')
       self.assertEqual(dynamic.fields, {})
 
-   def test_dynamic_descriptors_reject_empty_enums(self):
+   def test_02_invalid_10_dynamic_descriptors_reject_empty_enums(self):
       with self.assertRaisesRegex(CodecError, 'enum declaration'):
          decode_dynamic(empty_enum_descriptor_frame())
 
-   def test_dynamic_descriptors_reject_builtin_type_name_collisions(self):
+   def test_02_invalid_11_dynamic_descriptors_reject_builtin_type_name_collisions(self):
       for type_name, as_enum in (('int32', False), ('string', True)):
          with self.subTest(type_name=type_name, as_enum=as_enum):
             with self.assertRaisesRegex(CodecError, 'ambiguous'):
                decode_dynamic(builtin_name_collision_frame(type_name, as_enum))
 
-   def test_dynamic_descriptors_reject_invalid_fixed_layouts(self):
+   def test_02_invalid_12_dynamic_descriptors_reject_invalid_fixed_layouts(self):
       def append_text(output, value):
          encoded = value.encode('utf-8')
          output.extend(struct.pack('>H', len(encoded)))
@@ -387,7 +387,7 @@ class CodecTests(unittest.TestCase):
             with self.assertRaises(CodecError):
                decode_dynamic(make_frame(type_name, modifier, dimensions))
 
-   def test_nested_fixed_arrays_round_trip(self):
+   def test_01_codec_04_nested_fixed_arrays_round_trip(self):
       vector = lambda base: FixedVector(
          coords=[base, base + 1.0],
          grid=[[int(base) + value for value in range(3)],
@@ -410,7 +410,7 @@ class CodecTests(unittest.TestCase):
       with self.assertRaisesRegex(CodecError, 'fixed array length'):
          decode(malformed, FixedBoard)
 
-   def test_anonymous_nested_structs_round_trip(self):
+   def test_01_codec_05_anonymous_nested_structs_round_trip(self):
       original = AnonymousEnvelope(
          metadata=AnonymousEnvelope_1(
             code=42,
@@ -426,7 +426,7 @@ class CodecTests(unittest.TestCase):
       self.assertEqual(metadata.fields['detail'].fields['text'], 'anonymous detail')
       self.assertAlmostEqual(generic.fields['points'][1].fields['x'], 3.0)
 
-   def test_scalars_optionals_enums_arrays_and_empty_values(self):
+   def test_01_codec_02_scalars_optionals_enums_arrays_and_empty_values(self):
       original = codec_cases()
       decoded = decode(encode(original), CodecCases)
       self.assertEqual(decoded, original)
@@ -439,7 +439,7 @@ class CodecTests(unittest.TestCase):
       self.assertEqual(dynamic.fields['packed_flags'], [False, True, False])
       self.assertEqual(dynamic.fields['labels'], original.labels)
 
-   def test_absent_optionals_and_empty_arrays(self):
+   def test_01_codec_07_absent_optionals_and_empty_arrays(self):
       original = CodecCases()
       decoded = decode(encode(original), CodecCases)
       self.assertEqual(decoded, original)
@@ -447,7 +447,7 @@ class CodecTests(unittest.TestCase):
       self.assertIsNone(decoded.optional_enabled)
       self.assertEqual(decoded.bool_flags, [])
 
-   def test_unknown_fields_are_skipped_and_truncation_fails(self):
+   def test_02_invalid_01_unknown_fields_are_skipped_and_truncation_fails(self):
       wire = encode(codec_cases())
       extended = (wire + wire_u32(998) + wire_u32(0) + wire_u32(11) +
          wire_u32(4) + b'\x00\x00\x00\x00' + wire_u32(999) +
@@ -463,7 +463,7 @@ class CodecTests(unittest.TestCase):
       with self.assertRaises(CodecError):
          decode(wire[:-1], CodecCases)
 
-   def test_duplicate_singular_fields_use_last_value_and_repeated_fields_append(self):
+   def test_01_codec_08_duplicate_singular_fields_use_last_value_and_repeated_fields_append(self):
       endian_prefix = '<' if WIRE_ENDIAN == 'little' else '>'
       wire = encode(CodecCases(required_zero=7, optional_enabled=True, samples=[-9]))
       wire += wire_u32(11) + wire_u32(4) + struct.pack(endian_prefix + 'i', 42)
@@ -488,7 +488,7 @@ class CodecTests(unittest.TestCase):
       with self.assertRaises(CodecError):
          decode_dynamic(malformed_then_valid)
 
-   def test_signed_integer_minimum_and_maximum_values_round_trip(self):
+   def test_03_limits_03_signed_integer_minimum_and_maximum_values_round_trip(self):
       boundaries = (
          (-128, -32768, -2147483648, -9223372036854775808),
          (127, 32767, 2147483647, 9223372036854775807),
@@ -504,7 +504,7 @@ class CodecTests(unittest.TestCase):
          for name, value in zip(names, expected):
             self.assertEqual(dynamic.fields[name], value)
 
-   def test_negative_enum_values_round_trip(self):
+   def test_03_limits_04_negative_enum_values_round_trip(self):
       original = CodecCases(state=State.NEGATIVE)
       wire = encode(original)
       self.assertEqual(decode(wire, CodecCases), original)
@@ -512,7 +512,7 @@ class CodecTests(unittest.TestCase):
       self.assertEqual(dynamic.fields['state'].name, 'NEGATIVE')
       self.assertEqual(dynamic.fields['state'].value, -7)
 
-   def test_enum_int32_boundary_values_round_trip(self):
+   def test_03_limits_05_enum_int32_boundary_values_round_trip(self):
       for state, expected, name in (
          (State.MINIMUM, -2147483648, 'MINIMUM'),
          (State.MAXIMUM, 2147483647, 'MAXIMUM'),
@@ -523,7 +523,7 @@ class CodecTests(unittest.TestCase):
          value = decode_dynamic(wire).fields['state']
          self.assertEqual((value.name, value.value), (name, expected))
 
-   def test_undeclared_enum_values_are_rejected_by_typed_and_dynamic_decoders(self):
+   def test_02_invalid_13_undeclared_enum_values_are_rejected_by_typed_and_dynamic_decoders(self):
       endian_prefix = '<' if WIRE_ENDIAN == 'little' else '>'
       with self.assertRaisesRegex(CodecError, 'enum value'):
          encode(CodecCases(state=99))
@@ -534,7 +534,7 @@ class CodecTests(unittest.TestCase):
       with self.assertRaisesRegex(CodecError, 'enum value'):
          decode_dynamic(wire)
 
-   def test_packed_fixed_messages_reject_nested_invalid_enum_values(self):
+   def test_02_invalid_14_packed_fixed_messages_reject_nested_invalid_enum_values(self):
       with self.assertRaisesRegex(CodecError, 'enum value'):
          encode(EnumRecordBatch(records=[EnumRecord(state=99, code=42)]))
 
@@ -551,7 +551,7 @@ class CodecTests(unittest.TestCase):
       with self.assertRaisesRegex(CodecError, 'enum value'):
          decode_dynamic(malformed)
 
-   def test_fixed_enum_arrays_reject_undeclared_values(self):
+   def test_02_invalid_15_fixed_enum_arrays_reject_undeclared_values(self):
       self.assertEqual(decode(encode(codec_cases()), CodecCases), codec_cases())
       invalid = codec_cases()
       invalid.fixed_states = [State.READY, 99, State.NEGATIVE]
@@ -589,7 +589,7 @@ class CodecTests(unittest.TestCase):
       with self.assertRaises(CodecError):
          decode_dynamic(bad_packed_length)
 
-   def test_invalid_utf8_strings_are_rejected_by_typed_and_dynamic_codecs(self):
+   def test_02_invalid_04_invalid_utf8_strings_are_rejected_by_typed_and_dynamic_codecs(self):
       with self.assertRaisesRegex(CodecError, 'Unicode scalar'):
          encode(RootPayload(header='\ud800'))
       wire = bytearray(encode(RootPayload(header='four')))
@@ -618,7 +618,7 @@ class CodecTests(unittest.TestCase):
       with self.assertRaisesRegex(CodecError, 'UTF-8'):
          decode_dynamic(truncated)
 
-   def test_integer_encoder_rejects_values_outside_wire_ranges(self):
+   def test_03_limits_01_integer_encoder_rejects_values_outside_wire_ranges(self):
       cases = (
          ('tiny', -129), ('tiny', 128),
          ('small', -32769), ('small', 32768),
@@ -630,7 +630,7 @@ class CodecTests(unittest.TestCase):
             with self.assertRaisesRegex(CodecError, 'invalid value for'):
                encode(CodecCases(**{field: value}))
 
-   def test_float_encoder_rejects_values_outside_wire_ranges(self):
+   def test_03_limits_02_float_encoder_rejects_values_outside_wire_ranges(self):
       cases = (
          CodecCases(ratio=1e100), CodecCases(ratio=-1e100),
          CodecCases(point=Complex32(1e100, 0.0)),
@@ -641,7 +641,7 @@ class CodecTests(unittest.TestCase):
             with self.assertRaisesRegex(CodecError, 'invalid (value for fl32|complex value)'):
                encode(value)
 
-   def test_python_runtime_rejects_unknown_wire_byte_order(self):
+   def test_03_limits_07_python_runtime_rejects_unknown_wire_byte_order(self):
       environment = os.environ.copy()
       environment['SDL_WIRE_ENDIAN'] = 'middle'
       result = subprocess.run([sys.executable, '-c', 'import sdl_runtime'],
@@ -650,13 +650,13 @@ class CodecTests(unittest.TestCase):
       self.assertNotEqual(result.returncode, 0)
       self.assertIn('SDL_WIRE_ENDIAN must be', result.stderr)
 
-   def test_boolean_encoder_requires_boolean_values(self):
+   def test_02_invalid_17_boolean_encoder_requires_boolean_values(self):
       with self.assertRaisesRegex(CodecError, 'requires bool'):
          encode(CodecCases(required_enabled=1))
       with self.assertRaisesRegex(CodecError, 'requires bool'):
          encode(CodecCases(optional_enabled='yes'))
 
-   def test_invalid_boolean_and_wrong_hash_are_rejected(self):
+   def test_02_invalid_16_invalid_boolean_and_wrong_hash_are_rejected(self):
       malformed_bool = encode(codec_cases()) + wire_u32(17) + wire_u32(1) + b'\x02'
       with self.assertRaisesRegex(CodecError, 'boolean'):
          decode(malformed_bool, CodecCases)
@@ -676,13 +676,13 @@ class CodecTests(unittest.TestCase):
       with self.assertRaisesRegex(CodecError, 'hash'):
          decode_dynamic(bytes(wrong_hash))
 
-   def test_zero_length_packed_occurrence_decodes_as_an_empty_array(self):
+   def test_01_codec_10_zero_length_packed_occurrence_decodes_as_an_empty_array(self):
       wire = encode(CodecCases()) + wire_u32(15) + wire_u32(0)
       decoded = decode(wire, CodecCases)
       self.assertEqual(decoded.points, [])
       self.assertEqual(decode_dynamic(wire).fields['points'], [])
 
-   def test_packed_field_occurrences_concatenate_in_wire_order(self):
+   def test_01_codec_09_packed_field_occurrences_concatenate_in_wire_order(self):
       endian_prefix = '<' if WIRE_ENDIAN == 'little' else '>'
       first = Complex32(1.25, -2.5)
       second = Complex32(3.5, 4.75)
@@ -695,7 +695,7 @@ class CodecTests(unittest.TestCase):
       self.assertEqual(decoded.points, [first, second])
       self.assertEqual(decode_dynamic(wire).fields['points'], [first, second])
 
-   def test_packed_field_rejects_non_multiple_element_length(self):
+   def test_03_limits_06_packed_field_rejects_non_multiple_element_length(self):
       malformed = encode(codec_cases()) + wire_u32(15) + wire_u32(1) + b'\x00'
       with self.assertRaisesRegex(CodecError, 'packed field length'):
          decode(malformed, CodecCases)

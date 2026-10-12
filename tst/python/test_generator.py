@@ -12,7 +12,7 @@ from python_backend import PythonBackend, generate_python
 
 
 class GeneratorValidationTests(unittest.TestCase):
-   def test_message_and_enum_braces_are_required_and_balanced(self):
+   def test_01_schema_01_message_and_enum_braces_are_required_and_balanced(self):
       malformed_schemas = (
          ('message Packet\n   1: required int32 value;\n}\n',
             'unexpected SDL statement'),
@@ -38,7 +38,7 @@ class GeneratorValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, error):
                MsgParser().parse_text(source)
 
-   def test_s04_duplicate_field_ids_and_unknown_types_are_rejected(self):
+   def test_01_schema_02_s04_duplicate_field_ids_and_unknown_types_are_rejected(self):
       with self.assertRaisesRegex(ValueError, 'duplicate field ID or name in Packet'):
          MsgParser().parse_text('''
 message Packet {
@@ -53,7 +53,7 @@ message Packet {
 }
 ''')
 
-   def test_numeric_schema_tokens_use_ascii_decimal_digits(self):
+   def test_01_schema_03_numeric_schema_tokens_use_ascii_decimal_digits(self):
       with self.assertRaisesRegex(ValueError, 'invalid field declaration'):
          MsgParser().parse_text("""
 message Packet {
@@ -73,7 +73,7 @@ enum State {
 }
 """)
 
-   def test_declared_types_cannot_reuse_builtin_names(self):
+   def test_01_schema_04_declared_types_cannot_reuse_builtin_names(self):
       cases = (
          ("""
 message int32 {
@@ -94,7 +94,7 @@ message bool {
          with self.assertRaisesRegex(ValueError, error):
             MsgParser().parse_text(source)
 
-   def test_schema_descriptor_limits_are_rejected_during_parse(self):
+   def test_03_limits_05_schema_descriptor_limits_are_rejected_during_parse(self):
       with self.assertRaisesRegex(ValueError, 'enum value must fit signed int32 in State'):
          MsgParser().parse_text("""
 enum State {
@@ -118,7 +118,7 @@ enum State {
       with self.assertRaisesRegex(ValueError, 'type name exceeds uint16 in schema descriptor'):
          MsgParser().parse_text('message ' + long_name + ' {\n}\n')
 
-   def test_field_name_length_accepts_uint16_max_bytes(self):
+   def test_03_limits_06_field_name_length_accepts_uint16_max_bytes(self):
       name = 'x' * 0xFFFF
       parser = MsgParser()
       parser.parse_text('message Packet {\n   1: required int32 ' + name + ';\n}\n')
@@ -129,7 +129,7 @@ enum State {
          MsgParser().parse_text('message Packet {\n   1: required int32 ' +
             name + 'x;\n}\n')
 
-   def test_schema_descriptor_u16_counts_are_validated(self):
+   def test_03_limits_07_schema_descriptor_u16_counts_are_validated(self):
       enum_values = ''.join('   ITEM_' + str(index) + ' = ' + str(index) + ';\n'
          for index in range(0x10000))
       with self.assertRaisesRegex(ValueError,
@@ -142,7 +142,7 @@ enum State {
             'too many fields in Packet for schema descriptor'):
          MsgParser().parse_text('message Packet {\n' + fields + '}\n')
 
-   def test_total_wire_descriptor_size_limit_is_inclusive(self):
+   def test_03_limits_08_total_wire_descriptor_size_limit_is_inclusive(self):
       field_lengths = [65520] * 15 + [65510]
 
       def source_with_extra_byte(extra_byte):
@@ -163,7 +163,7 @@ enum State {
             'wire descriptor exceeds 1 MiB for Packet'):
          MsgParser().parse_text(source_with_extra_byte(1))
 
-   def test_empty_enums_are_rejected_for_backend_portability(self):
+   def test_01_schema_05_empty_enums_are_rejected_for_backend_portability(self):
       with self.assertRaisesRegex(ValueError,
             'enum must declare at least one value: State'):
          MsgParser().parse_text('''
@@ -171,7 +171,7 @@ enum State {
 }
 ''')
 
-   def test_s05_recursive_message_dependencies_are_rejected(self):
+   def test_01_schema_06_s05_recursive_message_dependencies_are_rejected(self):
       with self.assertRaisesRegex(ValueError,
             'recursive message dependency involving Packet'):
          MsgParser().parse_text('''
@@ -180,7 +180,7 @@ message Packet {
 }
 ''')
 
-   def test_anonymous_nested_structs_get_stable_logical_names(self):
+   def test_01_schema_07_anonymous_nested_structs_get_stable_logical_names(self):
       parser = MsgParser()
       parser.parse_text('''
 message Packet {
@@ -196,7 +196,7 @@ message Packet {
       self.assertIn('Packet$2', parser.messages)
       self.assertEqual(parser.messages['Packet$1'].fields[1].type_name, 'Packet$2')
 
-   def test_c_backend_avoids_auxiliary_member_name_collisions(self):
+   def test_02_backend_02_c_backend_avoids_auxiliary_member_name_collisions(self):
       parser = MsgParser()
       parser.parse_text('''
 message Packet {
@@ -216,7 +216,7 @@ message Packet {
       self.assertIn('offsetof(Packet, items_count_2)', source)
       self.assertIn('offsetof(Packet, sdl_string_length_5_2)', source)
 
-   def test_c_backend_rejects_c_keyword_type_and_field_names(self):
+   def test_02_backend_03_c_backend_rejects_c_keyword_type_and_field_names(self):
       cases = (
          ('''
 message struct {
@@ -245,7 +245,7 @@ message Packet {
          with self.assertRaisesRegex(ValueError, error):
             CBackend(parser).generate_files('schema')
 
-   def test_c_backend_rejects_nonportable_identifiers(self):
+   def test_02_backend_04_c_backend_rejects_nonportable_identifiers(self):
       cases = (
          ("""
 message Packet {
@@ -293,7 +293,7 @@ message Packet {
          with self.assertRaisesRegex(ValueError, error):
             CBackend(parser).generate_files('schema')
 
-   def test_backend_generated_module_filenames_are_reserved(self):
+   def test_02_backend_05_backend_generated_module_filenames_are_reserved(self):
       cases = (
          ('sdl_registry', generate_c,
           'C schema filename sdl_registry collides with generated registry files'),
@@ -315,7 +315,7 @@ message Packet {
                generate(str(schema_path), str(output_path))
             self.assertFalse(output_path.exists())
 
-   def test_backends_refresh_outputs_safely(self):
+   def test_02_backend_01_backends_refresh_outputs_safely(self):
       cases = (
          (generate_c, 'obsolete.c', 'custom.c'),
          (generate_rust, 'obsolete.rs', 'custom.rs'),
@@ -407,7 +407,7 @@ message Packet {
                {path.name: path.read_bytes() for path in output_path.iterdir()
                   if path.is_file()})
 
-   def test_rust_and_python_backends_reject_case_colliding_modules_safely(self):
+   def test_02_backend_06_rust_and_python_backends_reject_case_colliding_modules_safely(self):
       cases = (
          (generate_rust, 'obsolete.rs', 'SDL filenames map to the same Rust module: foo'),
          (generate_python, 'obsolete.py', 'SDL filenames map to the same Python module: foo'),
@@ -436,7 +436,7 @@ message Packet {
             self.assertEqual(before_collision, {path.name: path.read_bytes()
                for path in output_path.iterdir() if path.is_file()})
 
-   def test_c_backend_rejects_case_colliding_header_guards(self):
+   def test_02_backend_07_c_backend_rejects_case_colliding_header_guards(self):
       with tempfile.TemporaryDirectory() as directory:
          input_path = pathlib.Path(directory) / 'schemas'
          output_path = pathlib.Path(directory) / 'out'
@@ -451,7 +451,7 @@ message Packet {
             generate_c(str(input_path), str(output_path))
          self.assertFalse(output_path.exists())
 
-   def test_python_backend_rejects_imported_type_name_collisions(self):
+   def test_02_backend_08_python_backend_rejects_imported_type_name_collisions(self):
       parser = MsgParser()
       parser.parse_text("""
 enum SdlMessage {
@@ -465,7 +465,7 @@ message Packet {
             'Python type name conflicts with an imported runtime type: SdlMessage'):
          PythonBackend(parser).generate()
 
-   def test_python_backend_rejects_keyword_and_non_normalized_identifiers(self):
+   def test_02_backend_09_python_backend_rejects_keyword_and_non_normalized_identifiers(self):
       cases = (
          ("""
 message Packet {
@@ -488,7 +488,7 @@ message Packet {
          with self.assertRaisesRegex(ValueError, error):
             PythonBackend(parser).generate()
 
-   def test_python_backend_rejects_runtime_member_and_enum_reserved_names(self):
+   def test_02_backend_10_python_backend_rejects_runtime_member_and_enum_reserved_names(self):
       cases = (
          ("""
 message Packet {
@@ -521,7 +521,7 @@ enum State {
          with self.assertRaisesRegex(ValueError, error):
             PythonBackend(parser).generate()
 
-   def test_rust_backend_rejects_enum_variant_name_collisions(self):
+   def test_02_backend_11_rust_backend_rejects_enum_variant_name_collisions(self):
       parser = MsgParser()
       parser.parse_text("""
 enum State {
@@ -533,7 +533,7 @@ enum State {
             'Rust enum variant collision after conversion in State: Http_Ok and HTTP_OK'):
          RustBackend(parser).generate()
 
-   def test_rust_backend_rejects_type_name_collisions_from_anonymous_types(self):
+   def test_02_backend_12_rust_backend_rejects_type_name_collisions_from_anonymous_types(self):
       parser = MsgParser()
       parser.parse_text("""
 message Packet {
@@ -549,14 +549,14 @@ message Packet1 {
             r'Rust type name collision after conversion: Packet1 and Packet\$1'):
          RustBackend(parser).generate()
 
-   def test_rust_backend_rejects_imported_type_name_collisions(self):
+   def test_02_backend_13_rust_backend_rejects_imported_type_name_collisions(self):
       parser = MsgParser()
       parser.parse_text('''\nmessage String {\n   1: required int32 value;\n}\n''')
       with self.assertRaisesRegex(ValueError,
             'Rust type name conflicts with a runtime or standard type: String'):
          RustBackend(parser).generate()
 
-   def test_rust_backend_rejects_enum_variants_starting_with_digits(self):
+   def test_02_backend_14_rust_backend_rejects_enum_variants_starting_with_digits(self):
       parser = MsgParser()
       parser.parse_text("""
 enum State {
@@ -567,7 +567,7 @@ enum State {
             'Rust backend cannot emit invalid enum variant: State.2FAST'):
          RustBackend(parser).generate()
 
-   def test_rust_backend_rejects_primitive_type_name_collisions(self):
+   def test_02_backend_15_rust_backend_rejects_primitive_type_name_collisions(self):
       parser = MsgParser()
       parser.parse_text("""
 message i32 {
@@ -578,7 +578,7 @@ message i32 {
             'Rust type name conflicts with a runtime or standard type: i32'):
          RustBackend(parser).generate()
 
-   def test_rust_backend_rejects_non_xid_unicode_identifiers(self):
+   def test_02_backend_16_rust_backend_rejects_non_xid_unicode_identifiers(self):
       parser = MsgParser()
       parser.parse_text("""
 message Packet {
@@ -589,7 +589,7 @@ message Packet {
             'Rust backend cannot emit invalid field identifier: Packet.²field'):
          RustBackend(parser).generate()
 
-   def test_rust_backend_rejects_reserved_field_names(self):
+   def test_02_backend_17_rust_backend_rejects_reserved_field_names(self):
       parser = MsgParser()
       parser.parse_text("""
 message Packet {
@@ -600,7 +600,7 @@ message Packet {
             'Rust backend cannot use reserved word as field name: Packet.type'):
          RustBackend(parser).generate()
 
-   def test_fixed_array_rejects_variable_wire_type_with_field_name(self):
+   def test_03_limits_01_fixed_array_rejects_variable_wire_type_with_field_name(self):
       parser = MsgParser()
       with self.assertRaisesRegex(ValueError,
             'fixed array element has variable wire size in Container.items'):
@@ -613,7 +613,7 @@ message Container {
 }
 ''')
 
-   def test_fixed_array_dimensions_must_be_positive(self):
+   def test_03_limits_02_fixed_array_dimensions_must_be_positive(self):
       parser = MsgParser()
       with self.assertRaisesRegex(ValueError,
             'fixed array dimensions must be positive uint32 values in Container.items'):
@@ -623,7 +623,7 @@ message Container {
 }
 ''')
 
-   def test_fixed_array_wire_size_accepts_uint32_max(self):
+   def test_03_limits_03_fixed_array_wire_size_accepts_uint32_max(self):
       parser = MsgParser()
       parser.parse_text('''
 message Unit {
@@ -636,7 +636,7 @@ message Container {
       self.assertEqual(parser.fixed_wire_size('Unit'), 1)
       self.assertEqual(parser.fixed_wire_size('Container'), 0xFFFFFFFF)
 
-   def test_fixed_array_wire_size_must_fit_field_length(self):
+   def test_03_limits_04_fixed_array_wire_size_must_fit_field_length(self):
       parser = MsgParser()
       with self.assertRaisesRegex(ValueError,
             'fixed array wire size exceeds uint32 in Container.items'):

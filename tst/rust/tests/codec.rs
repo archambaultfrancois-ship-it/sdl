@@ -60,7 +60,7 @@ fn reverse_body_fields(wire: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn absent_required_fields_decode_to_default_values() {
+fn t01_codec_06_absent_required_fields_decode_to_default_values() {
    let encoded = encode(&codec_cases()).unwrap();
    let descriptor_size = read_wire_u32(&encoded[..4]) as usize;
    let empty_body = &encoded[..8 + descriptor_size];
@@ -69,7 +69,7 @@ fn absent_required_fields_decode_to_default_values() {
 }
 
 #[test]
-fn s01_field_order_is_independent_of_schema_order() {
+fn t01_codec_11_s01_field_order_is_independent_of_schema_order() {
    let original = codec_cases();
    let reordered = reverse_body_fields(&encode(&original).unwrap());
    assert_eq!(decode::<CodecCases>(&reordered).unwrap(), original);
@@ -78,7 +78,7 @@ fn s01_field_order_is_independent_of_schema_order() {
 }
 
 #[test]
-fn s02_unicode_strings_and_float_special_values_round_trip() {
+fn t03_limits_05_s02_unicode_strings_and_float_special_values_round_trip() {
    let text = format!("{}{}tail", "SDL-é-📦-".repeat(128), '\0');
    let original = RootPayload {
       header: Some(text.clone()),
@@ -120,7 +120,7 @@ fn s02_unicode_strings_and_float_special_values_round_trip() {
 }
 
 #[test]
-fn s03_invalid_frame_and_field_lengths_are_rejected() {
+fn t02_invalid_02_s03_invalid_frame_and_field_lengths_are_rejected() {
    let valid = encode(&codec_cases()).unwrap();
    let mut bad_descriptor_length = valid.clone();
    bad_descriptor_length[..4].copy_from_slice(&wire_u32(u32::MAX));
@@ -150,7 +150,7 @@ fn s03_invalid_frame_and_field_lengths_are_rejected() {
 }
 
 #[test]
-fn primitive_payload_widths_are_checked() {
+fn t02_invalid_03_primitive_payload_widths_are_checked() {
    let cases = [(1, 0), (1, 2), (2, 1), (2, 3), (3, 3), (3, 5),
       (4, 7), (4, 9), (5, 3), (5, 5), (6, 7), (6, 9),
       (7, 7), (7, 9), (8, 15), (8, 17), (18, 0), (18, 2)];
@@ -167,7 +167,7 @@ fn primitive_payload_widths_are_checked() {
 }
 
 #[test]
-fn invalid_utf8_in_wire_descriptor_strings_is_rejected() {
+fn t02_invalid_05_invalid_utf8_in_wire_descriptor_strings_is_rejected() {
    let descriptor: &[u8] = &[
       0x53, 0x44, 0x44, 0x31, 0x00, 0x01, 0xFF, 0x00,
       0x01, 0x00, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00,
@@ -181,7 +181,7 @@ fn invalid_utf8_in_wire_descriptor_strings_is_rejected() {
 }
 
 #[test]
-fn nul_in_wire_descriptor_strings_is_rejected() {
+fn t02_invalid_06_nul_in_wire_descriptor_strings_is_rejected() {
    let descriptor: &[u8] = &[
       0x53, 0x44, 0x44, 0x31, 0x00, 0x02, 0x41, 0x00,
       0x00, 0x01, 0x00, 0x02, 0x41, 0x00, 0x00, 0x00,
@@ -196,7 +196,7 @@ fn nul_in_wire_descriptor_strings_is_rejected() {
 }
 
 #[test]
-fn recursive_wire_descriptors_are_rejected() {
+fn t02_invalid_07_recursive_wire_descriptors_are_rejected() {
    let descriptor: &[u8] = &[
       0x53, 0x44, 0x44, 0x31, 0x00, 0x01, 0x41, 0x00,
       0x01, 0x00, 0x01, 0x41, 0x00, 0x01, 0x00, 0x00,
@@ -212,7 +212,7 @@ fn recursive_wire_descriptors_are_rejected() {
 }
 
 #[test]
-fn display_formats_typed_objects_with_configurable_indentation() {
+fn t01_codec_12_display_formats_typed_objects_with_configurable_indentation() {
    let original = codec_cases();
    let rendered = display(&original, 2);
    assert!(rendered.starts_with("CodecCases {\n"));
@@ -225,7 +225,7 @@ fn display_formats_typed_objects_with_configurable_indentation() {
 }
 
 #[test]
-fn root_payload_deep_clone_and_wire_round_trip() {
+fn t01_codec_01_root_payload_deep_clone_and_wire_round_trip() {
    let original = RootPayload {
       header: Some("Mission_Data_Packet".to_owned()),
       fixed_array: vec![
@@ -271,7 +271,7 @@ fn root_payload_deep_clone_and_wire_round_trip() {
 }
 
 #[test]
-fn nested_fixed_arrays_round_trip() {
+fn t01_codec_04_nested_fixed_arrays_round_trip() {
    let vector = |base: f32| FixedVector {
       coords: [base, base + 1.0],
       grid: [[base as i16, base as i16 + 1, base as i16 + 2],
@@ -331,7 +331,7 @@ fn nested_fixed_arrays_round_trip() {
 }
 
 #[test]
-fn anonymous_nested_structs_round_trip() {
+fn t01_codec_05_anonymous_nested_structs_round_trip() {
    let input = AnonymousEnvelope {
       metadata: AnonymousEnvelope1 {
          code: 42,
@@ -393,7 +393,7 @@ fn codec_cases() -> CodecCases {
 }
 
 #[test]
-fn codec_scalars_optionals_enums_arrays_and_empty_values() {
+fn t01_codec_02_codec_scalars_optionals_enums_arrays_and_empty_values() {
    let input = codec_cases();
    let wire = encode(&input).unwrap();
    let decoded: CodecCases = decode(&wire).unwrap();
@@ -415,7 +415,7 @@ fn codec_scalars_optionals_enums_arrays_and_empty_values() {
 }
 
 #[test]
-fn signed_integer_minimum_and_maximum_values_round_trip() {
+fn t03_limits_01_signed_integer_minimum_and_maximum_values_round_trip() {
    let boundaries = [
       [i8::MIN as i64, i16::MIN as i64, i32::MIN as i64, i64::MIN],
       [i8::MAX as i64, i16::MAX as i64, i32::MAX as i64, i64::MAX],
@@ -440,7 +440,7 @@ fn signed_integer_minimum_and_maximum_values_round_trip() {
 }
 
 #[test]
-fn negative_enum_values_round_trip() {
+fn t03_limits_02_negative_enum_values_round_trip() {
    let mut input = CodecCases::default();
    input.state = Some(State::Negative);
    let wire = encode(&input).unwrap();
@@ -453,7 +453,7 @@ fn negative_enum_values_round_trip() {
 }
 
 #[test]
-fn enum_int32_boundary_values_round_trip() {
+fn t03_limits_03_enum_int32_boundary_values_round_trip() {
    let cases = [(State::Minimum, i32::MIN, "MINIMUM"),
       (State::Maximum, i32::MAX, "MAXIMUM")];
    for (state, expected, name) in cases {
@@ -468,7 +468,7 @@ fn enum_int32_boundary_values_round_trip() {
 }
 
 #[test]
-fn absent_optionals_and_empty_arrays_round_trip() {
+fn t01_codec_07_absent_optionals_and_empty_arrays_round_trip() {
    let input = CodecCases::default();
    let wire = encode(&input).unwrap();
    let decoded: CodecCases = decode(&wire).unwrap();
@@ -479,7 +479,7 @@ fn absent_optionals_and_empty_arrays_round_trip() {
 }
 
 #[test]
-fn unknown_fields_are_skipped_and_truncated_fields_fail() {
+fn t02_invalid_01_unknown_fields_are_skipped_and_truncated_fields_fail() {
    let wire = encode(&codec_cases()).unwrap();
    let mut extended = wire.clone();
    extended.extend_from_slice(&wire_u32(998));
@@ -507,7 +507,7 @@ fn unknown_fields_are_skipped_and_truncated_fields_fail() {
 }
 
 #[test]
-fn duplicate_singular_fields_use_last_value_and_repeated_fields_append() {
+fn t01_codec_08_duplicate_singular_fields_use_last_value_and_repeated_fields_append() {
    let mut original = CodecCases::default();
    original.required_zero = 7;
    original.optional_enabled = Some(true);
@@ -540,7 +540,7 @@ fn duplicate_singular_fields_use_last_value_and_repeated_fields_append() {
 }
 
 #[test]
-fn undeclared_enum_values_are_rejected_by_typed_and_dynamic_decoders() {
+fn t02_invalid_12_undeclared_enum_values_are_rejected_by_typed_and_dynamic_decoders() {
    let mut wire = encode(&CodecCases::default()).unwrap();
    write_field(9, &99i32, &mut wire).unwrap();
    assert_eq!(decode::<CodecCases>(&wire), Err(CodecError::InvalidEnum));
@@ -548,7 +548,7 @@ fn undeclared_enum_values_are_rejected_by_typed_and_dynamic_decoders() {
 }
 
 #[test]
-fn packed_fixed_messages_reject_nested_invalid_enum_values() {
+fn t02_invalid_13_packed_fixed_messages_reject_nested_invalid_enum_values() {
    let valid = EnumRecordBatch {
       records: vec![EnumRecord { state: State::Ready, code: 42 }],
    };
@@ -566,7 +566,7 @@ fn packed_fixed_messages_reject_nested_invalid_enum_values() {
 }
 
 #[test]
-fn fixed_enum_arrays_reject_undeclared_values() {
+fn t02_invalid_14_fixed_enum_arrays_reject_undeclared_values() {
    assert_eq!(decode::<CodecCases>(&encode(&codec_cases()).unwrap()).unwrap(),
       codec_cases());
    let mut malformed = encode(&CodecCases::default()).unwrap();
@@ -602,7 +602,7 @@ fn fixed_enum_arrays_reject_undeclared_values() {
 }
 
 #[test]
-fn invalid_utf8_strings_are_rejected_by_typed_and_dynamic_decoders() {
+fn t02_invalid_04_invalid_utf8_strings_are_rejected_by_typed_and_dynamic_decoders() {
    let mut wire = encode(&RootPayload {
       header: Some("four".to_owned()),
       ..RootPayload::default()
@@ -630,7 +630,7 @@ fn invalid_utf8_strings_are_rejected_by_typed_and_dynamic_decoders() {
 }
 
 #[test]
-fn noncanonical_boolean_payload_is_rejected() {
+fn t02_invalid_15_noncanonical_boolean_payload_is_rejected() {
    let mut wire = encode(&codec_cases()).unwrap();
    wire.extend_from_slice(&wire_u32(17));
    wire.extend_from_slice(&wire_u32(1));
@@ -647,7 +647,7 @@ fn noncanonical_boolean_payload_is_rejected() {
 }
 
 #[test]
-fn zero_length_packed_occurrence_decodes_as_an_empty_array() {
+fn t01_codec_10_zero_length_packed_occurrence_decodes_as_an_empty_array() {
    let mut wire = encode(&CodecCases::default()).unwrap();
    wire.extend_from_slice(&wire_u32(15));
    wire.extend_from_slice(&wire_u32(0));
@@ -658,7 +658,7 @@ fn zero_length_packed_occurrence_decodes_as_an_empty_array() {
 }
 
 #[test]
-fn packed_field_occurrences_concatenate_in_wire_order() {
+fn t01_codec_09_packed_field_occurrences_concatenate_in_wire_order() {
    let first = Complex32 { real: 1.25, imag: -2.5 };
    let second = Complex32 { real: 3.5, imag: 4.75 };
    let mut input = CodecCases::default();
@@ -677,7 +677,7 @@ fn packed_field_occurrences_concatenate_in_wire_order() {
 }
 
 #[test]
-fn packed_field_rejects_non_multiple_element_length() {
+fn t03_limits_04_packed_field_rejects_non_multiple_element_length() {
    let mut wire = encode(&codec_cases()).unwrap();
    wire.extend_from_slice(&wire_u32(15));
    wire.extend_from_slice(&wire_u32(1));
@@ -704,7 +704,7 @@ fn packed_field_rejects_non_multiple_element_length() {
 }
 
 #[test]
-fn wrong_type_hash_is_rejected() {
+fn t02_invalid_16_wrong_type_hash_is_rejected() {
    let mut wire = encode(&codec_cases()).unwrap();
    let descriptor_size = read_wire_u32(&wire[..4]) as usize;
    wire[4 + descriptor_size] ^= 0x80;
@@ -713,7 +713,7 @@ fn wrong_type_hash_is_rejected() {
 }
 
 #[test]
-fn dynamic_descriptors_reject_fixed_arrays_of_variable_size_messages() {
+fn t02_invalid_08_dynamic_descriptors_reject_fixed_arrays_of_variable_size_messages() {
    let descriptor: &[u8] = &[
 
       0x53, 0x44, 0x44, 0x31, 0x00, 0x06, 0x50, 0x61,
@@ -765,7 +765,7 @@ fn single_field_descriptor_frame(type_name: &str, modifier: u8,
 }
 
 #[test]
-fn empty_message_round_trip() {
+fn t01_codec_03_empty_message_round_trip() {
    let input = EmptyMessage {};
    let wire = encode(&input).unwrap();
    assert_eq!(wire.len(), 8 + EmptyMessage::DESCRIPTOR.len());
@@ -776,7 +776,7 @@ fn empty_message_round_trip() {
 }
 
 #[test]
-fn dynamic_descriptors_reject_empty_enums() {
+fn t02_invalid_09_dynamic_descriptors_reject_empty_enums() {
    let mut descriptor = b"SDD1".to_vec();
    append_descriptor_text(&mut descriptor, "Packet");
    descriptor.extend_from_slice(&1u16.to_be_bytes());
@@ -794,7 +794,7 @@ fn dynamic_descriptors_reject_empty_enums() {
 }
 
 #[test]
-fn dynamic_descriptors_reject_builtin_type_name_collisions() {
+fn t02_invalid_10_dynamic_descriptors_reject_builtin_type_name_collisions() {
    fn collision_frame(type_name: &str, as_enum: bool) -> Vec<u8> {
       let mut descriptor = b"SDD1".to_vec();
       append_descriptor_text(&mut descriptor, "Packet");
@@ -831,7 +831,7 @@ fn dynamic_descriptors_reject_builtin_type_name_collisions() {
 }
 
 #[test]
-fn dynamic_descriptors_reject_invalid_fixed_layouts() {
+fn t02_invalid_11_dynamic_descriptors_reject_invalid_fixed_layouts() {
    let cases: [(&str, u8, &[u32]); 3] = [
       ("string", 3, &[]),
       ("int8", 0, &[0]),

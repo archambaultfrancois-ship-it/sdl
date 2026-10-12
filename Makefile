@@ -12,19 +12,28 @@ SDL_FILES := $(wildcard sdl/*.sdl)
 
 all: $(BUILD_DIR)/sdl_utest
 
-test: test-c test-rust test-python
+check test:
+	$(MAKE) test-c
+	$(MAKE) test-rust
+	$(MAKE) test-python
 
 test-c: $(BUILD_DIR)/sdl_utest $(BUILD_DIR)/sdl_utest_le
+	@echo "=== Component C: generated typed codec, runtime storage, then wire limits ==="
 	./$(BUILD_DIR)/sdl_utest
+	@echo "=== Component C, little endian ==="
 	./$(BUILD_DIR)/sdl_utest_le
 
 test-rust: $(GENERATED_DIR)/.stamp
-	$(CARGO) test --manifest-path tst/rust/Cargo.toml
-	$(CARGO) test --manifest-path tst/rust/Cargo.toml --features wire-little-endian
+	@echo "=== Component Rust: codec, malformed input, then limits (serial order) ==="
+	RUST_TEST_THREADS=1 $(CARGO) test --manifest-path tst/rust/Cargo.toml -- --test-threads=1
+	@echo "=== Component Rust, little endian ==="
+	RUST_TEST_THREADS=1 $(CARGO) test --manifest-path tst/rust/Cargo.toml --features wire-little-endian -- --test-threads=1
 
 test-python: $(GENERATED_DIR)/.stamp
-	PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) -m unittest discover -s tst/python -v
-	SDL_WIRE_ENDIAN=little PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) -m unittest discover -s tst/python -v
+	@echo "=== Component Python: runtime, schema/codegen, invalid input, limits ==="
+	PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) tst/python/run_tests.py
+	@echo "=== Component Python, little endian ==="
+	SDL_WIRE_ENDIAN=little PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) tst/python/run_tests.py
 
 bench: bench-c bench-rust bench-python
 
