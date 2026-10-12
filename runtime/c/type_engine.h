@@ -3,6 +3,7 @@
 #define SDL_TYPE_ENGINE_H
 
 #include <stddef.h>
+#include "sdl_dynamic.h"
 /* These functions are the public message and buffer API. */
 size_t type_encode_size(const char *type, const void *decoded);
 void *type_encode(const char *type, const void *decoded, size_t *size);

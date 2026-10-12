@@ -3,7 +3,8 @@
 
 import os
 
-from generator import c_identifier, parse_schemas
+from generator import (c_identifier, canonical_type_descriptor,
+   canonical_type_hash, parse_schemas)
 
 
 def rust_variant(name):
@@ -119,7 +120,15 @@ class RustBackend:
          output.append('      <Self as SdlMessage>::decode_body(payload)\n   }\n}\n')
 
          output.append('impl SdlMessage for ' + rust_name + ' {\n')
-         output.append('   const HASH: u32 = 0x' + format(self._hash(message_name), '08X') + ';\n')
+         output.append('   const HASH: u32 = 0x' + format(
+            canonical_type_hash(self.schema, message_name), '08X') + ';\n')
+         descriptor = canonical_type_descriptor(self.schema, message_name)
+         descriptor_lines = []
+         for offset in range(0, len(descriptor), 16):
+            descriptor_lines.append(', '.join('0x%02X' % byte for byte in
+               descriptor[offset:offset + 16]))
+         output.append('   const DESCRIPTOR: &\'static [u8] = &[' +
+            '\n      ' + ',\n      '.join(descriptor_lines) + '\n   ];\n')
          output.append('   fn encode_fields(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {\n')
          for field in fields:
             rust_field = c_identifier(field.name)
@@ -193,14 +202,6 @@ class RustBackend:
                output.append('         ' + rust_field + ': ' + rust_field + ',\n')
             output.append('      })\n   }\n}\n\n')
       return ''.join(output)
-
-   @staticmethod
-   def _hash(name):
-      value = 2166136261
-      for char in name:
-         value = ((value ^ ord(char)) * 16777619) & 0xFFFFFFFF
-      return value
-
 
 def generate_rust(input_path, output_dir):
    schemas = parse_schemas(input_path)

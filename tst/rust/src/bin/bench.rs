@@ -1,4 +1,4 @@
-use sdl_runtime::{decode, encode, Complex32};
+use sdl_runtime::{decode, encode, Complex32, SdlMessage};
 use sdl_schema_tests::benchmark::BenchPayload;
 use std::hint::black_box;
 use std::time::Instant;
@@ -26,7 +26,7 @@ fn main() {
       }).collect(),
    };
    let wire = encode(&message).expect("encode benchmark message");
-   assert_eq!(wire.len(), 40220);
+   assert_eq!(wire.len(), 40224 + BenchPayload::DESCRIPTOR.len());
 
    let start = Instant::now();
    for _ in 0..iterations {

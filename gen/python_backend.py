@@ -3,7 +3,7 @@
 
 import os
 
-from generator import c_identifier, fnv1a_32, parse_schemas
+from generator import c_identifier, canonical_type_descriptor, canonical_type_hash, parse_schemas
 
 
 class PythonBackend:
@@ -37,7 +37,15 @@ class PythonBackend:
          fields = sorted(self.schema.messages[message_name].fields,
             key=lambda field: field.index)
          output.append('class ' + c_identifier(message_name) + '(SdlMessage):\n')
-         output.append('   _SDL_HASH = 0x' + format(fnv1a_32(message_name), '08X') + '\n')
+         descriptor = canonical_type_descriptor(self.schema, message_name)
+         descriptor_lines = []
+         for offset in range(0, len(descriptor), 16):
+            descriptor_lines.append(', '.join(str(byte) for byte in
+               descriptor[offset:offset + 16]))
+         output.append('   _SDL_DESCRIPTOR = bytes((\n      ' + ',\n      '.join(
+            descriptor_lines) + ',\n   ))\n')
+         output.append('   _SDL_HASH = 0x' + format(
+            canonical_type_hash(self.schema, message_name), '08X') + '\n')
          fixed_size = self.schema.fixed_wire_size(message_name)
          if fixed_size is not None:
             output.append('   _SDL_FIXED_SIZE = ' + str(fixed_size) + '\n')

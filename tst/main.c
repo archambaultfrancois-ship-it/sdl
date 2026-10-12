@@ -89,6 +89,24 @@ static void test_codec_cases(void) {
    assert(encoded != NULL);
    assert(encoded_size > 4);
    assert(type_decode_size(encoded, encoded_size - 1) == 0);
+   {
+      SdlDynamicMessage *dynamic = type_decode_dynamic(encoded, encoded_size);
+      uint8_t *modified = (uint8_t *)malloc(encoded_size);
+      uint32_t descriptor_size = sdl_wire_read_u32(encoded);
+      const SdlDynamicValue *state;
+      assert(modified != NULL);
+      memcpy(modified, encoded, encoded_size);
+      modified[4 + descriptor_size] ^= 1U;
+      assert(type_decode_dynamic(modified, encoded_size) == NULL);
+      free(modified);
+      assert(dynamic != NULL);
+      state = type_dynamic_get(dynamic, "state");
+      assert(state != NULL && state->kind == SDL_DYNAMIC_ENUM);
+      assert(strcmp(state->value.enumeration.type_name, "State") == 0);
+      assert(strcmp(state->value.enumeration.name, "READY") == 0);
+      assert(state->value.enumeration.value == 1);
+      type_dynamic_free(dynamic);
+   }
 
    extended_size = encoded_size + sizeof(unknown_field) + sizeof(unknown_payload);
    extended = (uint8_t *)malloc(extended_size);
@@ -182,6 +200,7 @@ static void test_fixed_nested_arrays(void) {
    FixedBoard input;
    FixedRow packed_rows[2];
    FixedBoard *decoded;
+   SdlDynamicMessage *dynamic;
    uint8_t *wire;
    size_t wire_size = 0;
    size_t decode_size;
@@ -215,6 +234,26 @@ static void test_fixed_nested_arrays(void) {
    assert(memcmp(decoded->rows, input.rows, sizeof(input.rows)) == 0);
    assert(decoded->packed_rows_count == 2);
    assert(memcmp(decoded->packed_rows, packed_rows, sizeof(packed_rows)) == 0);
+   dynamic = type_decode_dynamic(wire, wire_size);
+   assert(dynamic != NULL);
+   {
+      const SdlDynamicValue *rows = type_dynamic_get(dynamic, "rows");
+      const SdlDynamicMessage *row_value;
+      const SdlDynamicValue *vectors;
+      const SdlDynamicMessage *vector_value;
+      const SdlDynamicValue *coords;
+      assert(rows != NULL && rows->kind == SDL_DYNAMIC_ARRAY);
+      assert(rows->value.array.count == 2);
+      assert(rows->value.array.items[0].kind == SDL_DYNAMIC_MESSAGE);
+      row_value = rows->value.array.items[0].value.message;
+      vectors = type_dynamic_get(row_value, "vectors");
+      assert(vectors != NULL && vectors->kind == SDL_DYNAMIC_ARRAY);
+      vector_value = vectors->value.array.items[0].value.message;
+      coords = type_dynamic_get(vector_value, "coords");
+      assert(coords != NULL && coords->kind == SDL_DYNAMIC_ARRAY);
+      assert(coords->value.array.items[1].value.floating == 1.0);
+   }
+   type_dynamic_free(dynamic);
    type_free(decoded);
    type_free(wire);
 }
@@ -224,6 +263,7 @@ static void test_anonymous_nested_structs(void) {
    AnonymousEnvelope_3 points[2] = { { .x = 1.25f, .y = -2.5f },
       { .x = 3.0f, .y = 4.5f } };
    AnonymousEnvelope *decoded;
+   SdlDynamicMessage *dynamic;
    uint8_t *wire;
    size_t wire_size = 0;
    size_t decode_size;
@@ -244,6 +284,22 @@ static void test_anonymous_nested_structs(void) {
    assert(decoded->points_count == 2);
    assert(decoded->points[0].x == points[0].x && decoded->points[0].y == points[0].y);
    assert(decoded->points[1].x == points[1].x && decoded->points[1].y == points[1].y);
+   dynamic = type_decode_dynamic(wire, wire_size);
+   assert(dynamic != NULL);
+   {
+      const SdlDynamicValue *metadata = type_dynamic_get(dynamic, "metadata");
+      const SdlDynamicValue *detail;
+      const SdlDynamicValue *text;
+      assert(metadata != NULL && metadata->kind == SDL_DYNAMIC_MESSAGE);
+      detail = type_dynamic_get(metadata->value.message, "detail");
+      assert(detail != NULL && detail->kind == SDL_DYNAMIC_MESSAGE);
+      text = type_dynamic_get(detail->value.message, "text");
+      assert(text != NULL && text->kind == SDL_DYNAMIC_STRING);
+      assert(text->value.string.size == strlen("anonymous detail"));
+      assert(memcmp(text->value.string.data, "anonymous detail",
+         text->value.string.size) == 0);
+   }
+   type_dynamic_free(dynamic);
    type_free(decoded);
    type_free(wire);
 }
@@ -261,19 +317,16 @@ static void assert_root_wire_fixture(const void *wire, size_t wire_size) {
    assert(!ferror(fixture));
    assert(feof(fixture));
    fclose(fixture);
-   assert(expected_size == wire_size);
-   if (memcmp(wire, expected, wire_size) != 0) {
+   {
       const uint8_t *actual = (const uint8_t *)wire;
-      size_t i;
-      for (i = 0; i < wire_size; ++i) {
-         if (actual[i] != expected[i]) {
-            fprintf(stderr, "wire mismatch at %lu: %02X != %02X\n",
-               (unsigned long)i, actual[i], expected[i]);
-            break;
-         }
-      }
+      size_t descriptor_size = sdl_wire_read_u32(actual);
+      assert(descriptor_size == ROOTPAYLOAD_SCHEMA_DESCRIPTOR_SIZE);
+      assert(memcmp(actual + 4, ROOTPAYLOAD_SCHEMA_DESCRIPTOR,
+         descriptor_size) == 0);
+      assert(sdl_wire_read_u32(actual + 4 + descriptor_size) == ROOTPAYLOAD_HASH);
+      assert(expected_size == wire_size);
+      assert(memcmp(actual, expected, wire_size) == 0);
    }
-   assert(memcmp(wire, expected, wire_size) == 0);
 }
 
 int main(void) {
@@ -333,11 +386,27 @@ int main(void) {
    size_t rx_size = bin_size;
    void* generic_output = type_decode(bin_stream, &rx_size);
    if (!generic_output) { printf("Error: Decoding step failed\n"); return 1; }
+   SdlDynamicMessage *descriptor_output = type_decode_dynamic(bin_stream, bin_size);
+   assert(descriptor_output != NULL);
+   {
+      const SdlDynamicValue *dynamic_header = type_dynamic_get(descriptor_output, "header");
+      const SdlDynamicValue *dynamic_items = type_dynamic_get(descriptor_output, "var_array");
+      assert(dynamic_header != NULL && dynamic_header->kind == SDL_DYNAMIC_STRING);
+      assert(dynamic_header->value.string.size == strlen(original.header));
+      assert(memcmp(dynamic_header->value.string.data, original.header,
+         dynamic_header->value.string.size) == 0);
+      assert(dynamic_items != NULL && dynamic_items->kind == SDL_DYNAMIC_ARRAY);
+      assert(dynamic_items->value.array.count == original.var_array_count);
+      assert(dynamic_items->value.array.items[0].kind == SDL_DYNAMIC_MESSAGE);
+      assert(type_dynamic_get(dynamic_items->value.array.items[0].value.message,
+         "id")->value.integer == original.var_array[0].id);
+   }
    printf(" 3. Blind Type-Agnostic Decoding..... OK\n");
 
    /* 6. Verify data integrity */
    const uint8_t* wire_bytes = (const uint8_t*)bin_stream;
-   uint32_t stream_hash = sdl_wire_read_u32(wire_bytes);
+   size_t descriptor_size = sdl_wire_read_u32(wire_bytes);
+   uint32_t stream_hash = sdl_wire_read_u32(wire_bytes + 4 + descriptor_size);
    assert(stream_hash == ROOTPAYLOAD_HASH);
    {
       RootPayload* res = (RootPayload*)generic_output;
@@ -370,6 +439,7 @@ int main(void) {
 
    /* 7. Graceful memory block cleanups */
    type_free(generic_output);
+   type_dynamic_free(descriptor_output);
    type_free(bin_stream);
    type_free(cloned);
    printf("\n [Clean] Memory resources wiped out. Zero fragmentation.\n");

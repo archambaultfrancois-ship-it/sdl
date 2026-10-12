@@ -24,6 +24,8 @@ pub enum CodecError {
    InvalidBoolean,
    InvalidEnum,
    InvalidUtf8,
+   InvalidDescriptor,
+   DescriptorHashMismatch,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -52,6 +54,7 @@ pub trait FixedWire: Sized {
 
 pub trait SdlMessage: WireValue + Default {
    const HASH: u32;
+   const DESCRIPTOR: &'static [u8];
 
    fn encode_fields(&self, output: &mut Vec<u8>) -> Result<(), CodecError>;
    fn decode_field(&mut self, id: u32, payload: &[u8]) -> Result<(), CodecError>;
@@ -84,21 +87,34 @@ pub trait SdlMessage: WireValue + Default {
 
 pub fn encode<T: SdlMessage>(value: &T) -> Result<Vec<u8>, CodecError> {
    let body = value.encode_body()?;
-   let mut output = Vec::with_capacity(4 + body.len());
+   let descriptor = T::DESCRIPTOR;
+   let descriptor_length: u32 = descriptor.len().try_into()
+      .map_err(|_| CodecError::LengthOverflow)?;
+   let mut output = Vec::with_capacity(8 + descriptor.len() + body.len());
+   output.extend_from_slice(&wire_u32(descriptor_length));
+   output.extend_from_slice(descriptor);
    output.extend_from_slice(&wire_u32(T::HASH));
    output.extend_from_slice(&body);
    Ok(output)
 }
 
 pub fn decode<T: SdlMessage>(input: &[u8]) -> Result<T, CodecError> {
-   if input.len() < 4 {
+   if input.len() < 8 {
       return Err(CodecError::Truncated);
    }
-   let hash = read_u32(&input[..4])?;
+   let descriptor_length = read_u32(&input[..4])? as usize;
+   if descriptor_length > input.len() - 8 {
+      return Err(CodecError::Truncated);
+   }
+   let hash_offset = 4 + descriptor_length;
+   if &input[4..hash_offset] != T::DESCRIPTOR {
+      return Err(CodecError::TypeMismatch);
+   }
+   let hash = read_u32(&input[hash_offset..hash_offset + 4])?;
    if hash != T::HASH {
       return Err(CodecError::TypeMismatch);
    }
-   T::decode_body(&input[4..])
+   T::decode_body(&input[hash_offset + 4..])
 }
 
 pub fn write_field<T: WireValue>(

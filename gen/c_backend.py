@@ -3,7 +3,8 @@
 
 import os
 
-from generator import c_identifier, fnv1a_32, parse_schemas
+from generator import (c_identifier, canonical_type_descriptor,
+   canonical_type_hash, parse_schemas)
 
 
 class CBackend:
@@ -53,7 +54,7 @@ class CBackend:
          source.append('const SdlTypeDesc SDL_ENUM_' + enum.name.upper() + '_DESC = {\n')
          source.append('   SDL_TYPE_ENUM, sizeof(' + enum.name + '), offsetof(SDL_ALIGN_' +
             enum.name.upper() + ', value),\n')
-         source.append('   "' + enum.name + '", 0, { { 0, NULL } }\n};\n\n')
+         source.append('   "' + enum.name + '", 0, NULL, 0, { { 0, NULL } }\n};\n\n')
 
       for name in self.schema.message_order:
          message = self.schema.messages[name]
@@ -74,8 +75,12 @@ class CBackend:
                header.append('   ' + c_type + ' ' + field.name + ';\n')
          header.append('} ' + c_name + ';\n')
          header.append('extern const SdlTypeDesc ' + c_name.upper() + '_DESC;\n\n')
+         header.append('extern const uint8_t ' + c_name.upper() +
+            '_SCHEMA_DESCRIPTOR[];\n')
+         header.append('#define ' + c_name.upper() + '_SCHEMA_DESCRIPTOR_SIZE ' +
+            str(len(canonical_type_descriptor(self.schema, name))) + 'U\n')
          header.append('#define ' + c_name.upper() + '_HASH 0x' +
-            format(fnv1a_32(name), '08X') + 'U\n')
+            format(canonical_type_hash(self.schema, name), '08X') + 'U\n')
 
       header.append('\nvoid register_' + identifier + '_types(void);\n\n#endif\n')
       for name in self.schema.message_order:
@@ -126,10 +131,20 @@ class CBackend:
          source.append('};\n')
          source.append('typedef struct { char prefix; ' + c_name +
             ' value; } SDL_ALIGN_' + c_name.upper() + ';\n')
+         descriptor = canonical_type_descriptor(self.schema, name)
+         descriptor_lines = []
+         for offset in range(0, len(descriptor), 12):
+            descriptor_lines.append(', '.join('0x%02XU' % value
+               for value in descriptor[offset:offset + 12]))
+         source.append('const uint8_t ' + c_name.upper() +
+            '_SCHEMA_DESCRIPTOR[] = {\n      ' + ',\n      '.join(
+               descriptor_lines) + '\n};\n')
          source.append('const SdlTypeDesc ' + c_name.upper() + '_DESC = {\n')
          source.append('   SDL_TYPE_STRUCT, sizeof(' + c_name + '), offsetof(SDL_ALIGN_' +
             c_name.upper() + ', value),\n')
-         source.append('   "' + name + '", ' + c_name.upper() + '_HASH,\n')
+         source.append('   "' + name + '", ' + c_name.upper() + '_HASH, ' +
+            c_name.upper() + '_SCHEMA_DESCRIPTOR, sizeof(' + c_name.upper() +
+            '_SCHEMA_DESCRIPTOR),\n')
          source.append('   { { ' + str(len(fields)) + ', ' + c_name.lower() + '_fields } }\n};\n\n')
       source.append('void register_' + identifier + '_types(void) {\n')
       for name in self.schema.message_order:
