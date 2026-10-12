@@ -204,6 +204,7 @@ class RustBackend:
          for (variant, unused), (original, unused_value) in zip(variants,enum.pairs):
             out.append('   Self::' + variant + '=>' + json.dumps(original, ensure_ascii=False) + ',\n')
          out.append('});}}\n')
+         out.append('impl sdl_runtime::filter::FilterValue for ' + name + ' { fn filter_read<\'a>(&\'a self,p:&[sdl_runtime::filter::Step<\'_>])->Result<sdl_runtime::filter::Atom<\'a>,sdl_runtime::filter::FilterError>{ if p.is_empty(){Ok(sdl_runtime::filter::Atom::Signed(*self as i32 as i64))}else{Err(sdl_runtime::filter::FilterError("path continues beyond enum".into()))} }}\n')
       for message_name in self.schema.message_order:
          name=rust_type_name(message_name)
          fields=sorted(self.schema.messages[message_name].fields,key=lambda f:f.index)
@@ -220,6 +221,14 @@ class RustBackend:
             out.append('   pub ' + c_identifier(f.name) + ': ' + t + ',\n')
          out.append('}\nimpl SdlMessage for ' + name + ' {\n   const NAME:&\'static str=' + json.dumps(message_name,ensure_ascii=False) + ';\n')
          out.append('   const DESCRIPTOR:&\'static str=' + json.dumps(canonical_type_descriptor(self.schema).decode('utf-8'),ensure_ascii=False) + ';\n}\n')
+         out.append('impl sdl_runtime::filter::FilterValue for ' + name + ' { fn filter_read<\'a>(&\'a self,p:&[sdl_runtime::filter::Step<\'_>])->Result<sdl_runtime::filter::Atom<\'a>,sdl_runtime::filter::FilterError>{match p.split_first(){None=>Ok(sdl_runtime::filter::Atom::Message),Some((sdl_runtime::filter::Step::Field{id,owner,..},tail)) if *owner==' + json.dumps(message_name) + ' => match id{\n')
+         for f in fields:
+            out.append('   ' + str(f.index) + '=>sdl_runtime::filter::FilterValue::filter_read(&self.' + c_identifier(f.name) + ',tail),\n')
+         out.append('   _=>Err(sdl_runtime::filter::FilterError("unknown field ID".into()))},_=>Err(sdl_runtime::filter::FilterError("message path owner mismatch".into()))}} fn filter_span<\'a>(&\'a self,p:&[sdl_runtime::filter::Step<\'_>])->Option<sdl_runtime::filter::Span<\'a>>{self.sdl_filter_span(p)} }\n')
+         out.append('impl ' + name + ' { fn sdl_filter_span<\'a>(&\'a self,p:&[sdl_runtime::filter::Step<\'_>])->Option<sdl_runtime::filter::Span<\'a>>{match p.split_first(){Some((sdl_runtime::filter::Step::Field{id,owner,..},tail)) if *owner==' + json.dumps(message_name) + ' =>match id{\n')
+         for f in fields:
+            out.append('   ' + str(f.index) + '=>sdl_runtime::filter::FilterValue::filter_span(&self.' + c_identifier(f.name) + ',tail),\n')
+         out.append('   _=>None},_=>None}}}\n')
          out.append('impl WireValue for ' + name + ' {\n')
          if fixed_size is not None:
             out.append(self._fixed_message_codec(name, fields, fixed_size))

@@ -68,6 +68,35 @@ test-python: $(GENERATED_DIR)/.stamp
 	@if [ -z "$(CHECK_SILENT)" ]; then echo "=== Component Python: runtime, schema/codegen, invalid input, limits ==="; fi
 	$(RUN_TEST) env PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) tst/python/run_tests.py
 
+# Optional catalogue predicate service and native language gateways.
+filter-native:
+	CARGO="$(CARGO)" CC="$(CC)" $(PYTHON) tools/filter/build_native.py
+
+filter-python:
+	CARGO="$(CARGO)" CC="$(CC)" $(PYTHON) tools/filter/build_native.py --python
+
+filter-jni:
+	CARGO="$(CARGO)" CC="$(CC)" JAVAC="$(JAVAC)" $(PYTHON) tools/filter/build_native.py --jni
+
+filter-mex:
+	CARGO="$(CARGO)" CC="$(CC)" $(PYTHON) tools/filter/build_native.py --mex
+
+filter-matlab-mex: filter-native
+	env CCACHE_DISABLE=1 $(matlab) $(MATLAB_FLAGS) -r "try, addpath('runtime/filter/matlab'); build_filter_mex(pwd); catch err, disp(getReport(err, 'extended')); exit(1); end; exit(0)"
+
+filter-bindings:
+	CARGO="$(CARGO)" CC="$(CC)" JAVAC="$(JAVAC)" $(PYTHON) tools/filter/build_native.py --python --jni --mex
+
+test-filter: filter-bindings
+	$(RUN_TEST) $(CARGO) test --locked --offline --manifest-path runtime/rust/Cargo.toml --target-dir build/filter
+	$(RUN_TEST) $(CARGO) test --locked --offline --manifest-path runtime/filter/Cargo.toml --target-dir build/filter
+	$(RUN_TEST) env CC="$(CC)" JAVAC="$(JAVAC)" JAVA="$(JAVA)" OCTAVE="$(OCTAVE)" $(PYTHON) tst/filter/run_tests.py --gnatmake "$(GNATMAKE)"
+
+bench-filter: filter-bindings
+	CC="$(CC)" JAVAC="$(JAVAC)" JAVA="$(JAVA)" OCTAVE="$(OCTAVE)" $(PYTHON) tst/filter/run_benchmarks.py --no-build --gnatmake "$(GNATMAKE)"
+
+.PHONY: filter-native filter-python filter-jni filter-mex filter-matlab-mex filter-bindings test-filter bench-filter
+
 # Optional recording tools do not add dependencies to the core runtime tests.
 RECORDING_DEPS ?= build/recording-deps
 recording-deps:
@@ -123,7 +152,7 @@ bench-c: $(BUILD_DIR)/sdl_bench
 bench-rust: $(GENERATED_DIR)/.stamp
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(CARGO) run --release --manifest-path tst/rust/Cargo.toml --bin bench
 
-python-native: $(GENERATED_DIR)/.stamp
+sdl-python-native: $(GENERATED_DIR)/.stamp
 	CC="$(CC)" $(PYTHON) tst/python/build_native.py "$(PYTHON_GENERATED_DIR)"
 
 bench-python-buffers: $(GENERATED_DIR)/.stamp
@@ -143,7 +172,7 @@ test-java: $(GENERATED_DIR)/.stamp
 	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $$(find $(JAVA_GENERATED_DIR) -name '*.java') tst/java/*.java
 	$(RUN_TEST) env $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaTests
 
-matlab-mex: $(GENERATED_DIR)/.stamp
+sld-matlab-example: $(GENERATED_DIR)/.stamp
 	$(matlab) $(MATLAB_FLAGS) -r "try, addpath('tst/matlab'); build_mex('$(matlab_generated_dir)'); catch err, disp(getReport(err, 'extended')); exit(1); end; exit(0)"
 
 bench-matlab: $(GENERATED_DIR)/.stamp
@@ -161,7 +190,7 @@ bench-java: $(GENERATED_DIR)/.stamp
 	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $$(find $(JAVA_GENERATED_DIR) -name '*.java') tst/java/*.java
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaBench
 
-$(GENERATED_DIR)/.stamp: $(SDL_DIRS) $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py gen/ada_backend.py gen/ada_direct.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m runtime/matlab/sdl_mex_context.m runtime/matlab/sdl_representation.m Makefile
+$(GENERATED_DIR)/.stamp: $(SDL_DIRS) $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py gen/ada_backend.py gen/ada_filter.py gen/ada_direct.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m runtime/matlab/sdl_mex_context.m runtime/matlab/sdl_representation.m Makefile
 	mkdir -p $(GENERATED_DIR)
 	$(PYTHON) gen/generator.py -c -rust -python -matlab -java -ada sdl $(GENERATED_DIR)
 	touch $@
@@ -179,7 +208,7 @@ $(BUILD_DIR)/sdl_bench: runtime/c/sdl_representation.inc runtime/c/type_engine.c
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: bench-python-buffers python-native matlab-mex all clean check test test-c test-rust test-python test-matlab test-java bench bench-c bench-rust bench-python bench-matlab bench-java
+.PHONY: bench-python-buffers sdl-python-native sld-matlab-example all clean check test test-c test-rust test-python test-matlab test-java bench bench-c bench-rust bench-python bench-matlab bench-java
 
 # GNAT's native runtime in the supplied installation lacks generic bodies.
 # The complete sjlj runtime is used by default; ADA_RTS=native is supported.

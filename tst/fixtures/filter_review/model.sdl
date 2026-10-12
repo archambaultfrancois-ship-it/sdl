@@ -1,0 +1,13 @@
+package telemetry.review;
+message Point { fl64 x; }
+message Block { Point[2] points; }
+message Regression {
+   Point[2] points;
+   Point[2][2] grid;
+   Block[2] blocks;
+   c32 value32;
+   c64 value64;
+   c32[2] fixed32;
+   packed c32 packed32;
+   repeated c64 repeated64;
+}

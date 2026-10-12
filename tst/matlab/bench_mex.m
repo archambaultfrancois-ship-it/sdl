@@ -3,7 +3,7 @@ function bench_mex(iterations)
 if nargin<1,iterations=20000;end
 assert(isscalar(iterations)&&isfinite(iterations)&&iterations>=1&&iterations==fix(iterations));
 ctx=sdl_matlab_runtime('prepare',BenchPayload('description'),{'BenchPayload'});
-if ctx.native_id==0,error('SDL:MEXRequired','Build with make matlab-mex and enable the full MEX path.');end
+if ctx.native_id==0,error('SDL:MEXRequired','Build with make sld-matlab-example and enable the full MEX path.');end
 id=ctx.native_id;m=BenchPayload('new');m.header=repmat('H',1,200);
 m.samples=complex(single((0:4999)'*.25),single(-mod((0:4999)',97)*.5));
 wire=sdl_packed_mex('encode',id,m);copy=sdl_packed_mex('decode',id,wire);

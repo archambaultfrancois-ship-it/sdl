@@ -1,0 +1,17 @@
+package telemetry;
+enum State { OFF=0; ON=1; }
+message Vector { fl64 x; fl64 y; }
+message Detail { int32 code; string label; }
+message Sample {
+   uint64 sequence;
+   fl64 temperature wire(bits=16,q=0.1,align=4,pad_after=1);
+   bool active wire(bits=1);
+   optional Detail detail;
+   Vector position;
+   packed Vector points;
+   int32[2][3] matrix;
+   string label;
+   repeated int16 counts wire(encoding=zigzag);
+   packed c32 samples;
+   State state;
+}

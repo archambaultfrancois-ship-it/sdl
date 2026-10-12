@@ -70,7 +70,7 @@ The suite covers all six runtimes with the shared SDL2 fixture. Benchmarks
 report messages/s, useful MiB/s, catalogue size, and preparation time across
 six workloads. See [benchmarks](docs/benchmarks.md) for methodology and limits.
 Python has an optional native Packed adapter. Build it with
-`make python-native`, then run `make test-python bench-python`. The list/message
+`make sdl-python-native`, then run `make test-python bench-python`. The list/message
 API remains available, with a Python fallback when native code is unavailable.
 The optional `PackedArray` buffer API and `decode(..., packed='view')` avoid
 per-value Python objects; `encode_into` writes into caller storage. `make bench`
@@ -79,10 +79,10 @@ only that comparison. See [benchmarks](docs/benchmarks.md) for the API and limit
 Set `SDL_PYTHON_NO_NATIVE=1` before preparing contexts to compare the Python path.
 On Android/Termux, the native build links explicitly to the invoking CPython's
 shared library. The build also checks that the resulting extension can be
-imported, so loader errors fail `make python-native` immediately.
+imported, so loader errors fail `make sdl-python-native` immediately.
 
 MATLAB has an optional MEX adapter for the complete `BenchPayload` and `BenchRecordBatch` messages.
-Build it with `make matlab-mex`, then run `make test-matlab bench-matlab`.
+Build it with `make sld-matlab-example`, then run `make test-matlab bench-matlab`.
 It retains a native C context and creates MATLAB outputs directly. Other
 schemas retain the normal MATLAB path. See [benchmarks](docs/benchmarks.md)
 for the supported platform and switches to compare the full MEX, payload-only
@@ -95,6 +95,11 @@ Ada codecs for matching layouts; schema evolution retains C dynamic decoding thr
 with automatic lifetime management. See [Ada API and build instructions](docs/ada.md).
 `make test-ada bench-ada` uses `~/opt/gnat-21.1` by default, with `-O3` and
 range checks enabled. Override `GNAT_HOME`, `GNATMAKE` or `ADA_RTS` as needed.
+
+The optional catalogue filter service evaluates arithmetic and logical predicates
+on message objects or selected wire values, including nested fields and arrays.
+`make test-filter` validates the six adapters; `make bench-filter` reports filter
+cost relative to encoding/decoding. See [filter expressions, APIs and deployment](docs/filtering.md).
 
 On the Termux development environment, source `~/.bashrc` before using the JDK.
 

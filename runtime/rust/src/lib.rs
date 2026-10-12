@@ -6,6 +6,7 @@ mod catalogue;
 pub use catalogue::catalogue_id;
 mod dynamic;
 mod wire;
+pub mod filter;
 pub use dynamic::{decode_dynamic, DynamicMessage, DynamicValue, FieldDesc};
 pub use wire::{
     add_size, count_size, decode, decode_any, description, display, display_struct_end,

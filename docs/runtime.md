@@ -304,7 +304,7 @@ raise `CodecError`. Nested generated classes are discovered from root types.
 `fields` dictionary. Text is `str` (UTF-8 bytes also accepted by preparation),
 and encoded data is `bytes`. `display(value, indent_width)` needs no context.
 
-With the optional native extension built (`make python-native`),
+With the optional native extension built (`make sdl-python-native`),
 `decode(ctx, data, packed='view')` returns immutable `PackedArray` views for
 supported `packed` fields instead of lists. For `bytes` input, these views
 retain the original buffer without copying the numeric payload. Mutable input

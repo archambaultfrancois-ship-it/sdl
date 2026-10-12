@@ -204,7 +204,7 @@ substructure or array allocations.
 
 ## Optional MATLAB full-message MEX adapter
 
-Run `make matlab-mex` to compile `sdl_packed_mex` into the generated MATLAB
+Run `make sld-matlab-example` to compile `sdl_packed_mex` into the generated MATLAB
 folder, then run `make test-matlab bench-matlab` (or `make bench`). The Linux
 prototype uses the separate-complex C Matrix API, validated on MATLAB R2017a,
 and builds with `-O3` and link-time optimization. Build the MEX binary for the
@@ -292,7 +292,7 @@ load and measurement variation still apply.
 
 ## Optional Python native Packed adapter
 
-Run `make python-native` to build `_sdl_native` in the generated Python folder
+Run `make sdl-python-native` to build `_sdl_native` in the generated Python folder
 using the invoking CPython's headers and ABI suffix. The current build is
 validated on Linux with CPython 3.9 and GCC, using `-O3` and LTO; it requires
 Python development headers, but no NumPy or setuptools. Add both

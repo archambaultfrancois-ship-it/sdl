@@ -84,6 +84,15 @@ static NativeContext *find_context(const mxArray *arg) {
    mexErrMsgIdAndTxt("SDL:InvalidContext", "Unknown or released native context.");
    return NULL;
 }
+static int compiled_catalogue_matches(const char *name, const uint8_t *expected,
+                                     size_t length) {
+   size_t compiled_length = 0;
+   char *compiled = type_description(&name, 1, &compiled_length);
+   int matches = compiled && compiled_length == length &&
+      !memcmp(compiled, expected, length);
+   free(compiled);
+   return matches;
+}
 static mxArray *prepare_context(const mxArray *arg) {
    mxArray *out;
    uint64_t id = 0;
@@ -91,17 +100,18 @@ static mxArray *prepare_context(const mxArray *arg) {
    int records;
    if (!mxIsUint8(arg) || mxIsComplex(arg) || mxIsSparse(arg))
       mexErrMsgIdAndTxt("SDL:Descriptor", "Expected uint8 catalogue bytes.");
+   if (!initialized &&
+       (!register_benchmark_types() || !register_bench_cases_types()))
+      mexErrMsgIdAndTxt("SDL:Descriptor", "Cannot register compiled benchmark types.");
    length = mxGetNumberOfElements(arg);
    out = mxCreateNumericMatrix(1, 1, mxUINT64_CLASS, mxREAL);
    records = length == sizeof(records_catalogue)-1 &&
-      length == BENCHRECORDBATCH_SCHEMA_DESCRIPTOR_SIZE &&
-      !memcmp(BENCHRECORDBATCH_SCHEMA_DESCRIPTOR, records_catalogue, length) &&
-      !memcmp(mxGetData(arg), records_catalogue, length);
+      !memcmp(mxGetData(arg), records_catalogue, length) &&
+      compiled_catalogue_matches("BenchRecordBatch", records_catalogue, length);
    /* Match both the compiled descriptor and the adapter layout. */
    if (records || (length == sizeof(supported_catalogue) - 1 &&
-       length == BENCHPAYLOAD_SCHEMA_DESCRIPTOR_SIZE &&
-       !memcmp(BENCHPAYLOAD_SCHEMA_DESCRIPTOR, supported_catalogue, length) &&
-       !memcmp(mxGetData(arg), supported_catalogue, length))) {
+       !memcmp(mxGetData(arg), supported_catalogue, length) &&
+       compiled_catalogue_matches("BenchPayload", supported_catalogue, length))) {
       NativeContext *ctx;
       if (!initialized) {
          struct timespec stamp;
@@ -109,7 +119,7 @@ static mxArray *prepare_context(const mxArray *arg) {
             mexErrMsgIdAndTxt("SDL:InvalidContext", "Cannot initialize context token epoch.");
          /* Prevent released tokens from matching a new context after MEX reload. */
          next_id = (uint64_t)stamp.tv_sec * UINT64_C(1000000000) + (uint64_t)stamp.tv_nsec;
-         register_benchmark_types(); register_bench_cases_types(); mexAtExit(cleanup_contexts); initialized = 1;
+         mexAtExit(cleanup_contexts); initialized = 1;
       }
       if (next_id == UINT64_MAX)
          mexErrMsgIdAndTxt("SDL:InvalidContext", "Context token space exhausted.");

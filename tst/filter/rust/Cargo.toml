@@ -1,0 +1,15 @@
+[package]
+name = "sdl-filter-checks"
+version = "0.1.0"
+edition = "2021"
+[[bin]]
+name = "filter-checks"
+path = "main.rs"
+[[bin]]
+name = "filter-bench"
+path = "bench.rs"
+[dependencies]
+sdl-runtime = { path = "../../../runtime/rust" }
+[profile.release]
+opt-level = 3
+lto = true
