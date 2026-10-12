@@ -8,6 +8,30 @@ from generator import MsgParser
 
 
 class GeneratorValidationTests(unittest.TestCase):
+   def test_s04_duplicate_field_ids_and_unknown_types_are_rejected(self):
+      with self.assertRaisesRegex(ValueError, 'duplicate field ID or name in Packet'):
+         MsgParser().parse_text('''
+message Packet {
+   1: required int32 first;
+   1: required int32 second;
+}
+''')
+      with self.assertRaisesRegex(ValueError, 'unknown type Missing in Packet'):
+         MsgParser().parse_text('''
+message Packet {
+   1: required Missing item;
+}
+''')
+
+   def test_s05_recursive_message_dependencies_are_rejected(self):
+      with self.assertRaisesRegex(ValueError,
+            'recursive message dependency involving Packet'):
+         MsgParser().parse_text('''
+message Packet {
+   1: required Packet child;
+}
+''')
+
    def test_anonymous_nested_structs_get_stable_logical_names(self):
       parser = MsgParser()
       parser.parse_text('''

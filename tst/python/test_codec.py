@@ -25,6 +25,26 @@ def wire_u32(value):
    return value.to_bytes(4, WIRE_ENDIAN)
 
 
+def reverse_body_fields(wire):
+   descriptor_size = int.from_bytes(wire[:4], WIRE_ENDIAN)
+   body_offset = 8 + descriptor_size
+   fields = []
+   offset = body_offset
+   while offset < len(wire):
+      field_id = int.from_bytes(wire[offset:offset + 4], WIRE_ENDIAN)
+      length = int.from_bytes(wire[offset + 4:offset + 8], WIRE_ENDIAN)
+      end = offset + 8 + length
+      if end > len(wire):
+         raise AssertionError('test input contains a truncated field')
+      if fields and fields[-1][0] == field_id:
+         fields[-1][1].append(wire[offset:end])
+      else:
+         fields.append((field_id, [wire[offset:end]]))
+      offset = end
+   return wire[:body_offset] + b''.join(
+      part for unused_field_id, group in reversed(fields) for part in group)
+
+
 def codec_cases():
    return CodecCases(
       tiny=-128,
@@ -50,6 +70,54 @@ def codec_cases():
 
 
 class CodecTests(unittest.TestCase):
+   def test_s01_field_order_is_independent_of_schema_order(self):
+      original = codec_cases()
+      wire = reverse_body_fields(encode(original))
+      self.assertEqual(decode(wire, CodecCases), original)
+      self.assertEqual(decode_dynamic(wire).fields['required_zero'], 0)
+
+   def test_s02_unicode_strings_and_float_special_values_round_trip(self):
+      text = ('SDL-é-📦-' * 128) + '\x00tail'
+      original = RootPayload(header=text)
+      decoded = decode(encode(original), RootPayload)
+      self.assertEqual(decoded.header, text)
+
+      values = CodecCases(ratio=float('inf'), precise=float('nan'),
+         point=Complex32(float('-inf'), float('nan')),
+         position=Complex64(float('inf'), float('-inf')))
+      decoded_values = decode(encode(values), CodecCases)
+      self.assertEqual(decoded_values.ratio, float('inf'))
+      self.assertTrue(math.isnan(decoded_values.precise))
+      self.assertEqual(decoded_values.point.real, float('-inf'))
+      self.assertTrue(math.isnan(decoded_values.point.imag))
+      self.assertEqual(decoded_values.position.real, float('inf'))
+      self.assertEqual(decoded_values.position.imag, float('-inf'))
+
+   def test_s03_invalid_frame_and_field_lengths_are_rejected(self):
+      valid = encode(codec_cases())
+      self.assertEqual(decode(valid, CodecCases), codec_cases())
+
+      bad_descriptor_length = bytearray(valid)
+      bad_descriptor_length[:4] = wire_u32(0xFFFFFFFF)
+      with self.assertRaises(CodecError):
+         decode(bytes(bad_descriptor_length), CodecCases)
+      with self.assertRaises(CodecError):
+         decode_dynamic(bytes(bad_descriptor_length))
+
+      descriptor_size = int.from_bytes(valid[:4], WIRE_ENDIAN)
+      body_offset = 8 + descriptor_size
+      bad_field_length = bytearray(valid)
+      bad_field_length[body_offset + 4:body_offset + 8] = wire_u32(0xFFFFFFFF)
+      with self.assertRaises(CodecError):
+         decode(bytes(bad_field_length), CodecCases)
+      with self.assertRaises(CodecError):
+         decode_dynamic(bytes(bad_field_length))
+
+      with self.assertRaises(CodecError):
+         decode(valid[:7], CodecCases)
+      with self.assertRaises(CodecError):
+         decode_dynamic(valid[:7])
+
    def test_root_payload_matches_c_fixture_and_round_trips(self):
       original = RootPayload(
          header='Mission_Data_Packet',
