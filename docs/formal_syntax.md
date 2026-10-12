@@ -31,26 +31,27 @@ Keywords and names are case-sensitive.
 
 ## 2. `.sdl` source files
 
-### 2.1. Lines, whitespace and comments
+### 2.1. Whitespace and comments
 
-Files are read as UTF-8 without a BOM. The parser processes each line
-separately. Before applying the grammar, it removes the comment starting at
-the first `//`, strips leading and trailing whitespace, then ignores empty
-lines. There are no `/* … */` comments.
+Files are read as UTF-8 without a BOM. Source is tokenized independently of
+line breaks. Whitespace, including newlines, can separate any tokens; it does
+not delimit declarations. `//` starts a comment ending at the next newline.
+There are no `/* ... */` comments. Identifiers and numeric literals cannot be
+split by whitespace or comments, including a sign or exponent in a number.
 
-The grammar below applies to these remaining lines. `END` denotes the end of
-a line; the end of the file also terminates its last line. A declaration
-opening, field, enum item or closing occupies its own line. A `wire(...)`
-clause stays on the same line as its field.
+Braces delimit bodies; semicolons end fields, enum items, constants and the
+optional package declaration. Named message/enum declarations end with `}`.
+Several declarations can share one line, and fields or `wire(...)` clauses can
+span several lines. Syntax errors include the unexpected token's line and column.
+Whitespace and comments between tokens are implicit in the source grammar below;
+they are forbidden in the compact runtime catalogue.
 
 ```ebnf
-SPACE     = ? one or more whitespace characters within a line ? ;
-WS        = [ SPACE ] ;
-END       = ? end of line, or end of file after the last line ? ;
 DIGIT     = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
 INTEGER   = DIGIT, { DIGIT } ;
 SIGN      = "+" | "-" ;
 NAME      = ? one or more characters matched by Python 3 \w ? ;
+CONSTNAME = ? NAME beginning with a word character other than a digit ? ;
 ```
 
 `NAME` includes Unicode letters and digits, and `_`. For names portable across
@@ -82,43 +83,45 @@ but not with `+`.
 
 ```ebnf
 schema          = [ package ], { declaration } ;
-package         = "package", SPACE, package_name, WS, ";", END ;
+package         = "package", package_name, ";" ;
 package_name    = package_segment, { ".", package_segment } ;
 package_segment = ? ASCII letter followed by ASCII letters, digits or underscore ? ;
-declaration     = message | enumeration ;
+declaration     = message | enumeration | constant ;
+constant        = "const", CONSTNAME, "=", INTEGER, ";" ;
 message_keyword = "message" | "structure" | "struct" ;
 
-message         = message_keyword, SPACE, NAME, WS, "{", END,
-                  { field | anonymous_field },
-                  "}", END ;
+message         = message_keyword, NAME, "{",
+                  { field | anonymous_field }, "}" ;
 
-enumeration     = "enum", SPACE, NAME, WS, "{", END,
-                  enum_item, { enum_item },
-                  "}", END ;
-enum_item       = NAME, WS, "=", WS, enum_value, WS, ";", END ;
+enumeration     = "enum", NAME, "{", enum_item, { enum_item }, "}" ;
+enum_item       = NAME, "=", enum_value, ";" ;
 enum_value      = [ "-" ], INTEGER ;
 
-prefix          = [ INTEGER, ":", SPACE ], [ cardinality, SPACE ] ;
+prefix          = [ INTEGER, ":" ], [ cardinality ] ;
 cardinality     = "required" | "optional" | "repeated" | "packed" ;
 type            = [ "." ], NAME, { ".", NAME } ;
-dimension       = "[", INTEGER, "]" ;
+dimension       = "[", dimension_bound, "]" ;
+dimension_bound = INTEGER | constant_ref ;
+constant_ref    = [ "." ], NAME, { ".", NAME } ;
 
-field           = prefix, type, { dimension }, SPACE, NAME,
-                  [ SPACE, wire_clause ], WS, ";", END ;
+field           = prefix, type, { dimension }, NAME, [ wire_clause ], ";" ;
 
-anonymous_field = prefix, message_keyword, WS, "{", END,
-                  { field | anonymous_field },
-                  "}", SPACE, NAME, [ SPACE, wire_clause ], WS, ";", END ;
+anonymous_field = prefix, message_keyword, "{", { field | anonymous_field },
+                  "}", NAME, [ wire_clause ], ";" ;
 ```
 
 The aliases `message`, `structure` and `struct` have exactly the same meaning.
-Dimensions attach directly to the type: `fl32[3][4]` is accepted;
-`fl32 [3][4]` is not. After an explicit field number, at least one whitespace
-character must follow `:`: `7: int32 x;` is accepted; `7:int32 x;` is not.
-Whitespace before `{` is optional for both named declarations and anonymous
-fields: `message Packet{`, `enum State{` and `struct{` are accepted, as are
-their spellings with whitespace before the brace. Whitespace between a named
-declaration's keyword and its name remains required.
+`fl32[3][4]` and `fl32 [ 3 ] [ 4 ]` are equivalent, as are `7:int32 x;` and
+`7 : int32 x;`. Distinct word tokens still require a separator:
+`message Point` is valid, while `messagePoint` is a different identifier.
+
+Dimension constants are positive uint32 decimal literals declared at top level.
+They follow the same package lookup rules as types, can be referenced before
+being declared, and are substituted before validation and generation. Constant
+names cannot reuse a built-in type name or the complete logical name of another
+type/constant in the input set. No expressions or constant aliases are accepted.
+Constants are absent from generated bindings and catalogues; dimensions there
+remain numeric. See [dimension constants](schema.md#dimension-constants).
 
 A field type is a built-in type or a message/enum from the input schema set.
 Unqualified references select the current package without global fallback;
@@ -172,25 +175,24 @@ element whose logical size is fixed.
 ### 2.4. Grammar and rules of `wire(...)`
 
 ```ebnf
-wire_clause     = "wire(", wire_option,
-                  { ",", wire_option }, ")" ;
-wire_option     = WS, (
-                    "bits", WS, "=", WS, INTEGER
-                  | "q", WS, "=", WS, quantum
-                  | "encoding", WS, "=", WS, encoding
-                  | "align", WS, "=", WS, INTEGER
-                  | "pad_after", WS, "=", WS, INTEGER
-                  ), WS ;
+wire_clause     = "wire", "(", wire_option, { ",", wire_option }, ")" ;
+wire_option     = ( "bits", "=", INTEGER
+                  | "q", "=", quantum
+                  | "encoding", "=", encoding
+                  | "align", "=", INTEGER
+                  | "pad_after", "=", INTEGER ) ;
 encoding        = "varint" | "zigzag" ;
 quantum         = [ SIGN ], mantissa, [ exponent ] ;
 mantissa        = INTEGER, [ ".", [ INTEGER ] ] | ".", INTEGER ;
 exponent        = ( "e" | "E" ), [ SIGN ], INTEGER ;
 ```
 
-There must be no whitespace between `wire` and `(`. Keys may appear in any
-order, but each key can appear only once. An empty clause, a trailing comma
-or an unknown key is invalid. The quantum contains no whitespace and must
-convert to a finite positive binary64 number.
+Whitespace can separate `wire`, `(`, keys, `=`, values and commas, including
+newlines. Keys may appear in any order, but each key can appear only once. An
+empty clause, a trailing comma or an unknown key is invalid. The quantum is a
+single numeric literal without internal whitespace and must convert to a finite
+positive binary64 number. Dimension constants are used only in array brackets;
+wire options still require their literal values.
 
 | Option | Validity condition |
 | --- | --- |
@@ -285,7 +287,7 @@ plain_decimal   = INTEGER, [ ".", INTEGER ] ;
 ```
 
 `INTEGER`, `dimension` and `enum_value` have the same lexical definitions as
-in the source grammar. No `SPACE` or `WS` is allowed here. The compact quantum
+in the source grammar. No whitespace or comments are allowed here. The compact quantum
 is a positive decimal without a sign or exponent: `q0.1` is valid;
 `q.1`, `q1.`, `q1e-1` and `q+0.1` are not.
 

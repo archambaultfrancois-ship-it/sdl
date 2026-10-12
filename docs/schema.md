@@ -27,20 +27,30 @@ These aliases have identical semantics and generate identical code, catalogue
 bytes, and hashes. The compact canonical SDL2 catalogue omits the declaration keyword, regardless
 of the source spelling.
 
-Put one declaration on each line;
-`//` starts a line comment. Braces delimit declarations, and fields and enum
-items end with semicolons. When the generator reads a directory, it discovers
+Whitespace, including newlines, separates tokens without delimiting declarations.
+Braces delimit message and enum bodies; fields, enum items, packages and constants
+end with semicolons. Several declarations may share a line, and a field or
+`wire(...)` clause may span several lines. Whitespace is also allowed around
+punctuation, for example `1 : fl32 [ 3 ] coords;` and `wire ( bits = 12 )`.
+Identifiers and numeric literals must remain intact. `//` starts a comment ending
+at the next newline. For example, this is a complete schema:
+
+```sdl
+message Point { fl64 x; fl64 y; }
+```
+
+When the generator reads a directory, it discovers
 `.sdl` files recursively and resolves type references across the entire input set.
 Each file remains a separate generation unit. Logical names and emitted symbols
 must remain unique within their respective namespaces.
 Message dependencies must be acyclic and contain at most 64 nested message
 references along any path. The generator checks this limit before emitting
-bindings, including paths through shared subtypes. Text after an enum item's
-semicolon must be whitespace or a `//` comment.
+bindings, including paths through shared subtypes. Syntax errors include a source
+line and column.
 
 ## Packages and type references
 
-A file may start with one package declaration, before any message or enum:
+A file may start with one package declaration, before any message, enum or constant:
 
 ```sdl
 package navigation.geometry;
@@ -305,11 +315,47 @@ not contain strings, optional fields, repeated fields, or other variable-size
 values. The generator reports the field whose fixed-size constraint fails.
 
 Fixed-array dimensions are positive unsigned 32-bit values written with ASCII
-decimal digits. The total wire size of an array field must fit in an unsigned 32-bit wire size. Empty messages are valid as standalone messages but do not
+decimal digits or references to dimension constants. The total wire size of an array field must fit in an unsigned 32-bit wire size. Empty messages are valid as standalone messages but do not
 qualify as fixed-size array elements. The C backend adds a
 `uint8_t sdl_empty_placeholder` member to an empty generated struct because
 C99 does not permit a struct with no members; the placeholder is not part of
 the SDL schema or wire representation.
+
+## Dimension constants
+
+Top-level constants can name fixed-array dimensions:
+
+```sdl
+package acquisition;
+
+const CHANNELS = 16;
+const AXES = 3;
+
+message Capture { fl32[CHANNELS][AXES] samples; }
+```
+
+The syntax is `const NAME = VALUE;`, where VALUE is a positive ASCII decimal
+integer from 1 through 4294967295. Leading zeros are decimal. Expressions,
+aliases to other constants and floating values are not supported. Constant
+names start with a word character other than a digit and continue with word
+characters; ASCII letters and underscores are recommended for portability.
+Constants are allowed anywhere among top-level declarations after the optional
+package, including after their uses. They cannot be declared inside a message
+or enum, or reuse built-in type names.
+
+Constants follow the package rules for types: `AXES` selects the current package,
+`other.AXES` selects an external package, and `.AXES` selects the global package.
+References resolve across the entire input set, without imports or an implicit
+global fallback. Constants and types share the top-level logical namespace;
+duplicate complete names are rejected even when the values are identical.
+
+Constants are substituted before checking fixed-size constraints or generating
+code. They are not emitted as native constants or catalogue declarations.
+`fl32[CHANNELS][AXES]` in the example renders as `fl32[16][3]`; renaming a
+constant or changing whitespace does not change the catalogue, hash or generated
+bindings when the resolved dimensions stay the same. Existing dimension and
+array-size limits apply after substitution. The runtimes still receive only
+numeric dimensions.
 
 ## Current target support
 

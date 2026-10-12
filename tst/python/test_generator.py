@@ -179,10 +179,14 @@ message DecimalPacket {
             subprocess.run([str(executable)], check=True)
 
    def test_01_schema_enum_rejects_trailing_tokens(self):
-      for suffix in ('unexpected tokens', 'SECOND = 2;', '}'):
+      for suffix, error in (('unexpected tokens', 'invalid enum entry'),
+            ('}', 'unexpected closing brace')):
          with self.subTest(suffix=suffix):
-            with self.assertRaisesRegex(ValueError, 'invalid enum entry'):
+            with self.assertRaisesRegex(ValueError, error):
                MsgParser().parse_text('enum State {\n READY = 1; ' + suffix + '\n}\n')
+      compact = MsgParser()
+      compact.parse_text('enum State { READY = 1; SECOND = 2; }')
+      self.assertEqual(compact.enums['State'].pairs, [('READY', '1'), ('SECOND', '2')])
       parser = MsgParser()
       parser.parse_text('enum State {\n READY = 1; // comment\n}\nmessage Packet {\n State state;\n}\n')
       self.assertEqual(parser.enums['State'].pairs, [('READY', '1')])

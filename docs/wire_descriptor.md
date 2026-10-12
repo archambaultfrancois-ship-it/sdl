@@ -35,6 +35,10 @@ both source schemas and the single-line catalogue.
 Source schemas may omit field IDs and the `required` modifier. The generator
 resolves these defaults before rendering the compact catalogue. Equivalent
 explicit and implicit source schemas produce identical catalogue bytes and hashes.
+Source whitespace and line breaks do not affect the catalogue. Dimension constants
+are resolved to decimal integers before rendering; the constants themselves are
+absent from the catalogue. A named dimension and the same literal dimension
+produce identical bytes and hashes.
 
 The canonical catalogue is one UTF-8 string with **no whitespace or trailing
 newline**. It starts with `SDL2|`; `|` separates declarations. Messages are sorted

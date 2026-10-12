@@ -37,6 +37,9 @@ An optional `package navigation.geometry;` gives types complete logical names
 and places generated files under the corresponding package hierarchy (GNAT
 files remain flat). `.Point` selects a global type explicitly; short names
 resolve only in the current package. See [packages](docs/schema.md#packages-and-type-references).
+Declarations and fields can share lines or span several lines. Top-level
+`const AXES = 3;` declarations can name fixed-array dimensions such as `fl32[AXES]`;
+the generator substitutes numeric dimensions before emitting code or catalogues.
 
 ## Build and validation
 

@@ -8,6 +8,7 @@ import sys
 import math
 import warnings
 from decimal import Decimal
+from collections import deque, namedtuple
 
 
 MAX_SCHEMA_DESCRIPTOR_SIZE = 1024 * 1024
@@ -201,6 +202,221 @@ class Enum:
       self.pairs = []
 
 
+_SourceToken = namedtuple('_SourceToken', 'text line column')
+_SOURCE_TOKENS = re.compile(
+   r'(?P<space>\s+)|(?P<comment>//[^\r\n]*)|'
+   r'(?P<number>[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?!\w))|'
+   r'(?P<name>\w+)|(?P<symbol>\S)')
+
+
+class _SourceParser:
+   """Token-based SDL source reader; whitespace never delimits declarations."""
+
+   def __init__(self, schema, text):
+      self.schema = schema
+      self.tokens = self._tokens(text)
+      self.pending = deque()
+      self.eof = _SourceToken('', 1, 1)
+      self.anonymous_counters = {}
+
+   def _tokens(self, text):
+      line, column = 1, 1
+      for match in _SOURCE_TOKENS.finditer(text):
+         value = match[0]
+         if match.lastgroup not in ('space', 'comment'):
+            yield _SourceToken(value, line, column)
+         newlines = value.count('\n')
+         if newlines:
+            line += newlines
+            column = len(value) - value.rfind('\n')
+         else:
+            column += len(value)
+      self.eof = _SourceToken('', line, column)
+
+   def peek(self, index=0):
+      while len(self.pending) <= index:
+         token = next(self.tokens, None)
+         if token is None:
+            return self.eof
+         self.pending.append(token)
+      return self.pending[index]
+
+   def take(self):
+      token = self.peek()
+      if self.pending:
+         self.pending.popleft()
+      return token.text
+
+   def fail(self, message, token=None):
+      token = token or self.peek()
+      raise ValueError(message + ' at line %d, column %d' % (token.line, token.column))
+
+   def expect(self, value, message):
+      if self.peek().text != value:
+         self.fail(message)
+      self.take()
+
+   def name(self, message):
+      if not re.fullmatch(r'\w+', self.peek().text):
+         self.fail(message)
+      return self.take()
+
+   def reference(self, message):
+      leading_dot = self.peek().text == '.'
+      if leading_dot:
+         self.take()
+      parts = [self.name(message)]
+      while self.peek().text == '.':
+         self.take()
+         parts.append(self.name(message))
+      return ('.' if leading_dot else '') + '.'.join(parts)
+
+   def named_declaration(self):
+      return (self.peek().text in ('enum', 'message', 'structure', 'struct') and
+         re.fullmatch(r'\w+', self.peek(1).text) and self.peek(2).text == '{')
+
+   def reject_nested_declaration(self):
+      if self.named_declaration():
+         self.fail('missing closing brace before declaration: ' +
+            self.peek().text + ' ' + self.peek(1).text + ' {')
+
+   def wire(self):
+      if self.peek().text != 'wire':
+         return {}
+      location = self.peek()
+      self.take()
+      self.expect('(', 'invalid wire clause')
+      options = []
+      if self.peek().text == ')':
+         self.fail('invalid or duplicate wire option: empty clause')
+      while True:
+         key = self.name('invalid wire option')
+         self.expect('=', 'invalid wire option')
+         value = self.take()
+         options.append(key + '=' + value)
+         if self.peek().text == ')':
+            self.take()
+            try:
+               return parse_wire_options(','.join(options))
+            except ValueError as error:
+               self.fail(str(error), location)
+         self.expect(',', 'invalid wire option')
+
+   def fields(self, message, root_name, depth=0):
+      while self.peek().text != '}':
+         if not self.peek().text:
+            self.fail(('unterminated anonymous struct in ' + root_name) if depth else
+               ('unterminated message declaration: ' + message.name))
+         self.reject_nested_declaration()
+         label = 'invalid field declaration'
+         explicit_index = None
+         if self.peek(1).text == ':':
+            explicit_index = self.take()
+            if not re.fullmatch(r'[0-9]+', explicit_index):
+               self.fail(label)
+            self.take()
+         modifier = self.take() if self.peek().text in ('optional', 'required', 'repeated', 'packed') else 'required'
+         dimensions = []
+         anonymous = self.peek().text in ('message', 'structure', 'struct') and self.peek(1).text == '{'
+         if anonymous:
+            if depth >= MAX_SCHEMA_NESTING:
+               self.fail('message dependency nesting exceeds 64 levels: ' + root_name)
+            self.take()
+            self.take()
+            counter = self.anonymous_counters.get(root_name, 0) + 1
+            self.anonymous_counters[root_name] = counter
+            type_name = root_name + '$' + str(counter)
+            child = Message(type_name)
+            self.fields(child, root_name, depth + 1)
+            self.schema.messages[type_name] = child
+            self.schema.message_order.append(type_name)
+         else:
+            type_name = self.reference(label)
+            while self.peek().text == '[':
+               self.take()
+               token = self.peek().text
+               if re.fullmatch(r'[0-9]+', token):
+                  dimensions.append(int(self.take()))
+               elif re.fullmatch(r'[^\W\d]\w*', token) or token == '.':
+                  dimensions.append(self.reference(label))
+               else:
+                  self.fail(label)
+               self.expect(']', label)
+         field_name = self.name('anonymous struct must close with its field name' if anonymous else label)
+         options = self.wire()
+         self.expect(';', label)
+         message.fields.append(Field(self.schema._field_index(message, explicit_index),
+            modifier, type_name, field_name, dimensions, options))
+      self.take()
+
+   def constant(self):
+      self.take()
+      label = 'invalid dimension constant declaration'
+      name = self.name(label)
+      if not re.fullmatch(r'[^\W\d]\w*', name):
+         self.fail(label)
+      if name in self.schema.BUILTINS:
+         self.fail('dimension constant name conflicts with built-in type: ' + name)
+      if name in self.schema.constants or name in self.schema.messages or name in self.schema.enums:
+         self.fail('duplicate declaration name: ' + name)
+      self.expect('=', label)
+      value = self.take()
+      if not re.fullmatch(r'[0-9]+', value) or not 1 <= int(value) <= 0xFFFFFFFF:
+         self.fail('dimension constant must be a positive uint32: ' + name)
+      self.expect(';', label)
+      self.schema.constants[name] = int(value)
+
+   def parse(self):
+      package_seen = False
+      while self.peek().text:
+         keyword = self.peek().text
+         if keyword == 'package':
+            label = 'invalid, duplicate or misplaced package declaration'
+            if package_seen or self.schema.messages or self.schema.enums or self.schema.constants:
+               self.fail(label)
+            self.take()
+            package = self.reference(label)
+            if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*', package):
+               self.fail(label)
+            self.expect(';', label)
+            self.schema.package = package
+            package_seen = True
+         elif keyword == 'const':
+            self.constant()
+         elif keyword in ('enum', 'message', 'structure', 'struct'):
+            self.take()
+            name = self.name('unexpected SDL statement: ' + keyword)
+            self.expect('{', 'unexpected SDL statement: ' + keyword + ' ' + name)
+            if name in self.schema.messages or name in self.schema.enums:
+               self.fail('duplicate type name: ' + name)
+            if name in self.schema.constants:
+               self.fail('duplicate declaration name: ' + name)
+            if keyword == 'enum':
+               enumeration = Enum(name)
+               self.schema.enums[name] = enumeration
+               while self.peek().text != '}':
+                  if not self.peek().text:
+                     self.fail('unterminated enum declaration: ' + name)
+                  self.reject_nested_declaration()
+                  item = self.name('invalid enum entry')
+                  self.expect('=', 'invalid enum entry')
+                  value = self.take()
+                  if not re.fullmatch(r'-?[0-9]+', value):
+                     self.fail('invalid enum entry')
+                  self.expect(';', 'invalid enum entry')
+                  enumeration.pairs.append((item, str(int(value, 10))))
+               self.take()
+            else:
+               message = Message(name)
+               self.schema.messages[name] = message
+               self.schema.message_order.append(name)
+               self.fields(message, name)
+         elif keyword == '}':
+            self.fail('unexpected closing brace')
+         else:
+            self.fail('unexpected SDL statement: ' + keyword)
+
+
 class MsgParser:
    BUILTINS = {'uint8', 'uint16', 'uint32', 'uint64', 'bool', 'int8', 'int16', 'int32', 'int64', 'fl32', 'fl64',
       'c32', 'c64', 'string'}
@@ -208,108 +424,14 @@ class MsgParser:
    def __init__(self):
       self.enums = TypeTable()
       self.messages = TypeTable()
+      self.constants = TypeTable()
       self.message_order = []
       self.package = ''
       self.type_owners = {}
       self.base_name = ''
 
    def parse_text(self, text, validate=True):
-      current_enum = None
-      current_msg = None
-      anonymous_stack = []
-      anonymous_counters = {}
-      package_seen = False
-      for raw_line in text.splitlines():
-         line = re.sub(r'//.*', '', raw_line).strip()
-         if not line:
-            continue
-         if line.startswith('package') and re.match(r'package\b', line):
-            match = re.fullmatch(r'package\s+([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\s*;', line)
-            if not match or package_seen or self.messages or self.enums or current_msg or current_enum:
-               raise ValueError('invalid, duplicate or misplaced package declaration: ' + line)
-            self.package = match[1]
-            package_seen = True
-            continue
-         match = re.match(r'enum\s+(\w+)\s*\{$', line)
-         if match:
-            if current_enum is not None or current_msg is not None:
-               raise ValueError('missing closing brace before declaration: ' + line)
-            name = match.group(1)
-            if name in self.enums or name in self.messages:
-               raise ValueError('duplicate type name: ' + name)
-            current_enum = Enum(name)
-            self.enums[name] = current_enum
-            current_msg = None
-            continue
-         match = re.match(r'(?:message|structure|struct)\s+(\w+)\s*\{$', line)
-         if match:
-            if current_enum is not None or current_msg is not None:
-               raise ValueError('missing closing brace before declaration: ' + line)
-            name = match.group(1)
-            if name in self.enums or name in self.messages:
-               raise ValueError('duplicate type name: ' + name)
-            current_msg = Message(name)
-            self.messages[name] = current_msg
-            self.message_order.append(name)
-            current_enum = None
-            continue
-         if line == '}':
-            if anonymous_stack:
-               raise ValueError('anonymous struct must close with its field name')
-            if current_enum is None and current_msg is None:
-               raise ValueError('unexpected closing brace')
-            current_enum = None
-            current_msg = None
-            continue
-         match = re.match(r'(?:([0-9]+):\s+)?(?:(optional|required|repeated|packed)\s+)?(?:message|structure|struct)\s*\{\s*$', line)
-         if match and current_msg is not None:
-            root_name = anonymous_stack[0]['root'] if anonymous_stack else current_msg.name
-            anonymous_counters[root_name] = anonymous_counters.get(root_name, 0) + 1
-            anonymous_name = root_name + '$' + str(anonymous_counters[root_name])
-            anonymous_stack.append({
-               'parent': current_msg,
-               'field_id': self._field_index(current_msg, match.group(1)),
-               'modifier': match.group(2) or 'required',
-               'message': Message(anonymous_name),
-               'root': root_name,
-            })
-            current_msg = anonymous_stack[-1]['message']
-            continue
-         match = re.match(r'}\s+(\w+)(?:\s+wire\(([^()]*)\))?\s*;$', line)
-         if match and anonymous_stack:
-            frame = anonymous_stack.pop()
-            anonymous_message = frame['message']
-            self.messages[anonymous_message.name] = anonymous_message
-            self.message_order.append(anonymous_message.name)
-            field_name = match.group(1)
-            frame['parent'].fields.append(Field(frame['field_id'],
-               frame['modifier'], anonymous_message.name, field_name, wire=parse_wire_options(match.group(2))))
-            current_msg = frame['parent']
-            continue
-         if current_enum is not None:
-            match = re.fullmatch(r'(\w+)\s*=\s*(-?[0-9]+)\s*;', line)
-            if not match:
-               raise ValueError('invalid enum entry: ' + line)
-            # SDL integer literals are decimal, regardless of leading zeros.
-            current_enum.pairs.append((match.group(1), str(int(match.group(2), 10))))
-            continue
-         if current_msg is not None:
-            match = re.match(r'(?:([0-9]+):\s+)?(?:(optional|required|repeated|packed)\s+)?((?:\.?\w+(?:\.\w+)*)(?:\[[0-9]+\])*)\s+(\w+)(?:\s+wire\(([^()]*)\))?\s*;$', line)
-            if not match:
-               raise ValueError('invalid field declaration: ' + line)
-            declared_type = match.group(3)
-            type_name = declared_type.split('[', 1)[0]
-            dimensions = [int(value) for value in re.findall(r'\[([0-9]+)\]', declared_type)]
-            current_msg.fields.append(Field(self._field_index(current_msg, match.group(1)), match.group(2) or 'required',
-               type_name, match.group(4), dimensions, parse_wire_options(match.group(5))))
-            continue
-         raise ValueError('unexpected SDL statement: ' + line)
-      if anonymous_stack:
-         raise ValueError('unterminated anonymous struct in ' + anonymous_stack[0]['root'])
-      if current_enum is not None:
-         raise ValueError('unterminated enum declaration: ' + current_enum.name)
-      if current_msg is not None:
-         raise ValueError('unterminated message declaration: ' + current_msg.name)
+      _SourceParser(self, text).parse()
       self._qualify_types()
       if validate:
          self.validate()
@@ -330,9 +452,28 @@ class MsgParser:
             declaration.name = qualify(declaration.name)
             table[declaration.name] = declaration
       self.message_order = [qualify(name) for name in self.message_order]
+      constants = list(self.constants.items())
+      self.constants.clear()
+      self.constants.update((qualify(name), value) for name, value in constants)
       for message in self.messages.values():
          for field in message.fields:
             field.type_name = qualify(field.type_name)
+            field.array_dimensions = [qualify(value) if isinstance(value, str) else value
+               for value in field.array_dimensions]
+
+   def _resolve_dimensions(self):
+      for message in self.messages.values():
+         for field in message.fields:
+            dimensions = []
+            for value in field.array_dimensions:
+               if isinstance(value, str):
+                  constant = self.constants.get(value)
+                  if constant is None:
+                     raise ValueError('unknown dimension constant ' + value + ' in ' +
+                        message.name + '.' + field.name)
+                  value = constant
+               dimensions.append(value)
+            field.array_dimensions = dimensions
 
    def catalogue_types(self):
       messages, enums = dict(self.messages), dict(self.enums)
@@ -389,6 +530,12 @@ class MsgParser:
       self.message_order = ordered
 
    def validate(self):
+      self._resolve_dimensions()
+      if len(self.constants) > 0xFFFF:
+         raise ValueError('too many dimension constants in schema')
+      for name in self.constants:
+         if len(name.encode('utf-8')) > 0xFFFF:
+            raise ValueError('dimension constant name exceeds 65535 UTF-8 bytes: ' + name)
       if len(self.messages) > 0xFFFF:
          raise ValueError('too many messages in schema descriptor')
       if len(self.enums) > 0xFFFF:
@@ -538,6 +685,7 @@ def parse_schemas(input_path):
 
    parsed = []
    seen_type_names = set()
+   seen_constant_names = set()
    seen_symbols = set()
    seen_bases = set()
    for schema_path in schema_paths:
@@ -551,20 +699,32 @@ def parse_schemas(input_path):
          raise ValueError('SDL filenames map to the same identifier: ' + identifier)
       seen_bases.add(identifier)
       for name in list(parser.enums) + list(parser.messages):
+         if name in seen_constant_names:
+            raise ValueError('duplicate declaration name across SDL files: ' + name)
          symbol = c_identifier(name).upper()
          if name in seen_type_names or symbol in seen_symbols:
             raise ValueError('duplicate type name across SDL files: ' + name)
          seen_type_names.add(name)
          seen_symbols.add(symbol)
+      for name in parser.constants:
+         if name in seen_type_names or name in seen_constant_names:
+            raise ValueError('duplicate declaration name across SDL files: ' + name)
+         seen_constant_names.add(name)
       parsed.append((base_name, identifier, parser))
    messages = {name: message for _, _, schema in parsed for name, message in schema.messages.items()}
    enums = {name: enum for _, _, schema in parsed for name, enum in schema.enums.items()}
+   constants = {name: value for _, _, schema in parsed for name, value in schema.constants.items()}
    owners = {name: (schema.package, base) for base, _, schema in parsed
       for name in list(schema.messages) + list(schema.enums)}
    for base, _, schema in parsed:
       schema.messages.external = messages
       schema.enums.external = enums
+      schema.constants.external = constants
       schema.type_owners = owners
+   # Resolve every file before validating any cross-file message dependency.
+   for _, _, schema in parsed:
+      schema._resolve_dimensions()
+   for _, _, schema in parsed:
       schema.validate()
    return parsed
 
