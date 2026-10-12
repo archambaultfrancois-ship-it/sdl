@@ -422,12 +422,13 @@ def main():
    argument_parser.add_argument('-c', action='store_true', help='generate C code')
    argument_parser.add_argument('-rust', action='store_true', help='generate Rust code')
    argument_parser.add_argument('-python', action='store_true', help='generate Python 3 code')
+   argument_parser.add_argument('-matlab', action='store_true', help='generate MATLAB/Octave code')
    argument_parser.add_argument('input', nargs='?', default='sdl', help='SDL file or directory')
    argument_parser.add_argument('output', nargs='?', default='build/generated',
       help='output directory (language subdirectory is added automatically)')
    arguments = argument_parser.parse_args()
-   if not arguments.c and not arguments.rust and not arguments.python:
-      argument_parser.error('select at least one backend with -c, -rust or -python')
+   if not arguments.c and not arguments.rust and not arguments.python and not arguments.matlab:
+      argument_parser.error('select at least one backend with -c, -rust, -python or -matlab')
    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
    try:
       if arguments.c:
@@ -439,6 +440,9 @@ def main():
       if arguments.python:
          from python_backend import generate_python
          generate_python(arguments.input, os.path.join(arguments.output, 'python'))
+      if arguments.matlab:
+         from matlab_backend import generate_matlab
+         generate_matlab(arguments.input, os.path.join(arguments.output, 'matlab'))
    except ValueError as error:
       argument_parser.error(str(error))
 
