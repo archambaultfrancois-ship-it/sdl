@@ -67,7 +67,8 @@ files, or that produce invalid module names. Type names must be unique across
 the input schema set and cannot reuse built-in type names. Enum item names and
 numeric values must each be unique within their enum. Enums must declare at
 least one item; values are signed 32-bit integers written with ASCII decimal
-digits. Field IDs are positive unsigned 32-bit integers written with ASCII
+digits. Leading zeros do not change their decimal value; generated bindings
+emit normalized decimal literals. Field IDs are positive unsigned 32-bit integers written with ASCII
 decimal digits and must be unique within their message. The generator and runtimes limit declaration counts and UTF-8 identifier
 lengths to 65535; a field can have at most 255
 fixed-array dimensions. The complete textual catalogue is limited to 1 MiB.

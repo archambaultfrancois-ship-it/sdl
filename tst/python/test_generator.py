@@ -15,6 +15,66 @@ from ada_backend import AdaBackend, generate_ada
 
 
 class GeneratorValidationTests(unittest.TestCase):
+   def test_02_backend_enum_leading_zeros_are_decimal_in_every_backend(self):
+      import os
+      import shlex
+      import shutil
+      import struct
+      import subprocess
+      import types
+      from unittest.mock import patch
+      from matlab_backend import generate_matlab
+      from sdl_runtime import prepare, encode, decode
+      source = '''enum DecimalState {
+ ZERO = -000;
+ EIGHT = 008;
+ TEN = 010;
+ NEGATIVE = -010;
+ MINIMUM = -02147483648;
+ MAXIMUM = 02147483647;
+}
+message DecimalPacket {
+ DecimalState state;
+}
+'''
+      canonical = source.replace('-000', '0').replace('008', '8').replace('010', '10').replace('021474836', '21474836')
+      parser = MsgParser()
+      parser.parse_text(source)
+      self.assertEqual(parser.enums['DecimalState'].pairs, [
+         ('ZERO', '0'), ('EIGHT', '8'), ('TEN', '10'), ('NEGATIVE', '-10'),
+         ('MINIMUM', '-2147483648'), ('MAXIMUM', '2147483647')])
+      module = types.ModuleType('_sdl_decimal_fixture')
+      exec(PythonBackend(parser).generate(), module.__dict__)
+      with patch.dict(sys.modules, {module.__name__: module}):
+         context = prepare(canonical_type_descriptor(parser), module.DecimalPacket)
+         for value in (0, 8, 10, -10, -2147483648, 2147483647):
+            packet = module.DecimalPacket()
+            packet.state = module.DecimalState(value)
+            wire = encode(context, packet)
+            self.assertEqual(wire, b'\x01' + struct.pack('>i', value))
+            self.assertEqual(decode(context, wire).state, packet.state)
+      with tempfile.TemporaryDirectory() as temporary:
+         root = pathlib.Path(temporary)
+         schema = root / 'decimal.sdl'
+         for generate in (generate_c, generate_rust, generate_python, generate_java, generate_ada, generate_matlab):
+            with self.subTest(backend=generate.__name__):
+               schema.write_text(canonical)
+               generate(str(schema), str(root / 'canonical'))
+               schema.write_text(source)
+               generate(str(schema), str(root / 'padded'))
+               outputs = lambda directory: {str(p.relative_to(directory)): p.read_bytes() for p in directory.rglob('*') if p.is_file()}
+               self.assertEqual(outputs(root / 'canonical'), outputs(root / 'padded'))
+         compiler = shlex.split(os.environ.get('CC', 'cc'))
+         if compiler and shutil.which(compiler[0]):
+            repo = pathlib.Path(__file__).resolve().parents[2]
+            executable = root / 'decimal-check'
+            check = '#include "decimal.h"\n#include <assert.h>\nint main(void) {\n' + ''.join(
+               'assert(DECIMALSTATE_%s == %s);\n' % pair for pair in parser.enums['DecimalState'].pairs) + 'return 0;\n}\n'
+            subprocess.run(compiler + ['-std=c99', '-I' + str(root / 'padded'),
+               '-I' + str(repo / 'runtime/c'), '-x', 'c', '-', '-o', str(executable)],
+               input=check, check=True, capture_output=True, text=True)
+            subprocess.run([str(executable)], check=True)
+
    def test_01_schema_enum_rejects_trailing_tokens(self):
       for suffix in ('unexpected tokens', 'SECOND = 2;', '}'):
          with self.subTest(suffix=suffix):

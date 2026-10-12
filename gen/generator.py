@@ -180,7 +180,8 @@ class MsgParser:
             match = re.fullmatch(r'(\w+)\s*=\s*(-?[0-9]+)\s*;', line)
             if not match:
                raise ValueError('invalid enum entry: ' + line)
-            current_enum.pairs.append((match.group(1), match.group(2)))
+            # SDL integer literals are decimal, regardless of leading zeros.
+            current_enum.pairs.append((match.group(1), str(int(match.group(2), 10))))
             continue
          if current_msg is not None:
             match = re.match(r'(?:([0-9]+):\s+)?(?:(optional|required|repeated|packed)\s+)?(\w+(?:\[[0-9]+\])*)\s+(\w+)(?:\s+wire\(([^()]*)\))?\s*;$', line)

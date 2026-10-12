@@ -116,8 +116,11 @@ follows. Thus 127 is `7f`, 128 is `80 01`, and 300 is `ac 02`.
 Overlong encodings (such as `80 00`), overflow, truncated counters, unknown
 message IDs, trailing bytes, invalid UTF-8, bools, and enum values are errors.
 Runtime catalogue limits are 1 MiB, 65,535 declarations/fields/items, 65,535
-UTF-8 bytes per identifier, 255 fixed dimensions, and 64 recursive processing levels. Native array limits and the accounting
-of nested values can further constrain a backend.
+UTF-8 bytes per identifier, 255 fixed dimensions per field, and 64 nested message
+references along any path (65 messages including the root). C payload validation
+and decoding count message references independently of field visits, sequence
+elements, and fixed-array dimensions. Native array limits can further constrain
+a backend.
 Variable-size sequence decoding is capped at 1,048,576 elements; fixed-size
 sequences are additionally checked against remaining input before allocation.
 The limits protect preparation and allocation, independently of transport size

@@ -10,6 +10,7 @@
 
 #define SDL_DYNAMIC_MAX_DESCRIPTOR (1024U * 1024U)
 #define SDL_DYNAMIC_MAX_NESTING 64U
+#define SDL_DYNAMIC_MAX_DIMENSIONS 255U
 
 typedef struct {
    size_t native_offset, wire_offset, width, count;
@@ -96,6 +97,39 @@ static bool reader_read(SdlDynamicReader *reader, size_t size, const uint8_t **d
 
 static void value_clear(SdlDynamicValue *value);
 
+typedef struct {
+   SdlDynamicValue *value;
+   size_t next;
+} SdlDynamicArrayFrame;
+
+/* Array ranks have their own bound. Keep their traversal off the C call stack,
+   including when arrays wrap messages that contain more arrays. */
+static void array_clear(SdlDynamicValue *value) {
+   SdlDynamicArrayFrame frames[SDL_DYNAMIC_MAX_DIMENSIONS + 1];
+   size_t level = 0;
+   frames[0].value = value;
+   frames[0].next = 0;
+   for (;;) {
+      SdlDynamicArrayFrame *frame = &frames[level];
+      SdlDynamicArray *array = &frame->value->value.array;
+      SdlDynamicValue *item;
+      if (!array->items || frame->next == array->count) {
+         free(array->items);
+         if (!level)
+            return;
+         --level;
+         continue;
+      }
+      item = &array->items[frame->next++];
+      if (item->kind == SDL_DYNAMIC_ARRAY) {
+         ++level;
+         frames[level].value = item;
+         frames[level].next = 0;
+      } else
+         value_clear(item);
+   }
+}
+
 static void message_clear(SdlDynamicMessage *message) {
    size_t i;
    if (message == NULL)
@@ -111,7 +145,6 @@ static void message_clear(SdlDynamicMessage *message) {
 }
 
 static void value_clear(SdlDynamicValue *value) {
-   size_t i;
    switch (value->kind) {
    case SDL_DYNAMIC_STRING:
       free(value->value.string.data);
@@ -121,10 +154,7 @@ static void value_clear(SdlDynamicValue *value) {
       free(value->value.enumeration.name);
       break;
    case SDL_DYNAMIC_ARRAY:
-      if (value->value.array.items != NULL)
-         for (i = 0; i < value->value.array.count; ++i)
-            value_clear(&value->value.array.items[i]);
-      free(value->value.array.items);
+      array_clear(value);
       break;
    case SDL_DYNAMIC_MESSAGE:
       message_clear(value->value.message);
@@ -428,7 +458,7 @@ static bool parse_descriptor(const uint8_t *data, size_t size, SdlDynamicSchema 
                   break;
                }
                free(t);
-               if (f->dimension_count == 255) {
+               if (f->dimension_count == SDL_DYNAMIC_MAX_DIMENSIONS) {
                   free(kind);
                   goto fail;
                }
@@ -614,7 +644,7 @@ static size_t primitive_size(const char *type_name) {
 
 static size_t sdl_fixed_type_size(const char *type_name, const SdlDynamicSchema *schema,
                                   const SdlDynamicMessageDesc **active, size_t depth) {
-   const SdlDynamicMessageDesc *local_active[SDL_DYNAMIC_MAX_NESTING];
+   const SdlDynamicMessageDesc *local_active[SDL_DYNAMIC_MAX_NESTING + 1];
    const SdlDynamicMessageDesc *message;
    size_t size = primitive_size(type_name), total = 0, i, j;
    if (active == NULL)
@@ -624,7 +654,7 @@ static size_t sdl_fixed_type_size(const char *type_name, const SdlDynamicSchema 
    if (schema_enum(schema, type_name) != NULL)
       return 4;
    message = schema_message_const(schema, type_name);
-   if (message == NULL || message->field_count == 0 || depth >= SDL_DYNAMIC_MAX_NESTING)
+   if (message == NULL || message->field_count == 0 || depth > SDL_DYNAMIC_MAX_NESTING)
       return 0;
    for (i = 0; i < depth; ++i)
       if (active[i] == message)
@@ -1155,7 +1185,7 @@ static bool read_fixed_records(const SdlDynamicSchema *s, const SdlFixedPlan *p,
 static bool read_native_message(const SdlDynamicSchema *s, const SdlDynamicMessageDesc *m,
                                 void *value, SdlDynamicReader *r, Pool *pool, size_t depth) {
    size_t i, j;
-   if (depth > 64)
+   if (depth > SDL_DYNAMIC_MAX_NESTING)
       return false;
    if (m->plan.span_count)
       return read_fixed_records(s, &m->plan, 1, value, pool != NULL, r);
@@ -1242,7 +1272,7 @@ static bool read_native_message(const SdlDynamicSchema *s, const SdlDynamicMessa
              local ? (f->modifier >= 2 ? (uint8_t *)items + j * local->type->size : items) : NULL;
          if (!read_native_value(s, f->type_name, f->dimensions, f->dimension_count,
                                 f->local && pool ? f->local->type : NULL, item,
-                                lengths ? lengths + j : NULL, r, f->local ? pool : NULL, depth + 1))
+                                lengths ? lengths + j : NULL, r, f->local ? pool : NULL, depth))
             return false;
       }
    }
@@ -1255,19 +1285,25 @@ static bool read_native_value(const SdlDynamicSchema *s, const char *name, const
    size_t n, i;
    const SdlDynamicMessageDesc *m;
    const SdlTypeDesc *primitive;
-   if (depth > 64)
+   /* Depth counts message references only; prepared array ranks are <= 255. */
+   if (depth > SDL_DYNAMIC_MAX_NESTING)
       return false;
    if (nd) {
       size_t unit = sdl_fixed_type_size(name, s, NULL, 0);
-      for (i = 1; i < nd; ++i)
-         unit *= dims[i];
-      if (!unit || dims[0] > (r->size - r->offset) / unit)
+      size_t count = 1;
+      /* Native fixed arrays are contiguous, regardless of their rank. */
+      for (i = 0; i < nd; ++i) {
+         count *= dims[i];
+         if (local)
+            local = local->detail.array.element;
+      }
+      if (!unit || count > (r->size - r->offset) / unit)
          return false;
-      for (i = 0; i < dims[0]; ++i)
+      for (i = 0; i < count; ++i)
          if (!read_native_value(
-                 s, name, dims + 1, nd - 1, local ? local->detail.array.element : NULL,
-                 value ? (uint8_t *)value + i * local->detail.array.element->size : NULL, NULL, r,
-                 pool, depth + 1))
+                 s, name, NULL, 0, local,
+                 value ? (uint8_t *)value + i * local->size : NULL, NULL, r,
+                 pool, depth))
             return false;
       return true;
    }
@@ -1607,11 +1643,43 @@ static void decode_value(const char *type_name, const uint8_t *data, size_t size
 
 static bool dynamic_value(const SdlDynamicSchema *, const char *, const uint32_t *, size_t,
                           SdlDynamicReader *, SdlDynamicValue *, size_t);
+static bool dynamic_array(const SdlDynamicSchema *s, const char *name, const uint32_t *dims,
+                           size_t nd, SdlDynamicReader *r, SdlDynamicValue *out, size_t depth) {
+   SdlDynamicArrayFrame frames[SDL_DYNAMIC_MAX_DIMENSIONS];
+   size_t level = 0;
+   frames[0].value = out;
+   frames[0].next = 0;
+   for (;;) {
+      SdlDynamicArrayFrame *frame = &frames[level];
+      SdlDynamicArray *array = &frame->value->value.array;
+      SdlDynamicValue *item;
+      if (!frame->next) {
+         frame->value->kind = SDL_DYNAMIC_ARRAY;
+         array->count = dims[level];
+         array->items = (SdlDynamicValue *)calloc(array->count, sizeof(*array->items));
+         if (!array->items)
+            return false;
+      }
+      if (frame->next == array->count) {
+         if (!level)
+            return true;
+         --level;
+         continue;
+      }
+      item = &array->items[frame->next++];
+      if (level + 1 < nd) {
+         ++level;
+         frames[level].value = item;
+         frames[level].next = 0;
+      } else if (!dynamic_value(s, name, NULL, 0, r, item, depth))
+         return false;
+   }
+}
 static SdlDynamicMessage *dynamic_message(const SdlDynamicSchema *s, const SdlDynamicMessageDesc *m,
                                           SdlDynamicReader *r, size_t depth) {
    SdlDynamicMessage *out;
    size_t i, j;
-   if (depth > 64)
+   if (depth > SDL_DYNAMIC_MAX_NESTING)
       return NULL;
    out = (SdlDynamicMessage *)calloc(1, sizeof(*out));
    if (!out)
@@ -1642,10 +1710,10 @@ static SdlDynamicMessage *dynamic_message(const SdlDynamicSchema *s, const SdlDy
             goto fail;
          for (j = 0; j < count; ++j)
             if (!dynamic_value(s, f->type_name, f->dimensions, f->dimension_count, r,
-                               &v->value.array.items[j], depth + 1))
+                               &v->value.array.items[j], depth))
                goto fail;
       } else if (count && !dynamic_value(s, f->type_name, f->dimensions, f->dimension_count, r, v,
-                                         depth + 1))
+                                         depth))
          goto fail;
    }
    return out;
@@ -1658,20 +1726,12 @@ static bool dynamic_value(const SdlDynamicSchema *s, const char *name, const uin
    const SdlDynamicMessageDesc *m;
    const uint8_t *bytes;
    uint32_t len;
-   size_t n, i;
-   if (depth > 64)
+   size_t n;
+   /* Match native validation: fields and dimensions do not add message depth. */
+   if (depth > SDL_DYNAMIC_MAX_NESTING)
       return false;
-   if (nd) {
-      out->kind = SDL_DYNAMIC_ARRAY;
-      out->value.array.count = dims[0];
-      out->value.array.items = (SdlDynamicValue *)calloc(dims[0], sizeof(*out->value.array.items));
-      if (!out->value.array.items)
-         return false;
-      for (i = 0; i < dims[0]; ++i)
-         if (!dynamic_value(s, name, dims + 1, nd - 1, r, &out->value.array.items[i], depth + 1))
-            return false;
-      return true;
-   }
+   if (nd)
+      return dynamic_array(s, name, dims, nd, r, out, depth);
    m = schema_message_const(s, name);
    if (m) {
       out->kind = SDL_DYNAMIC_MESSAGE;

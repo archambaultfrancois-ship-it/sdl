@@ -337,6 +337,174 @@ static void graph_limits(void) {
       type_context_free(ctx);
    }
 }
+static void deep_messages(void) {
+   typedef struct { char *data; uint32_t length; } StringValue;
+   static SdlTypeDesc types[2][65];
+   static SdlFieldDesc fields[2][65];
+   static char names[2][65][32];
+   char text[16384];
+   unsigned variable, i, count;
+   for (variable = 0; variable < 2; ++variable) {
+      size_t used = 5;
+      SdlContext *ctx;
+      memcpy(text, "SDL2|", 5);
+      for (i = 0; i < 65; ++i)
+         snprintf(names[variable][i], sizeof(names[variable][i]), "Deep%s%03u", variable ? "String" : "Bool", i);
+      for (i = 0; i < 65; ++i) {
+         SdlTypeDesc *t = &types[variable][i];
+         SdlFieldDesc *f = &fields[variable][i];
+         t->kind = SDL_TYPE_STRUCT;
+         t->name = names[variable][i];
+         t->size = variable ? sizeof(StringValue) : sizeof(bool);
+         t->alignment = variable ? offsetof(struct { char prefix; char *value; }, value) : 1;
+         t->detail.structure.field_count = 1;
+         t->detail.structure.fields = f;
+         f->id = 1;
+         f->name = "value";
+         f->type = i < 64 ? &types[variable][i + 1] : variable ? &SDL_STRING_DESC : &SDL_BOOL_DESC;
+         f->presence_offset = f->count_offset = f->string_length_offset = SDL_NO_OFFSET;
+         if (variable && i == 64)
+            f->string_length_offset = offsetof(StringValue, length);
+         assert(sdl_register_type(t));
+         used += (size_t)sprintf(text + used, "%s%s{1:%s:value;}", i ? "|" : "", t->name,
+            i < 64 ? names[variable][i + 1] : variable ? "string" : "bool");
+      }
+      ctx = type_prepare(text, used);
+      assert(ctx);
+      for (count = 32; count <= 65; ++count) {
+         unsigned char wire[] = {(unsigned char)(66 - count), 1, 'x'};
+         size_t size = variable ? 3 : 2, encoded_size;
+         bool value = true;
+         StringValue string = {"x", 1};
+         void *copy, *encoded;
+         SdlDynamicMessage *decoded, *m;
+         assert(type_context_validate(ctx, wire, size));
+         decoded = type_decode_dynamic(ctx, wire, size);
+         assert(decoded);
+         m = decoded;
+         for (i = 1; i < count; ++i) {
+            assert(m->field_count == 1 && m->fields[0].value.kind == SDL_DYNAMIC_MESSAGE);
+            m = m->fields[0].value.value.message;
+         }
+         assert(m->fields[0].value.kind == (variable ? SDL_DYNAMIC_STRING : SDL_DYNAMIC_BOOL));
+         if (variable)
+            assert(m->fields[0].value.value.string.size == 1 && m->fields[0].value.value.string.data[0] == 'x');
+         else
+            assert(m->fields[0].value.value.boolean);
+         type_dynamic_free(decoded);
+         copy = type_decode(ctx, wire, size);
+         assert(copy && (variable ? !strcmp(((StringValue *)copy)->data, "x") && ((StringValue *)copy)->length == 1 : *(bool *)copy));
+         type_free(copy);
+         encoded = type_encode(ctx, names[variable][65 - count], variable ? (void *)&string : (void *)&value, &encoded_size);
+         assert(encoded && encoded_size == size && !memcmp(encoded, wire, size));
+         type_free(encoded);
+         assert(!type_context_validate(ctx, wire, size - 1));
+         assert(!type_decode_dynamic(ctx, wire, size - 1));
+         assert(!type_decode(ctx, wire, size - 1));
+         wire[size - 1] = variable ? 0xff : 2;
+         assert(!type_context_validate(ctx, wire, size));
+         assert(!type_decode_dynamic(ctx, wire, size));
+         assert(!type_decode(ctx, wire, size));
+      }
+      type_context_free(ctx);
+   }
+}
+static void deep_arrays(void) {
+   static SdlTypeDesc arrays[255];
+   static SdlFieldDesc field = {1, "value", arrays, 0, SDL_NO_OFFSET, SDL_NO_OFFSET, SDL_NO_OFFSET, 0};
+   static const SdlTypeDesc message = {
+      .kind = SDL_TYPE_STRUCT, .size = 1, .alignment = 1, .name = "DeepArray",
+      .detail.structure = {1, &field}
+   };
+   const unsigned ranks[] = {63, 64, 65, 255, 256};
+   const unsigned char wire[] = {1, 7};
+   char text[1024];
+   size_t k;
+   for (k = 0; k < 255; ++k) {
+      arrays[k].kind = SDL_TYPE_ARRAY;
+      arrays[k].size = arrays[k].alignment = 1;
+      arrays[k].detail.array.count = 1;
+      arrays[k].detail.array.element = k < 254 ? &arrays[k + 1] : &SDL_INT8_DESC;
+   }
+   assert(sdl_register_type(&message));
+   for (k = 0; k < sizeof(ranks) / sizeof(ranks[0]); ++k) {
+      unsigned i, rank = ranks[k];
+      size_t used = (size_t)sprintf(text, "SDL2|%s{1:int8", rank == 255 ? "DeepArray" : "UnknownDeepArray");
+      SdlContext *ctx;
+      SdlDynamicMessage *decoded;
+      const SdlDynamicValue *value;
+      for (i = 0; i < rank; ++i) {
+         memcpy(text + used, "[1]", 3);
+         used += 3;
+      }
+      used += (size_t)sprintf(text + used, ":value;}");
+      ctx = type_prepare(text, used);
+      if (rank > 255) {
+         assert(!ctx);
+         continue;
+      }
+      assert(ctx && type_context_validate(ctx, wire, sizeof(wire)));
+      decoded = type_decode_dynamic(ctx, wire, sizeof(wire));
+      assert(decoded);
+      value = &decoded->fields[0].value;
+      for (i = 0; i < rank; ++i) {
+         assert(value->kind == SDL_DYNAMIC_ARRAY && value->value.array.count == 1);
+         value = &value->value.array.items[0];
+      }
+      assert(value->kind == SDL_DYNAMIC_INTEGER && value->value.integer == 7);
+      type_dynamic_free(decoded);
+      assert(!type_context_validate(ctx, wire, sizeof(wire) - 1));
+      assert(!type_decode_dynamic(ctx, wire, sizeof(wire) - 1));
+      if (rank == 255) {
+         int8_t original = 7, *copy;
+         size_t size;
+         void *encoded = type_encode(ctx, "DeepArray", &original, &size);
+         assert(encoded && size == sizeof(wire) && !memcmp(encoded, wire, size));
+         copy = type_decode(ctx, encoded, size);
+         assert(copy && *copy == original);
+         type_free(copy);
+         type_free(encoded);
+      }
+      type_context_free(ctx);
+   }
+}
+static void deep_array_messages(void) {
+   char text[65536];
+   const unsigned char wire[] = {1, 7};
+   size_t used = 5;
+   unsigned i, j;
+   SdlContext *ctx;
+   SdlDynamicMessage *decoded, *m;
+   memcpy(text, "SDL2|", 5);
+   for (i = 0; i < 65; ++i) {
+      used += (size_t)sprintf(text + used, "%sArrayMessage%03u{1:", i ? "|" : "", i);
+      used += (size_t)sprintf(text + used, i < 64 ? "ArrayMessage%03u" : "int8", i + 1);
+      for (j = 0; j < 255; ++j) {
+         memcpy(text + used, "[1]", 3);
+         used += 3;
+      }
+      used += (size_t)sprintf(text + used, ":value;}");
+   }
+   ctx = type_prepare(text, used);
+   assert(ctx && type_context_validate(ctx, wire, sizeof(wire)));
+   decoded = type_decode_dynamic(ctx, wire, sizeof(wire));
+   assert(decoded);
+   m = decoded;
+   for (i = 0; i < 65; ++i) {
+      const SdlDynamicValue *value = &m->fields[0].value;
+      for (j = 0; j < 255; ++j) {
+         assert(value->kind == SDL_DYNAMIC_ARRAY && value->value.array.count == 1);
+         value = &value->value.array.items[0];
+      }
+      if (i < 64) {
+         assert(value->kind == SDL_DYNAMIC_MESSAGE);
+         m = value->value.message;
+      } else
+         assert(value->kind == SDL_DYNAMIC_INTEGER && value->value.integer == 7);
+   }
+   type_dynamic_free(decoded);
+   type_context_free(ctx);
+}
 /* Mixed widths and native padding exercise the non-contiguous span path. */
 typedef struct {
    bool enabled;
@@ -542,6 +710,9 @@ int main(void) {
    wire_word_arrays();
    invalid();
    graph_limits();
+   deep_messages();
+   deep_arrays();
+   deep_array_messages();
    registry_cases();
    puts("C SDL2 codec, evolution, malformed input and storage checks passed.");
    return 0;
