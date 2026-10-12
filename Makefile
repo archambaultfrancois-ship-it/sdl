@@ -2,6 +2,13 @@ PYTHON ?= python3
 CC ?= gcc
 CARGO ?= cargo
 CFLAGS ?= -std=c99 -Wall -Wextra -pedantic -O3
+GNAT_HOME ?= $(HOME)/opt/gnat-21.1
+GNATMAKE ?= $(GNAT_HOME)/bin/gnatmake
+ADA_RTS ?= sjlj
+ADA_FLAGS ?= --RTS=$(ADA_RTS) -gnat2012 -gnata -gnatn -O3
+ADA_GENERATED_DIR := build/generated/ada
+ADA_C_SOURCES := $(wildcard runtime/c/*.c) runtime/ada/sdl_ada_bridge.c
+ADA_C_OBJECTS := $(patsubst %.c,build/ada/%.o,$(ADA_C_SOURCES))
 BENCH_ITERATIONS ?= 200
 BUILD_DIR := build
 GENERATED_DIR := $(BUILD_DIR)/generated
@@ -41,6 +48,7 @@ test:
 	@$(MAKE) --no-print-directory CHECK_SILENT= test-python
 	@$(MAKE) --no-print-directory CHECK_SILENT= test-matlab
 	@$(MAKE) --no-print-directory CHECK_SILENT= test-java
+	@$(MAKE) --no-print-directory CHECK_SILENT= test-ada
 
 test-c: $(BUILD_DIR)/sdl_utest
 	@if [ -z "$(CHECK_SILENT)" ]; then echo "=== Component C: generated typed codec, runtime storage, then wire limits ==="; fi
@@ -91,9 +99,9 @@ bench-java: $(GENERATED_DIR)/.stamp
 	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaBench
 
-$(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m runtime/matlab/sdl_mex_context.m Makefile
+$(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py gen/ada_backend.py gen/ada_direct.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m runtime/matlab/sdl_mex_context.m Makefile
 	mkdir -p $(GENERATED_DIR)
-	$(PYTHON) gen/generator.py -c -rust -python -matlab -java sdl $(GENERATED_DIR)
+	$(PYTHON) gen/generator.py -c -rust -python -matlab -java -ada sdl $(GENERATED_DIR)
 	touch $@
 
 $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/empty_message.h $(C_GENERATED_DIR)/sdl_registry.h: $(GENERATED_DIR)/.stamp
@@ -110,3 +118,25 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 .PHONY: bench-python-buffers python-native matlab-mex all clean check test test-c test-rust test-python test-matlab test-java bench bench-c bench-rust bench-python bench-matlab bench-java
+
+# GNAT's native runtime in the supplied installation lacks generic bodies.
+# The complete sjlj runtime is used by default; ADA_RTS=native is supported.
+build/ada/%.o: %.c $(wildcard runtime/c/*.h)
+	mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -Iruntime/c -c $< -o $@
+
+build/ada/sdl_ada_tests: tst/ada/run_tests.adb $(wildcard runtime/ada/*.ad?) $(GENERATED_DIR)/.stamp $(ADA_C_OBJECTS)
+	mkdir -p build/ada
+	PATH="$(GNAT_HOME)/bin:$(PATH)" $(GNATMAKE) $(ADA_FLAGS) -Iruntime/ada -I$(ADA_GENERATED_DIR) -D build/ada -o $@ $< -largs $(ADA_C_OBJECTS) -lm
+
+build/ada/sdl_ada_bench: tst/ada/bench.adb $(wildcard runtime/ada/*.ad?) $(GENERATED_DIR)/.stamp $(ADA_C_OBJECTS)
+	mkdir -p build/ada
+	PATH="$(GNAT_HOME)/bin:$(PATH)" $(GNATMAKE) $(ADA_FLAGS) -Iruntime/ada -I$(ADA_GENERATED_DIR) -D build/ada -o $@ $< -largs $(ADA_C_OBJECTS) -lm
+
+test-ada: build/ada/sdl_ada_tests
+	$(RUN_TEST) ./build/ada/sdl_ada_tests
+
+bench-ada: build/ada/sdl_ada_bench
+	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) ./build/ada/sdl_ada_bench
+
+.PHONY: test-ada bench-ada

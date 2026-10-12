@@ -1,8 +1,8 @@
 # SDL2 throughput benchmarks
 
 Run `make bench` (or an individual `bench-c`, `bench-rust`, `bench-python`,
-`bench-matlab`, `bench-java` target). The aggregate checks identical wire sizes
-across the five implementations and writes `build/benchmarks.json` with
+`bench-matlab`, `bench-java`, `bench-ada` target). The aggregate checks identical wire sizes
+across the six implementations and writes `build/benchmarks.json` with
 catalogue sizes, preparation times, and throughput. The aggregate prints a
 case-by-language matrix in **MB/s (Enc / Dec)**, rounded to integers; MB/s
 means 1,000,000 useful bytes per second. A displayed zero means less than
@@ -12,6 +12,7 @@ messages/s measurements.
 
 ## Method
 
+Ada builds use Ada 2012, `-O3` and enabled range checks.
 C builds default to `-O3` for tests, benchmarks and samples. Rust development,
 test and release profiles use `opt-level = 3`. Debug assertions and overflow
 checks retain their normal development/test defaults. Java, Python and
@@ -22,7 +23,7 @@ Catalogue rendering and preparation are outside the message timing. Each case
 reports one preparation call separately; it includes parsing, schema checks,
 and local mappings, and is not a steady-state preparation benchmark.
 
-After warmup (C/Rust/Python: 100 calls of each operation; Java: 1,000;
+After warmup (C/Rust/Python/Ada: 100 calls of each operation; Java: 1,000;
 Matlab/Octave: 20), encode and decode each run for three trials. Each trial has
 at least 200 calls and 0.1 seconds; the median messages/s is reported. Set
 `BENCH_ITERATIONS` to change the minimum, or `SDL_BENCH_ITERATIONS` for standalone
@@ -30,11 +31,13 @@ programs. Rust applies `black_box` to the context, input and returned value in t
 operations so compiler optimizations cannot rely on constant inputs. The same
 message buffer is reused; these are warm-cache codec measurements.
 Every backend uses elapsed wall time. C uses `CLOCK_MONOTONIC`, Rust
-`Instant`, Python `perf_counter`, Java `nanoTime`, and Matlab/Octave `tic/toc`.
+`Instant`, Python `perf_counter`, Java `nanoTime`, Matlab/Octave `tic/toc`, and Ada `Ada.Real_Time.Clock`.
 
 Timed operations include allocating encoded output or decoded values and
 releasing/discarding them. There is no transport, message construction,
-dynamic-tree decode, or application work. Java results depend on JIT warmup
+application work. Ada decoding includes C dynamic-tree construction,
+conversion to typed Ada records/vectors, and tree destruction for the generic
+fallback. Compatible Packed messages decode directly into Ada values. Java results depend on JIT warmup
 and collection; Python reference counting and Octave interpreter overhead
 are part of their measurements. C native decode validates/measures its storage
 before filling one allocation. Rust prepares layout/enum compatibility checks
@@ -60,6 +63,16 @@ record size; encoding still validates array shapes and required references
 while writing. Primitive and complex arrays use specialized big-endian word
 loops with block bounds checks. Matlab/Octave follow runtime metadata and local
 mappings.
+
+The Ada backend selects direct codecs for messages containing Packed fields
+when all reachable record layouts and enum value sets match. Eligibility is
+cached at preparation. Exact sizing and a single byte array replace per-byte
+vector appends; decoding reserves typed vector storage and bypasses C dynamic
+trees. Generated fixed subrecord codecs and endian conversions are inlined with
+`-gnatn`, with range and message-validity checks enabled. `SDL_ADA_NO_DIRECT=1 make bench-ada` measures the same API and messages using the generic fallback.
+Its catalogue contains every type in its schema file, so catalogue sizes and
+preparation times can differ from backends that render only the root type and its
+dependencies. All data wire sizes and useful byte counts remain comparable.
 
 MiB/s counts **useful value bytes**, not catalogue, type IDs, string lengths,
 element counts, optional flags, or transport framing. A MiB is 1,048,576 bytes.

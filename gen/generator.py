@@ -354,6 +354,7 @@ def clear_generated_outputs(output_dir, extensions, markers):
 
 def main():
    argument_parser = argparse.ArgumentParser(description='Generate code from SDL schemas.')
+   argument_parser.add_argument('-ada', action='store_true', help='generate Ada 2012 code')
    argument_parser.add_argument('-c', action='store_true', help='generate C code')
    argument_parser.add_argument('-rust', action='store_true', help='generate Rust code')
    argument_parser.add_argument('-python', action='store_true', help='generate Python 3 code')
@@ -363,10 +364,13 @@ def main():
    argument_parser.add_argument('output', nargs='?', default='build/generated',
       help='output directory (language subdirectory is added automatically)')
    arguments = argument_parser.parse_args()
-   if not arguments.c and not arguments.rust and not arguments.python and not arguments.matlab and not arguments.java:
-      argument_parser.error('select at least one backend with -c, -rust, -python, -matlab or -java')
+   if not arguments.c and not arguments.rust and not arguments.python and not arguments.matlab and not arguments.java and not arguments.ada:
+      argument_parser.error('select at least one backend with -c, -rust, -python, -matlab -java or -ada')
    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
    try:
+      if arguments.ada:
+         from ada_backend import generate_ada
+         generate_ada(arguments.input, os.path.join(arguments.output, 'ada'))
       if arguments.c:
          from c_backend import generate_c
          generate_c(arguments.input, os.path.join(arguments.output, 'c'))

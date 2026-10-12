@@ -12,6 +12,7 @@ BACKENDS = (
    ("Python", "test-python"),
    ("Matlab", "test-matlab"),
    ("Java", "test-java"),
+   ("Ada", "test-ada"),
 )
 BAR_WIDTH = 24
 
