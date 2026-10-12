@@ -1,3 +1,8 @@
+enum State {
+   UNKNOWN = 0;
+   READY = 1;
+}
+
 message FixedItem {
    1: required fl32 x;
    2: required fl32 y;
@@ -12,4 +17,23 @@ message RootPayload {
    1: optional string header;
    2: repeated FixedItem fixed_array;
    3: repeated VarItem var_array;
+}
+
+message CodecCases {
+   1: optional int8 tiny;
+   2: optional int16 small;
+   3: optional int32 signed_value;
+   4: optional int64 wide;
+   5: optional fl32 ratio;
+   6: optional fl64 precise;
+   7: optional c32 point;
+   8: optional c64 position;
+   9: optional State state;
+   10: optional string empty_text;
+   11: required int32 required_zero;
+   12: repeated int16 samples;
+   13: repeated fl64 measurements;
+   14: repeated string labels;
+   15: repeated c32 points;
+   16: repeated int64 empty_values;
 }
