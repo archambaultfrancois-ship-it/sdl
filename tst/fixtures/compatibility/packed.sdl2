@@ -1,4 +1,1 @@
-SDL2
-message Root {
-  1: packed int16 values;
-}
+SDL2|Root{1+:int16:values;}

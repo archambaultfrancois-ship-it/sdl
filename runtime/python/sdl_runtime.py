@@ -480,10 +480,6 @@ def display(message, indent_width=3):
 
 
 _NAME = r'[\w$]+'
-_FIELD = re.compile(r'  ([0-9]+): (required|optional|repeated|packed) (' + _NAME +
-   r')((?:\[[0-9]+\])*) (' + _NAME + r')(?: wire\(([^()]*)\))?;')
-
-
 def _parse_description(text):
    if isinstance(text, bytes):
       try:
@@ -495,81 +491,69 @@ def _parse_description(text):
          raise CodecError('invalid description size')
    except UnicodeError as error:
       raise CodecError('invalid description UTF-8') from error
-   if '\x00' in text or not text.startswith('SDL2\n') or not text.endswith('\n'):
-      raise CodecError('expected SDL2 catalogue')
+   if not text.startswith('SDL2|') or '\x00' in text or any(c.isspace() for c in text):
+      raise CodecError('expected compact SDL2 catalogue')
    declarations = {'messages': [], 'enums': []}
-   current = None
-   for line in text.split('\n')[1:-1]:
-      if current is None:
-         match = re.fullmatch(r'(message|enum) (' + _NAME + r') \{', line)
-         if not match:
-            raise CodecError('invalid declaration')
-         kind, name = match.groups()
-         if len(name.encode('utf-8')) > 65535:
-            raise CodecError('identifier exceeds limit')
-         key = 'messages' if kind == 'message' else 'enums'
-         current = [name, []]
-         if len(declarations[key]) >= 65535:
-            raise CodecError('too many declarations')
-         declarations[key].append(current)
-      elif line == '}':
-         current = None
-      elif key == 'messages':
-         match = _FIELD.fullmatch(line)
-         if not match:
-            raise CodecError('invalid field declaration')
-         field_id, modifier, type_name, dimensions, name, wire = match.groups()
-         if max(len(name.encode('utf-8')), len(type_name.encode('utf-8'))) > 65535:
-            raise CodecError('identifier exceeds limit')
-         try:
-            dims = [int(n) for n in re.findall(r'\[([0-9]+)\]', dimensions)]
-            field_id = int(field_id)
-         except ValueError as error:
-            raise CodecError('invalid decimal integer') from error
-         if len(dims) > 255 or len(current[1]) >= 65535:
-            raise CodecError('too many fields or dimensions')
-         current[1].append(dict(id=field_id, modifier=modifier,
-            type=type_name, dimensions=dims, name=name, wire_text=wire))
-      else:
-         match = re.fullmatch(r'  (' + _NAME + r') = (-?[0-9]+);', line)
-         if not match:
-            raise CodecError('invalid enum declaration')
-         if len(current[1]) >= 65535 or len(match[1].encode('utf-8')) > 65535:
-            raise CodecError('enum exceeds limit')
-         try:
-            number = int(match[2])
-         except ValueError as error:
-            raise CodecError('invalid enum decimal') from error
-         current[1].append([match[1], number])
-   if current is not None:
-      raise CodecError('unclosed declaration')
+   for declaration in text[5:].split('|'):
+      match = re.fullmatch(r'(#?)(' + _NAME + r')\{([^{}]*)\}', declaration)
+      if not match:
+         raise CodecError('invalid declaration')
+      enum, name, body = match.groups()
+      key = 'enums' if enum else 'messages'
+      if len(name.encode('utf-8')) > 65535 or len(declarations[key]) >= 65535:
+         raise CodecError('declaration exceeds limit')
+      items = []
+      declarations[key].append([name, items])
+      if body and not body.endswith(';'):
+         raise CodecError('missing field separator')
+      for row in body.split(';')[:-1]:
+         if len(items) >= 65535:
+            raise CodecError('declaration exceeds limit')
+         if enum:
+            match = re.fullmatch(r'(' + _NAME + r')=(-?[0-9]+)', row)
+            if not match or len(match[1].encode('utf-8')) > 65535:
+               raise CodecError('invalid enum item')
+            try: items.append([match[1], int(match[2])])
+            except ValueError as error: raise CodecError('invalid enum decimal') from error
+         else:
+            match = re.fullmatch(r'([0-9]+)([?*+]?):(' + _NAME + r')((?:\[[0-9]+\])*):(' + _NAME + r')(?:@([^@]+))?', row)
+            if not match:
+               raise CodecError('invalid field')
+            field_id, marker, type_name, dimensions, name, wire = match.groups()
+            if max(len(name.encode('utf-8')), len(type_name.encode('utf-8'))) > 65535:
+               raise CodecError('identifier exceeds limit')
+            try:
+               dims = [int(n) for n in re.findall(r'\[([0-9]+)\]', dimensions)]
+               field_id = int(field_id)
+            except ValueError as error:
+               raise CodecError('invalid decimal integer') from error
+            if len(dims) > 255:
+               raise CodecError('too many dimensions')
+            items.append(dict(id=field_id, modifier={'':'required','?':'optional','*':'repeated','+':'packed'}[marker], type=type_name, dimensions=dims, name=name, wire_text=wire))
    messages, enums = _validate_dynamic_descriptor(declarations)
    try:
       for fields in messages.values():
-         for f in fields:
-            wire = f.pop('wire_text', None)
+         for field in fields:
+            wire = field.pop('wire_text', None)
             if wire is not None:
-               f['wire'] = _representation.options(wire, f['type'], f['type'] in enums)
+               field['wire'] = _representation.options(wire, field['type'], field['type'] in enums)
    except ValueError as error:
       raise CodecError(str(error)) from error
    return messages, enums
 
 
 def _render_description(messages, enums):
-   lines = ['SDL2']
+   declarations = []
+   markers = {'required':'', 'optional':'?', 'repeated':'*', 'packed':'+'}
    for name in sorted(messages, key=lambda value: value.encode('utf-8')):
-      lines.append('message ' + name + ' {')
-      for f in messages[name]:
-         dims = ''.join('[%d]' % n for n in f['dimensions'])
-         lines.append('  %d: %s %s%s %s%s;' %
-            (f['id'], f['modifier'], f['type'], dims, f['name'], _representation.suffix(f.get('wire', {}))))
-      lines.append('}')
+      fields = []
+      for field in messages[name]:
+         dims = ''.join('[%d]' % n for n in field['dimensions'])
+         fields.append('%d%s:%s%s:%s%s;' % (field['id'], markers[field['modifier']], field['type'], dims, field['name'], _representation.suffix(field.get('wire', {}))))
+      declarations.append(name + '{' + ''.join(fields) + '}')
    for name in sorted(enums, key=lambda value: value.encode('utf-8')):
-      lines.append('enum ' + name + ' {')
-      for value, item in enums[name].items():
-         lines.append('  %s = %d;' % (item, value))
-      lines.append('}')
-   return '\n'.join(lines) + '\n'
+      declarations.append('#' + name + '{' + ''.join('%s=%d;' % (item, value) for value, item in enums[name].items()) + '}')
+   return 'SDL2|' + '|'.join(declarations)
 
 
 def _classes(types):

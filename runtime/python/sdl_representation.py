@@ -14,17 +14,15 @@ def options(text, type_name, enum=False):
    if text is None:
       return result
    for item in text.split(','):
-      m = re.fullmatch(r'(bits|encoding|align|pad_after)=([A-Za-z]+|[0-9]+)', item)
-      if not m or m[1] in result:
-         raise ValueError('invalid wire option')
-      key, value = m.groups()
-      if key == 'encoding':
-         if value not in ('varint', 'zigzag'):
-            raise ValueError('invalid wire encoding')
+      if item in ('v', 'z'):
+         key, value = 'encoding', {'v':'varint', 'z':'zigzag'}[item]
+      elif re.fullmatch(r'[bap][0-9]+', item):
+         key = {'b':'bits', 'a':'align', 'p':'pad_after'}[item[0]]
+         value = int(item[1:])
       else:
-         if not value.isdecimal():
-            raise ValueError('invalid wire integer')
-         value = int(value)
+         raise ValueError('invalid wire option')
+      if key in result:
+         raise ValueError('duplicate wire option')
       result[key] = value
    validate(result, type_name, enum)
    return result
@@ -44,7 +42,7 @@ def validate(w, type_name, enum=False):
 
 
 def suffix(w):
-   return ' wire(' + ','.join(k + '=' + str(w[k]) for k in _KEYS if k in w) + ')' if w else ''
+   return '@' + ','.join({'bits':'b','align':'a','pad_after':'p'}[k] + str(w[k]) if k != 'encoding' else {'varint':'v','zigzag':'z'}[w[k]] for k in _KEYS if k in w) if w else ''
 
 
 class Stream:

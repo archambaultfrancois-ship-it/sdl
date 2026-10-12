@@ -13,7 +13,7 @@ including skipped unknown fields.
 
 ## Catalogue identity and message inspection
 
-Catalogue emission already uses the canonical rendering documented in the
+Catalogue emission uses the compact, whitespace-free canonical rendering documented in the
 [wire format](wire_descriptor.md). The public identity API hashes the exact
 UTF-8 bytes supplied by the caller; it does not parse, normalize whitespace, or
 change the catalogue at reception. Use the output of `description` (or the

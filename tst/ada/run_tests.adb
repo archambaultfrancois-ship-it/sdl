@@ -130,9 +130,8 @@ procedure Run_Tests is
    procedure Primitive_Oracle is new Oracle (T_PrimitiveBatch, SDL_Packed_Validation.Encode, SDL_Packed_Validation.Decode);
    procedure Payload_Oracle is new Oracle (SDL_Benchmark.T_BenchPayload, SDL_Benchmark.Encode, SDL_Benchmark.Decode);
    function Float_From_Bits is new Ada.Unchecked_Conversion (Unsigned_32, Float32);
-   LF : constant String := (1 => Character'Val (10));
    function Packet_Catalogue (Fields : String) return String is
-   begin return "SDL2" & LF & "message Packet {" & LF & Fields & "}" & LF; end;
+   begin return "SDL2|Packet{" & Fields & "}"; end;
 begin
    declare
       File : Ada.Text_IO.File_Type;
@@ -319,8 +318,7 @@ begin
    begin Check (T_EmptyMessage'(Decode (EC, Encode (EC, E))) = E, "empty message"); end;
    declare
       RC : constant Context := SDL_Wire_Example.Prepare (Packet_Catalogue (
-         "  1: required bool renamed;" & LF & "  3: required string title;" & LF &
-         "  4: repeated int16 values;" & LF & "  5: required int32 extra;" & LF));
+         "1:bool:renamed;3:string:title;4*:int16:values;5:int32:extra;"));
       B : Buffer;
    begin
       Put_Count (B, Message_Id (RC, "Packet")); Write (B, True);
@@ -333,14 +331,12 @@ begin
       exception when Codec_Error => Passed := Passed + 1; end;
    end;
    begin
-      declare Bad : constant Context := SDL_Wire_Example.Prepare (Packet_Catalogue ("  1: required int32 active;" & LF));
+      declare Bad : constant Context := SDL_Wire_Example.Prepare (Packet_Catalogue ("1:int32:active;"));
       begin raise Program_Error with "incompatible type accepted"; end;
    exception when Codec_Error => Passed := Passed + 1; end;
    declare
       RC : constant Context := SDL_Codec_Cases.Prepare (
-         "SDL2" & LF & "enum State {" & LF & " FUTURE = 2;" & LF & "}" & LF &
-         "message EnumRecord {" & LF & " 1: required State state;" & LF &
-         " 2: required int32 code;" & LF & "}" & LF);
+         "SDL2|#State{FUTURE=2;}|EnumRecord{1:State:state;2:int32:code;}");
       B : Buffer;
    begin
       Put_Count (B, Message_Id (RC, "EnumRecord")); Write (B, Int32'(2)); Write (B, Int32'(42));
@@ -353,18 +349,14 @@ begin
    end;
    declare
       RC : constant Context := SDL_Wire_Example.Prepare (Packet_Catalogue (
-         " 1: required bool renamed;" & LF & " 2: optional int16 alias;" & LF &
-         " 3: required string title;" & LF & " 4: repeated int16 values;" & LF));
+         "1:bool:renamed;2?:int16:alias;3:string:title;4*:int16:values;"));
    begin
       Check (Direct_Layout (RC, "Packet"), "field labels and Packed/repeated interchange retain direct layout");
       Check (T_Packet'(Decode (RC, Encode (RC, P))) = P, "direct renamed fields round trip");
    end;
    declare
       RC : constant Context := SDL_Schema.Prepare (
-         "SDL2" & LF & "message FixedRow {" & LF & " 1: required FixedVector[2] vectors;" & LF & "}" & LF &
-         "message FixedRowBatch {" & LF & " 1: packed FixedRow rows;" & LF & "}" & LF &
-         "message FixedVector {" & LF & " 1: required fl32[2] renamed;" & LF &
-         " 2: required int16[2][3] grid;" & LF & " 3: required int32 extra;" & LF & "}" & LF);
+         "SDL2|FixedRow{1:FixedVector[2]:vectors;}|FixedRowBatch{1+:FixedRow:rows;}|FixedVector{1:fl32[2]:renamed;2:int16[2][3]:grid;3:int32:extra;}");
       B : Buffer;
    begin
       Check (not Direct_Layout (RC, "FixedRowBatch"), "nested layout change disables direct parent");
@@ -381,9 +373,7 @@ begin
    end;
    declare
       RC : constant Context := SDL_Codec_Cases.Prepare (
-         "SDL2" & LF & "enum State {" & LF & " FUTURE = 2;" & LF & "}" & LF &
-         "message EnumRecord {" & LF & " 1: required State state;" & LF & " 2: required int32 code;" & LF & "}" & LF &
-         "message EnumRecordBatch {" & LF & " 1: packed EnumRecord records;" & LF & "}" & LF);
+         "SDL2|#State{FUTURE=2;}|EnumRecord{1:State:state;2:int32:code;}|EnumRecordBatch{1+:EnumRecord:records;}");
       B : Buffer;
    begin
       Check (not Direct_Layout (RC, "EnumRecordBatch"), "nested enum set change disables direct parent");
@@ -395,7 +385,7 @@ begin
    end;
    begin
       declare Bad : constant Context := SDL_Codec_Cases.Prepare (
-         "SDL2" & LF & "message State {" & LF & "}" & LF);
+         "SDL2|State{}");
       begin raise Program_Error with "enum changed to message accepted"; end;
    exception when Codec_Error => Passed := Passed + 1; end;
    begin

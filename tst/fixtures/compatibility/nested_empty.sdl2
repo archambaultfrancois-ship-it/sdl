@@ -1,6 +1,1 @@
-SDL2
-message Child {
-}
-message Root {
-  1: required Child child;
-}
+SDL2|Child{}|Root{1:Child:child;}

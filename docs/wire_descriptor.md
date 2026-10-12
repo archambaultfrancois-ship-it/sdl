@@ -30,39 +30,51 @@ no alignment or padding; explicit `wire(...)` clauses may insert zero padding.
 ## Catalogue text
 
 Source schemas may omit field IDs and the `required` modifier. The generator
-resolves these defaults before rendering the catalogue; catalogue fields always
-include both a numeric ID and an explicit modifier. Equivalent explicit and
-implicit source schemas therefore produce identical catalogue bytes and hashes.
+resolves these defaults before rendering the compact catalogue. Equivalent
+explicit and implicit source schemas produce identical catalogue bytes and hashes.
 
-The canonical rendering uses:
+The canonical catalogue is one UTF-8 string with **no whitespace or trailing
+newline**. It starts with `SDL2|`; `|` separates declarations. Messages are sorted
+by UTF-8 name bytes, followed by enums sorted the same way.
 
-- `SDL2` followed by LF (`53 44 4c 32 0a`).
-- Named messages sorted by UTF-8 bytes, then enums sorted the same way.
-- `message Name {` or `enum Name {`, LF, declaration body, `}`, LF.
-- Exactly two spaces before field/item declarations and no blank lines.
-- Fields as `ID: modifier Type[dim] field;`, sorted by numeric field ID.
-  An optional canonical ` wire(...)` follows the field name, before the semicolon;
-  options use order `bits`, `encoding`, `align`, `pad_after` with comma separators
-  and no internal spaces. See [representation rules](schema.md#field-wire-representation).
-- Enum items as `NAME = signed_decimal;`, in declaration order.
-- UTF-8 text, LF after every line, no BOM and no NUL terminator.
+```text
+SDL2|Position{1:int32:x;2:int32:y@b12;}|Vehicule{1:uint32:id;2:Position:position;}|#State{STOPPED=0;MOVING=1;}
+```
 
-Inline messages become named declarations such as `Envelope$1`. A generated
-catalogue contains the declarations from the corresponding SDL file, including
-unused message declarations; `description(types)` merges their catalogues and
-rejects conflicts. It does not depend on native struct layout. Field names
-support diagnostics; IDs identify fields across revisions.
+- Messages use `Name{fields}`; enums use `#Name{items}`.
+- Fields use `ID:Type[dim]:name;`, sorted by numeric ID.
+- A marker immediately after the ID encodes cardinality: none for `required`,
+  `?` for `optional`, `*` for `repeated`, `+` for `packed`.
+- An optional `@` suffix carries representation options, separated by commas:
+  `bN` for `bits=N`, `v` for `encoding=varint`, `z` for `encoding=zigzag`,
+  `aN` for `align=N`, and `pN` for `pad_after=N`. Canonical option order is
+  bits, encoding, alignment, padding; the existing semantic restrictions apply.
+- Enum items use `NAME=signed_decimal;`, in declaration order.
+- Decimal numbers use their shortest spelling; names retain their full spelling.
+- Empty messages use `Name{}`. No BOM or terminating NUL is part of the catalogue.
 
-The generated representation is canonical. A decoder may accept additional
-whitespace; senders must use the canonical rendering above.
+For example, an optional field followed by packed values renders as
+`1?:int16:code;2+:uint8:flags@b3;`.
+
+Inline messages become named declarations such as `Envelope$1`. Nested types
+are referenced by name and defined once. A generated catalogue contains all
+declarations from its SDL file, including unused ones; `description(types)`
+merges catalogues and rejects conflicts. Changes to a nested declaration
+therefore change the enclosing catalogue's hash. The catalogue does not depend
+on native struct layout. Field names support diagnostics; IDs identify fields.
+
+All backends emit and parse this compact form directly. The former readable
+`SDL2` line-based catalogue is rejected. Source `.sdl` files keep their readable
+syntax; they are distinct from runtime catalogues. For hashing or publication,
+use the compact canonical output.
 
 ## Optional catalogue identity
 
 The runtime identity algorithm `sha256-prefix32-v1` hashes the exact canonical
 UTF-8 catalogue bytes, excluding any terminating NUL or transport framing.
 Its unsigned 32-bit result is the first four SHA-256 digest bytes interpreted
-in big-endian order. The canonical rendering above remains unchanged; the
-identity API does not normalize a received catalogue.
+in big-endian order. The input is the compact canonical string above. The identity API does not
+normalize a received catalogue. Hashes from the former readable rendering change.
 
 An identity is optional metadata for an application or transport profile. It
 is not added to the SDL2 catalogue or message data by the core codecs. A
@@ -146,21 +158,21 @@ message Packet {
 }
 ```
 
-The exact opening catalogue is 132 bytes. Its UTF-8 text is the source above
-prefixed with `SDL2\n`. The fixture is
-[`packet.sdl2`](../tst/fixtures/packet.sdl2). Every byte is shown below; offsets
-are hexadecimal and ASCII dots denote LF:
+The exact opening catalogue is 73 bytes, without a newline:
 
 ```text
-0000  53 44 4c 32 0a 6d 65 73 73 61 67 65 20 50 61 63  SDL2.message Pac
-0010  6b 65 74 20 7b 0a 20 20 31 3a 20 72 65 71 75 69  ket {.  1: requi
-0020  72 65 64 20 62 6f 6f 6c 20 61 63 74 69 76 65 3b  red bool active;
-0030  0a 20 20 32 3a 20 6f 70 74 69 6f 6e 61 6c 20 69  .  2: optional i
-0040  6e 74 31 36 20 63 6f 64 65 3b 0a 20 20 33 3a 20  nt16 code;.  3:
-0050  72 65 71 75 69 72 65 64 20 73 74 72 69 6e 67 20  required string
-0060  6c 61 62 65 6c 3b 0a 20 20 34 3a 20 70 61 63 6b  label;.  4: pack
-0070  65 64 20 69 6e 74 31 36 20 73 61 6d 70 6c 65 73  ed int16 samples
-0080  3b 0a 7d 0a                                      ;.}.
+SDL2|Packet{1:bool:active;2?:int16:code;3:string:label;4+:int16:samples;}
+```
+
+The fixture is [`packet.sdl2`](../tst/fixtures/packet.sdl2). Every byte is shown
+below; offsets are hexadecimal:
+
+```text
+0000  53 44 4c 32 7c 50 61 63 6b 65 74 7b 31 3a 62 6f  SDL2|Packet{1:bo
+0010  6f 6c 3a 61 63 74 69 76 65 3b 32 3f 3a 69 6e 74  ol:active;2?:int
+0020  31 36 3a 63 6f 64 65 3b 33 3a 73 74 72 69 6e 67  16:code;3:string
+0030  3a 6c 61 62 65 6c 3b 34 2b 3a 69 6e 74 31 36 3a  :label;4+:int16:
+0040  73 61 6d 70 6c 65 73 3b 7d                       samples;}
 ```
 
 `Packet` is the only message, so its type ID is 1. Associated values are
@@ -191,7 +203,7 @@ The complete data buffer is **16 bytes**
 | 14 | ff | Second sample high byte |
 | 15 | ff | Second sample low byte; ff ff = -1 |
 
-For the example stream transport, opening bytes are `00 00 00 84` followed by
-the 132 catalogue bytes. Each instance of the data above is preceded by
-`00 00 00 10`. Sending N instances costs `136 + 20*N` transport bytes; the
+For the example stream transport, opening bytes are `00 00 00 49` followed by
+the 73 catalogue bytes. Each instance of the data above is preceded by
+`00 00 00 10`. Sending N instances costs `77 + 20*N` transport bytes; the
 runtime's data buffers themselves cost `16*N`. No catalogue is repeated in data.

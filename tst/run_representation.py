@@ -57,7 +57,7 @@ public class RepresentationCheck {
 MATLAB=r'''
 addpath('@GENERATED@/matlab');
 x=Packet();x.active=true;x.level=int16(-1);x.counter=intmax('uint64');x.delta=int64(-2);x.value=42;
-c=sdl_matlab_runtime('prepare',Packet('description'),{'Packet'});b=Packet('encode',c,x);assert(strcmpi(reshape(dec2hex(b,2)',1,[]),'@PACKET@'));y=Packet('decode',c,b);assert(y.counter==x.counter&&y.delta==x.delta);
+c=sdl_matlab_runtime('prepare',Packet('description'),{'Packet'});b=Packet('encode',c,x);assert(strcmpi(reshape(dec2hex(b,2)',1,[]),'@PACKET@'),reshape(dec2hex(b,2)',1,[]));y=Packet('decode',c,b);assert(y.counter==x.counter&&y.delta==x.delta);
 u=Unsigned();u.tiny=intmax('uint8');u.small=intmax('uint16');u.medium=intmax('uint32');u.large=intmax('uint64');u.values=[uint64(0);intmax('uint64')];
 c=sdl_matlab_runtime('prepare',Unsigned('description'),{'Unsigned'});b=Unsigned('encode',c,u);assert(strcmpi(reshape(dec2hex(b,2)',1,[]),'@UNSIGNED@'));v=Unsigned('decode',c,b);assert(v.large==u.large&&isequal(v.values,u.values));
 a=Arrays();a.matrix=int16([-2048 0;-1 2047]);a.flags=uint8([0;7;1]);a.code=int8(-1);a.child.delta=int8(-1);a.child.level=uint8(31);a.label='hi';

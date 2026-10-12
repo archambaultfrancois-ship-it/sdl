@@ -1,7 +1,1 @@
-SDL2
-message Child {
-  7: required int16 value;
-}
-message Root {
-  1: required Child child;
-}
+SDL2|Child{7:int16:value;}|Root{1:Child:child;}

@@ -63,139 +63,86 @@ fn number(text: &str) -> Result<u32, CodecError> {
     text.parse().map_err(|_| CodecError::InvalidDescriptor)
 }
 pub(crate) fn parse_descriptor(text: &str) -> Result<SchemaDesc, CodecError> {
-    if text.len() < 6
-        || text.len() > MAX_DESCRIPTOR_SIZE
-        || !text.starts_with("SDL2\n")
-        || !text.ends_with('\n')
-        || text.contains('\0')
-    {
+    if text.len() > MAX_DESCRIPTOR_SIZE || !text.starts_with("SDL2|")
+        || text.contains('\0') || text.chars().any(char::is_whitespace) {
         return Err(CodecError::InvalidDescriptor);
     }
-    let mut lines = text[5..text.len() - 1].split('\n');
     let mut messages = HashMap::new();
     let mut enums = HashMap::new();
     let mut previous_message = String::new();
     let mut previous_enum = String::new();
-    while let Some(line) = lines.next() {
-        let head: Vec<_> = line.split(' ').collect();
-        if head.len() != 3 || head[2] != "{" || !identifier(head[1]) {
-            return Err(CodecError::InvalidDescriptor);
-        }
-        let name = head[1].to_owned();
-        if head[0] == "message" {
-            if name <= previous_message || messages.len() >= 65535 {
+    for declaration in text[5..].split('|') {
+        let (name, body) = declaration.split_once('{').ok_or(CodecError::InvalidDescriptor)?;
+        let body = body.strip_suffix('}').ok_or(CodecError::InvalidDescriptor)?;
+        let enumeration = name.starts_with('#');
+        let name = if enumeration { &name[1..] } else { name };
+        if !identifier(name) { return Err(CodecError::InvalidDescriptor); }
+        let rows: Vec<_> = if body.is_empty() { Vec::new() } else {
+            body.strip_suffix(';').ok_or(CodecError::InvalidDescriptor)?.split(';').collect()
+        };
+        if rows.len() > 65535 { return Err(CodecError::InvalidDescriptor); }
+        let mut names = HashSet::new();
+        if enumeration {
+            if name <= previous_enum.as_str() || enums.len() >= 65535 || rows.is_empty() {
                 return Err(CodecError::InvalidDescriptor);
             }
-            previous_message = name.clone();
-            let mut fields = Vec::new();
-            let mut names = HashSet::new();
-            let mut previous_id = 0;
-            loop {
-                let line = lines.next().ok_or(CodecError::InvalidDescriptor)?;
-                if line == "}" {
-                    break;
-                }
-                let row: Vec<_> = line
-                    .strip_prefix("  ")
-                    .ok_or(CodecError::InvalidDescriptor)?
-                    .split(' ')
-                    .collect();
-                if !(row.len() == 4 || row.len() == 5) || fields.len() >= 65535 {
+            previous_enum = name.to_owned();
+            let mut values = Vec::new();
+            let mut numbers = HashSet::new();
+            for row in rows {
+                let (item, value) = row.split_once('=').ok_or(CodecError::InvalidDescriptor)?;
+                let digits = value.strip_prefix('-').unwrap_or(value);
+                if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
                     return Err(CodecError::InvalidDescriptor);
                 }
-                let id = number(
-                    row[0]
-                        .strip_suffix(':')
-                        .ok_or(CodecError::InvalidDescriptor)?,
-                )?;
-                let modifier = match row[1] {
-                    "required" => 0,
-                    "optional" => 1,
-                    "repeated" => 2,
-                    "packed" => 3,
-                    _ => return Err(CodecError::InvalidDescriptor),
+                let value: i32 = value.parse().map_err(|_| CodecError::InvalidDescriptor)?;
+                if !identifier(item) || !names.insert(item.to_owned()) || !numbers.insert(value) {
+                    return Err(CodecError::InvalidDescriptor);
+                }
+                values.push((item.to_owned(), value));
+            }
+            enums.insert(name.to_owned(), values);
+        } else {
+            if name <= previous_message.as_str() || messages.len() >= 65535 {
+                return Err(CodecError::InvalidDescriptor);
+            }
+            previous_message = name.to_owned();
+            let mut fields = Vec::new();
+            let mut previous_id = 0;
+            for row in rows {
+                let mut pieces = row.split(':');
+                let id = pieces.next().ok_or(CodecError::InvalidDescriptor)?;
+                let typ = pieces.next().ok_or(CodecError::InvalidDescriptor)?;
+                let tail = pieces.next().ok_or(CodecError::InvalidDescriptor)?;
+                if pieces.next().is_some() || id.is_empty() { return Err(CodecError::InvalidDescriptor); }
+                let (id, modifier) = match id.as_bytes().last() {
+                    Some(b'?') => (&id[..id.len()-1], 1),
+                    Some(b'*') => (&id[..id.len()-1], 2),
+                    Some(b'+') => (&id[..id.len()-1], 3),
+                    _ => (id, 0),
                 };
-                let mut pieces = row[2].split('[');
+                let id = number(id)?;
+                let mut pieces = typ.split('[');
                 let type_name = pieces.next().unwrap().to_owned();
                 let mut dimensions = Vec::new();
                 for piece in pieces {
-                    let n = number(
-                        piece
-                            .strip_suffix(']')
-                            .ok_or(CodecError::InvalidDescriptor)?,
-                    )?;
-                    if n == 0 || dimensions.len() >= 255 {
-                        return Err(CodecError::InvalidDescriptor);
-                    }
+                    let n = number(piece.strip_suffix(']').ok_or(CodecError::InvalidDescriptor)?)?;
+                    if n == 0 || dimensions.len() >= 255 { return Err(CodecError::InvalidDescriptor); }
                     dimensions.push(n as usize);
                 }
-                let wire = if row.len()==5 { crate::representation::WireOptions::parse(row[4].strip_prefix("wire(").and_then(|s|s.strip_suffix(");")).ok_or(CodecError::InvalidDescriptor)?)? } else { Default::default() };
-                let field_name = row[3]
-                    .strip_suffix(';').or_else(|| if row.len()==5 {Some(row[3])}else{None})
-                    .ok_or(CodecError::InvalidDescriptor)?
-                    .to_owned();
-                if id <= previous_id
-                    || !identifier(&type_name)
-                    || !identifier(&field_name)
-                    || !names.insert(field_name.clone())
-                    || (!dimensions.is_empty() && modifier != 0)
-                {
+                let (field_name, wire) = tail.split_once('@').map_or((tail, None), |(n,w)| (n,Some(w)));
+                let wire = match wire {
+                    Some(w) => crate::representation::WireOptions::parse(w)?,
+                    None => Default::default(),
+                };
+                if id <= previous_id || !identifier(&type_name) || !identifier(field_name)
+                    || !names.insert(field_name.to_owned()) || (!dimensions.is_empty() && modifier != 0) {
                     return Err(CodecError::InvalidDescriptor);
                 }
                 previous_id = id;
-                fields.push(FieldDesc {
-                    id,
-                    name: field_name,
-                    modifier,
-                    type_name,
-                    dimensions,
-                    wire,
-                });
+                fields.push(FieldDesc { id, name: field_name.to_owned(), modifier, type_name, dimensions, wire });
             }
-            messages.insert(name, MessageDesc { fields });
-        } else if head[0] == "enum" {
-            if name <= previous_enum || enums.len() >= 65535 {
-                return Err(CodecError::InvalidDescriptor);
-            }
-            previous_enum = name.clone();
-            let mut values = Vec::new();
-            let mut names = HashSet::new();
-            let mut numbers = HashSet::new();
-            loop {
-                let line = lines.next().ok_or(CodecError::InvalidDescriptor)?;
-                if line == "}" {
-                    break;
-                }
-                let row: Vec<_> = line
-                    .strip_prefix("  ")
-                    .ok_or(CodecError::InvalidDescriptor)?
-                    .split(' ')
-                    .collect();
-                if row.len() != 3 || row[1] != "=" || values.len() >= 65535 {
-                    return Err(CodecError::InvalidDescriptor);
-                }
-                let n = row[2]
-                    .strip_suffix(';')
-                    .ok_or(CodecError::InvalidDescriptor)?;
-                if !n
-                    .trim_start_matches('-')
-                    .bytes()
-                    .all(|b| b.is_ascii_digit())
-                {
-                    return Err(CodecError::InvalidDescriptor);
-                }
-                let n: i32 = n.parse().map_err(|_| CodecError::InvalidDescriptor)?;
-                if !identifier(row[0]) || !names.insert(row[0].to_owned()) || !numbers.insert(n) {
-                    return Err(CodecError::InvalidDescriptor);
-                }
-                values.push((row[0].to_owned(), n));
-            }
-            if values.is_empty() {
-                return Err(CodecError::InvalidDescriptor);
-            }
-            enums.insert(name, values);
-        } else {
-            return Err(CodecError::InvalidDescriptor);
+            messages.insert(name.to_owned(), MessageDesc { fields });
         }
     }
     if messages.is_empty() || messages.keys().any(|n| enums.contains_key(n)) {
@@ -359,34 +306,24 @@ fn fixed_type_size_cached(
 }
 
 pub(crate) fn render(schema: &SchemaDesc) -> String {
-    let mut text = String::from("SDL2\n");
+    let mut declarations = Vec::new();
     let mut names: Vec<_> = schema.messages.keys().collect();
     names.sort();
     for name in names {
-        text.push_str(&format!("message {} {{\n", name));
+        let mut text = format!("{}{{", name);
         for f in &schema.messages[name].fields {
             let dims: String = f.dimensions.iter().map(|n| format!("[{}]", n)).collect();
-            text.push_str(&format!(
-                "  {}: {} {}{} {}{};\n",
-                f.id,
-                ["required", "optional", "repeated", "packed"][f.modifier as usize],
-                f.type_name,
-                dims,
-                f.name, f.wire.suffix()
-            ));
+            text.push_str(&format!("{}{}:{}{}:{}{};", f.id, ["", "?", "*", "+"][f.modifier as usize], f.type_name, dims, f.name, f.wire.suffix()));
         }
-        text.push_str("}\n");
+        text.push('}');declarations.push(text);
     }
-    let mut names: Vec<_> = schema.enums.keys().collect();
-    names.sort();
+    let mut names: Vec<_> = schema.enums.keys().collect();names.sort();
     for name in names {
-        text.push_str(&format!("enum {} {{\n", name));
-        for (item, n) in &schema.enums[name] {
-            text.push_str(&format!("  {} = {};\n", item, n));
-        }
-        text.push_str("}\n");
+        let mut text = format!("#{}{{", name);
+        for (item, n) in &schema.enums[name] {text.push_str(&format!("{}={};", item, n));}
+        text.push('}');declarations.push(text);
     }
-    text
+    format!("SDL2|{}", declarations.join("|"))
 }
 
 pub fn decode_dynamic(

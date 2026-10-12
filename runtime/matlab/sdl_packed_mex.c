@@ -60,50 +60,10 @@ static NativeContext *contexts;
 static uint64_t next_id = 1;
 static int initialized;
 static const uint8_t supported_catalogue[] =
-   "SDL2\nmessage BenchPayload {\n"
-   "  1: required string header;\n"
-   "  2: packed c32 samples;\n}\n";
+   "SDL2|BenchPayload{1:string:header;2+:c32:samples;}";
 
 static const uint8_t records_catalogue[] =
-   "SDL2\n"
-   "message BenchEntry {\n"
-   "  1: optional string label;\n"
-   "  2: required int64 number;\n"
-   "}\n"
-   "message BenchOptionals {\n"
-   "  1: optional int32 a;\n"
-   "  2: optional int32 b;\n"
-   "  3: optional int32 c;\n"
-   "  4: optional int32 d;\n"
-   "  5: optional int32 e;\n"
-   "  6: optional int32 f;\n"
-   "  7: optional int32 g;\n"
-   "  8: optional int32 h;\n"
-   "}\n"
-   "message BenchPose {\n"
-   "  1: required BenchVector position;\n"
-   "  2: required fl32[4] rotation;\n"
-   "}\n"
-   "message BenchRecord {\n"
-   "  1: required int32 id;\n"
-   "  2: required BenchPose pose;\n"
-   "  3: required fl32[2] measures;\n"
-   "}\n"
-   "message BenchRecordBatch {\n"
-   "  1: packed BenchRecord records;\n"
-   "}\n"
-   "message BenchSmall {\n"
-   "  1: required bool active;\n"
-   "  2: required int32 sequence;\n"
-   "  3: required int16 code;\n"
-   "}\n"
-   "message BenchVariable {\n"
-   "  1: required string header;\n"
-   "  2: repeated BenchEntry entries;\n"
-   "}\n"
-   "message BenchVector {\n"
-   "  1: required fl32[3] values;\n"
-   "}\n"
+   "SDL2|BenchEntry{1?:string:label;2:int64:number;}|BenchOptionals{1?:int32:a;2?:int32:b;3?:int32:c;4?:int32:d;5?:int32:e;6?:int32:f;7?:int32:g;8?:int32:h;}|BenchPose{1:BenchVector:position;2:fl32[4]:rotation;}|BenchRecord{1:int32:id;2:BenchPose:pose;3:fl32[2]:measures;}|BenchRecordBatch{1+:BenchRecord:records;}|BenchSmall{1:bool:active;2:int32:sequence;3:int16:code;}|BenchVariable{1:string:header;2*:BenchEntry:entries;}|BenchVector{1:fl32[3]:values;}"
 ;
 
 static void cleanup_contexts(void) {

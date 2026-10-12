@@ -14,6 +14,35 @@ from ada_backend import AdaBackend, generate_ada
 
 
 class GeneratorValidationTests(unittest.TestCase):
+   def test_01_schema_compact_catalogue_and_nested_hash(self):
+      import hashlib
+      source = '''struct Position {
+ int32 x;
+ int32 y wire(bits=12);
+}
+struct Vehicule {
+ uint32 id;
+ Position position;
+ optional int16 code;
+ repeated Position history;
+ packed uint8 flags wire(bits=3,align=4,pad_after=1);
+}
+enum State {
+ STOPPED = 0;
+ MOVING = 1;
+}
+'''
+      parser = MsgParser(); parser.parse_text(source)
+      expected = (b'SDL2|Position{1:int32:x;2:int32:y@b12;}'
+         b'|Vehicule{1:uint32:id;2:Position:position;3?:int16:code;'
+         b'4*:Position:history;5+:uint8:flags@b3,a4,p1;}'
+         b'|#State{STOPPED=0;MOVING=1;}')
+      self.assertEqual(canonical_type_descriptor(parser, 'Vehicule'), expected)
+      self.assertFalse(any(chr(c).isspace() for c in expected))
+      changed = MsgParser(); changed.parse_text(source.replace('bits=12', 'bits=11'))
+      self.assertNotEqual(hashlib.sha256(expected).digest(),
+         hashlib.sha256(canonical_type_descriptor(changed, 'Vehicule')).digest())
+
    def test_01_schema_message_keyword_aliases(self):
       source = """message Child {
  int32 value;
@@ -100,7 +129,7 @@ message Packet {
       self.assertEqual(parser.messages['Packet$1'].fields[0].modifier, 'required')
       self.assertEqual(parser.messages['Packet$1'].fields[1].modifier, 'required')
       self.assertEqual(parser.messages['Packet$2'].fields[0].modifier, 'required')
-      self.assertIn('  1: required int32 value;', canonical_type_descriptor(parser).decode())
+      self.assertIn('1:int32:value;', canonical_type_descriptor(parser).decode())
       with self.assertRaisesRegex(ValueError, 'invalid field declaration'):
          MsgParser().parse_text('message Packet {\noptional required bool value;\n}\n')
 
@@ -121,7 +150,7 @@ message Other {
 """)
       self.assertEqual([f.index for f in parser.messages['Packet'].fields], [1, 2, 10, 11, 5, 6])
       self.assertEqual(parser.messages['Other'].fields[0].index, 1)
-      self.assertIn('  11: packed int16 fourth;', canonical_type_descriptor(parser).decode())
+      self.assertIn('11+:int16:fourth;', canonical_type_descriptor(parser).decode())
 
    def test_01_schema_implicit_nested_numbers(self):
       parser = MsgParser()
@@ -308,7 +337,7 @@ enum State {
          MsgParser().parse_text('message Packet {\n' + fields + '}\n')
 
    def test_03_limits_08_total_wire_descriptor_size_limit_is_inclusive(self):
-      field_lengths = [65520] * 15 + [65393]
+      field_lengths = [65534] * 15 + [65402]
 
       def source_with_extra_byte(extra_byte):
          fields = []

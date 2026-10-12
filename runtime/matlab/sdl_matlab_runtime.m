@@ -96,33 +96,40 @@ function result=identifier(name),result=regexprep(name,'\W','_');if strncmp(resu
 function m=cardinality(m),if any(strcmp(m,{'packed','repeated'})),m='sequence';end,end
 function s=parse_catalogue(text)
 if isa(text,'uint8'),valid_utf8(text);text=native2unicode(text(:)','UTF-8');end
-if ~ischar(text)||numel(unicode2native(text,'UTF-8'))>1048576||numel(text)<5||~strcmp(text(1:5),sprintf('SDL2\n'))||text(end)~=char(10)||any(text==0),error('SDL:Descriptor','expected SDL2 catalogue');end
-lines=strsplit(text,char(10),'CollapseDelimiters',false);s.messages=containers.Map();s.enums=containers.Map();s.fixed_cache=containers.Map();s.heights=containers.Map();i=2;previousm='';previouse='';
-while i<numel(lines)
- h=regexp(lines{i},'^(message|enum) ([\w$]+) \{$','tokens','once');if isempty(h),error('SDL:Descriptor','invalid declaration');end
- kind=h{1};name=h{2};i=i+1;if numel(unicode2native(name,'UTF-8'))>65535,error('SDL:Descriptor','identifier limit');end
- if strcmp(kind,'message')
-  ordered={previousm,name};if strcmp(previousm,name)||(~isempty(previousm)&&~isequal(sort(ordered),ordered)),error('SDL:Descriptor','message order');end;previousm=name;fields={};ids=[];names={};if s.messages.Count>=65535,error('SDL:Descriptor','message limit');end
-  while i<numel(lines)&&~strcmp(lines{i},'}')
-   clause=regexp(lines{i},' wire\(([^()]*)\);$','tokens','once');wire=struct();field_line=lines{i};if ~isempty(clause),wire=sdl_representation('parse',clause{1});field_line=regexprep(field_line,' wire\([^()]*\);$',';');end
-   f=regexp(field_line,'^  ([0-9]+): (required|optional|repeated|packed) ([\w$]+)((?:\[[0-9]+\])*) ([\w$]+);$','tokens','once');if isempty(f),error('SDL:Descriptor','invalid field');end
-   if numel(unicode2native(f{3},'UTF-8'))>65535||numel(unicode2native(f{5},'UTF-8'))>65535,error('SDL:Descriptor','identifier limit');end
-   id=decimal(f{1});dims=regexp(f{4},'\[([0-9]+)\]','tokens');dimensions=zeros(1,numel(dims));for z=1:numel(dims),dimensions(z)=decimal(dims{z}{1});end
-   if id==0||(~isempty(ids)&&id<=ids(end))||any(strcmp(names,f{5}))||numel(dimensions)>255||any(dimensions==0)||(~isempty(dimensions)&&~strcmp(f{2},'required'))||numel(fields)>=65535,error('SDL:Descriptor','invalid field metadata');end
-   fields{end+1}=struct('id',uint32(id),'name',f{5},'modifier',f{2},'type',f{3},'dims',dimensions,'wire',wire);ids(end+1)=id;names{end+1}=f{5};i=i+1;
+if ~ischar(text)||numel(unicode2native(text,'UTF-8'))>1048576||numel(text)<5||~strcmp(text(1:5),'SDL2|')||any(text==0)||any(isspace(text)),error('SDL:Descriptor','expected compact SDL2 catalogue');end
+parts=strsplit(text(6:end),'|','CollapseDelimiters',false);s.messages=containers.Map();s.enums=containers.Map();s.fixed_cache=containers.Map();s.heights=containers.Map();previousm='';previouse='';
+for k=1:numel(parts)
+ h=regexp(parts{k},'^(#?[\w$]+)\{([^{}]*)\}$','tokens','once');if isempty(h),error('SDL:Descriptor','invalid declaration');end
+ name=h{1};enumeration=name(1)=='#';if enumeration,name=name(2:end);end
+ if numel(unicode2native(name,'UTF-8'))>65535,error('SDL:Descriptor','identifier limit');end
+ body='';if numel(h)>1,body=h{2};end;rows={};if ~isempty(body),if body(end)~=';',error('SDL:Descriptor','missing field separator');end;rows=strsplit(body(1:end-1),';','CollapseDelimiters',false);end
+ if numel(rows)>65535,error('SDL:Descriptor','declaration limit');end
+ names={};
+ if enumeration
+  ordered={previouse,name};if strcmp(previouse,name)||(~isempty(previouse)&&~isequal(sort(ordered),ordered))||s.enums.Count>=65535||isempty(rows),error('SDL:Descriptor','invalid enum order or size');end
+  previouse=name;items={};values=int32([]);
+  for j=1:numel(rows)
+   f=regexp(rows{j},'^([\w$]+)=(-?[0-9]+)$','tokens','once');if isempty(f)||numel(unicode2native(f{1},'UTF-8'))>65535,error('SDL:Descriptor','invalid enum item');end
+   n=str2double(f{2});if ~isfinite(n)||n<-2147483648||n>2147483647||any(values==int32(n))||any(strcmp(names,f{1})),error('SDL:Descriptor','invalid enum value');end
+   items{end+1}=f{1};values(end+1)=int32(n);names{end+1}=f{1};
+  end
+  s.enums(name)=struct('names',{items},'values',values);
+ else
+  ordered={previousm,name};if strcmp(previousm,name)||(~isempty(previousm)&&~isequal(sort(ordered),ordered))||s.messages.Count>=65535,error('SDL:Descriptor','message order or size');end
+  previousm=name;fields={};ids=[];
+  for j=1:numel(rows)
+   pieces=strsplit(rows{j},'@','CollapseDelimiters',false);if numel(pieces)>2,error('SDL:Descriptor','invalid clause');end
+   f=regexp(pieces{1},'^([0-9]+[?*+]?):([\w$]+(?:\[[0-9]+\])*):([\w$]+)$','tokens','once');if isempty(f),error('SDL:Descriptor','invalid field');end
+   id=f{1};modifier='required';if id(end)=='?',modifier='optional';id=id(1:end-1);elseif id(end)=='*',modifier='repeated';id=id(1:end-1);elseif id(end)=='+',modifier='packed';id=id(1:end-1);end
+   id=decimal(id);type=regexp(f{2},'^[\w$]+','match','once');fieldname=f{3};
+   if numel(unicode2native(type,'UTF-8'))>65535||numel(unicode2native(fieldname,'UTF-8'))>65535,error('SDL:Descriptor','identifier limit');end
+   dims=regexp(f{2},'\[([0-9]+)\]','tokens');dimensions=zeros(1,numel(dims));for z=1:numel(dims),dimensions(z)=decimal(dims{z}{1});end
+   if id==0||(~isempty(ids)&&id<=ids(end))||any(strcmp(names,fieldname))||numel(dimensions)>255||any(dimensions==0)||(~isempty(dimensions)&&~strcmp(modifier,'required')),error('SDL:Descriptor','invalid field metadata');end
+   wire=struct();if numel(pieces)==2,wire=sdl_representation('parse',pieces{2});end
+   fields{end+1}=struct('id',uint32(id),'name',fieldname,'modifier',modifier,'type',type,'dims',dimensions,'wire',wire);ids(end+1)=id;names{end+1}=fieldname;
   end
   s.messages(name)=fields;
- else
-  ordered={previouse,name};if strcmp(previouse,name)||(~isempty(previouse)&&~isequal(sort(ordered),ordered)),error('SDL:Descriptor','enum order');end;previouse=name;items={};values=int32([]);names={};if s.enums.Count>=65535,error('SDL:Descriptor','enum limit');end
-  while i<numel(lines)&&~strcmp(lines{i},'}')
-   f=regexp(lines{i},'^  ([\w$]+) = (-?[0-9]+);$','tokens','once');if isempty(f),error('SDL:Descriptor','invalid enum');end
-   if numel(items)>=65535||numel(unicode2native(f{1},'UTF-8'))>65535,error('SDL:Descriptor','enum limit');end
-   n=str2double(f{2});if ~isfinite(n)||n<-2147483648||n>2147483647||any(values==int32(n))||any(strcmp(names,f{1})),error('SDL:Descriptor','invalid enum value');end
-   items{end+1}=f{1};values(end+1)=int32(n);names{end+1}=f{1};i=i+1;
-  end
-  if isempty(items),error('SDL:Descriptor','empty enum');end;s.enums(name)=struct('names',{items},'values',values);
  end
- if i>=numel(lines)||~strcmp(lines{i},'}'),error('SDL:Descriptor','unclosed declaration');end;i=i+1;
 end
 s.representation=false;s.names=sort(keys(s.messages));if isempty(s.names),error('SDL:Descriptor','empty catalogue');end
 for k=1:numel(s.names)
@@ -162,11 +169,13 @@ names=keys(s.messages);for k=1:numel(names),n=names{k};if isKey(messages,n)&&~is
 names=keys(s.enums);for k=1:numel(names),n=names{k};if isKey(enums,n)&&~isequal(enums(n),s.enums(n)),error('SDL:Descriptor','conflicting enum');end;enums(n)=s.enums(n);end
 end
 function text=render_schema(messages,enums)
-text=sprintf('SDL2\n');names=sort(keys(messages));for k=1:numel(names),name=names{k};text=[text sprintf('message %s {\n',name)];fields=messages(name);
- for j=1:numel(fields),f=fields{j};dims='';for n=f.dims,dims=[dims sprintf('[%.0f]',n)];end;text=[text sprintf('  %.0f: %s %s%s %s%s;\n',f.id,f.modifier,f.type,dims,f.name,sdl_representation('suffix',f.wire))];end;text=[text sprintf('}\n')];
+declarations={};names=sort(keys(messages));mods={'required','optional','repeated','packed'};markers={'','?','*','+'};
+for k=1:numel(names),name=names{k};declaration=[name '{'];fields=messages(name);
+ for j=1:numel(fields),f=fields{j};dims='';for n=f.dims,dims=[dims sprintf('[%.0f]',n)];end;marker=markers{find(strcmp(mods,f.modifier),1)};declaration=[declaration sprintf('%.0f%s:%s%s:%s%s;',f.id,marker,f.type,dims,f.name,sdl_representation('suffix',f.wire))];end
+ declarations{end+1}=[declaration '}'];
 end
-names=sort(keys(enums));for k=1:numel(names),name=names{k};e=enums(name);text=[text sprintf('enum %s {\n',name)];for j=1:numel(e.names),text=[text sprintf('  %s = %.0f;\n',e.names{j},e.values(j))];end;text=[text sprintf('}\n')];end
-parse_catalogue(text);
+names=sort(keys(enums));for k=1:numel(names),name=names{k};e=enums(name);declaration=['#' name '{'];for j=1:numel(e.names),declaration=[declaration sprintf('%s=%.0f;',e.names{j},e.values(j))];end;declarations{end+1}=[declaration '}'];end
+text=['SDL2|' strjoin(declarations,'|')];parse_catalogue(text);
 end
 function b=count_bytes(n)
 if n<0||n>4294967295||n~=fix(n),error('SDL:Malformed','counter overflow');end

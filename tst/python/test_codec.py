@@ -158,8 +158,7 @@ class CodecTests(unittest.TestCase):
    def test_01_packed_fixed_array_wire_layout(self):
       class PackedArrays(SdlMessage):
          _SDL_NAME = 'PackedArrays'
-         _SDL_DESCRIPTOR = ('SDL2\nmessage PackedArrays {\n'
-            '  1: packed int16[2] pairs;\n}\n')
+         _SDL_DESCRIPTOR = ("SDL2|PackedArrays{1+:int16[2]:pairs;}")
          _SDL_FIELDS = ((1, 'pairs', 'packed', 'int16', (2,)),)
       ctx = context(PackedArrays)
       message = PackedArrays(pairs=[[-32768, 32767], [1, -2]])
@@ -172,8 +171,7 @@ class CodecTests(unittest.TestCase):
    def test_01_packed_complex_wire_layout(self):
       class PackedComplex(SdlMessage):
          _SDL_NAME = 'PackedComplex'
-         _SDL_DESCRIPTOR = ('SDL2\nmessage PackedComplex {\n'
-            '  1: packed c32 narrow;\n  2: packed c64 wide;\n}\n')
+         _SDL_DESCRIPTOR = ("SDL2|PackedComplex{1+:c32:narrow;2+:c64:wide;}")
          _SDL_FIELDS = ((1, 'narrow', 'packed', 'c32', ()),
             (2, 'wide', 'packed', 'c64', ()))
       ctx = context(PackedComplex)
@@ -203,23 +201,23 @@ class CodecTests(unittest.TestCase):
          decode(ctx, valid[:-2] + bytes([2]) + valid[-1:])
 
    def test_01_codec_evolution(self):
-      remote = Packet._SDL_DESCRIPTOR.replace('bool active;', 'bool enabled;').replace(
-         'packed int16 samples;', 'repeated int16 samples;\n  5: required string extra;')
+      remote = Packet._SDL_DESCRIPTOR.replace('bool:active;', 'bool:enabled;').replace(
+         '4+:int16:samples;', '4*:int16:samples;5:string:extra;')
       ctx = prepare(remote, [Packet])
       wire = (FIXTURES/'packet.bin').read_bytes() + b'\x02ok'
       value = decode(ctx, wire)
       self.assertTrue(value.active)
       self.assertEqual(value.samples, [300, -1])
       self.assertEqual(decode_dynamic(ctx, wire).fields['extra'], 'ok')
-      removed = 'SDL2\nmessage Packet {\n  1: required bool active;\n}\n'
+      removed = "SDL2|Packet{1:bool:active;}"
       value = decode(prepare(removed, [Packet]), b'\x01\x01')
       self.assertEqual(value, Packet(active=True))
       with self.assertRaises(CodecError):
          encode(ctx, Packet())
 
    def test_01_codec_nested_evolution(self):
-      remote = RootPayload._SDL_DESCRIPTOR.replace('fl32 x;', 'fl32 renamed_x;').replace(
-         'fl32 y;', 'fl32 y;\n  3: required int32 extra;')
+      remote = RootPayload._SDL_DESCRIPTOR.replace('fl32:x;', 'fl32:renamed_x;').replace(
+         'fl32:y;', 'fl32:y;3:int32:extra;')
       ctx = prepare(remote, [RootPayload])
       wire = bytes([ctx.ids['RootPayload'], 0, 1]) + struct.pack('>ffi', 1, 2, 7) + b'\x00'
       self.assertEqual(decode(ctx, wire).fixed_array, [FixedItem(x=1, y=2)])
@@ -255,14 +253,14 @@ class CodecTests(unittest.TestCase):
       with self.assertRaises(CodecError): encode(context(CodecCases), CodecCases(state=99))
 
    def test_02_invalid_descriptions(self):
-      descriptions = ['SDD1', 'SDL2\n', 'SDL2\nmessage A {\n  1: required A a;\n}\n',
-         'SDL2\nmessage A {\n  1: required Missing a;\n}\n',
-         'SDL2\nmessage A {\n  1: packed string a;\n}\n',
-         'SDL2\nmessage A {\n  1: required bool a;\n  1: required bool b;\n}\n',
-         'SDL2\nmessage A {\n}\nenum E {\n}\n',
-         'SDL2\nmessage A {\n  1: required int32[0] a;\n}\n',
-         Packet._SDL_DESCRIPTOR.replace('bool active;', 'int32 active;'),
-         Packet._SDL_DESCRIPTOR.replace('optional int16 code;', 'required int16 code;')]
+      descriptions = ['SDD1', 'SDL2\n', "SDL2|A{1:A:a;}",
+         "SDL2|A{1:Missing:a;}",
+         "SDL2|A{1+:string:a;}",
+         "SDL2|A{1:bool:a;1:bool:b;}",
+         "SDL2|A{}|#E{}",
+         "SDL2|A{1:int32[0]:a;}",
+         Packet._SDL_DESCRIPTOR.replace('bool:active;', 'int32:active;'),
+         Packet._SDL_DESCRIPTOR.replace('2?:int16:code;', '2:int16:code;')]
       for text in descriptions:
          with self.subTest(text=text), self.assertRaises(CodecError): prepare(text, [Packet])
       with self.assertRaises(CodecError): prepare(b'SDL2\n\xff\n')
@@ -270,18 +268,17 @@ class CodecTests(unittest.TestCase):
 
    def test_03_limits_shared_subtypes_and_depth(self):
       def graph(count, shared):
-         declarations = ['SDL2']
+         declarations = []
          for i in range(count):
-            fields = ['  1: required int8 value;'] if i == 0 else [
-               '  1: optional N%03d left;' % (i - 1)]
+            fields = ['1:int8:value;'] if i == 0 else ['1?:N%03d:left;' % (i - 1)]
             if shared and i:
-               fields.append('  2: optional N%03d right;' % (i - 1))
-            declarations.extend(['message N%03d {' % i, *fields, '}'])
-         return '\n'.join(declarations) + '\n'
+               fields.append('2?:N%03d:right;' % (i - 1))
+            declarations.append('N%03d{' % i + ''.join(fields) + '}')
+         return 'SDL2|' + '|'.join(declarations)
       prepare(graph(30, True))
       with self.assertRaises(CodecError): prepare(graph(66, False))
-      with self.assertRaises(CodecError): prepare('SDL2\nmessage ' + 'A'*65536 + ' {\n}\n')
-      with self.assertRaises(CodecError): prepare('SDL2\nmessage \ud800 {\n}\n')
+      with self.assertRaises(CodecError): prepare('SDL2|' + 'A'*65536 + '{}')
+      with self.assertRaises(CodecError): prepare("SDL2|\ud800{}")
 
    def test_03_limits_counter_boundaries(self):
       ctx = context(Packet)

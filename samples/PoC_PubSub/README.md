@@ -1,7 +1,7 @@
 # SDL2 PoC: topic-centric pub/sub
 
 An application with publishers and subscribers connected through a small
-**TCP/IP** broker. The application is isolated in `tools/poc` and uses the public
+**TCP/IP** broker. The application is isolated in `samples/PoC_PubSub` and uses the public
 SDL2 Python catalogue identity and message inspection APIs. Only Python 3 and
 its standard library are required.
 
@@ -10,8 +10,8 @@ its standard library are required.
 From the repository root:
 
 ```sh
-make -C tools/poc demo
-make -C tools/poc test
+make -C samples/PoC_PubSub demo
+make -C samples/PoC_PubSub test
 ```
 
 The scenario starts a broker on an available local port and uses real TCP
@@ -37,8 +37,8 @@ than an exact catalogue fingerprint. Multiple compatible catalogues coexist.
 Generate the classes and configure each terminal as follows:
 
 ```sh
-make -C tools/poc generate
-cd tools/poc
+make -C samples/PoC_PubSub generate
+cd samples/PoC_PubSub
 export PYTHONPATH="../../runtime/python:build/v1/python:build/v2/python:build/bad/python"
 ```
 
@@ -108,12 +108,12 @@ Validate a catalogue without starting a broker or generating Python bindings:
 
 ```sh
 # From the repository root: validate the supplied baseline example
-make -C tools/poc validate
+make -C samples/PoC_PubSub validate
 
 # Validate a candidate catalogue against a chosen manifest
-make -C tools/poc validate CONTRACT=contracts/temperature.json CATALOGUE=/tmp/candidate.sdl2
+make -C samples/PoC_PubSub validate CONTRACT=contracts/temperature.json CATALOGUE=/tmp/candidate.sdl2
 
-# Equivalent command from tools/poc, with runtime/python on PYTHONPATH
+# Equivalent command from samples/PoC_PubSub, with runtime/python on PYTHONPATH
 python3 contracts.py validate --contract contracts/temperature.json --catalogue /tmp/candidate.sdl2
 ```
 

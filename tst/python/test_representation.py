@@ -130,7 +130,7 @@ class RepresentationTests(unittest.TestCase):
          x=P(delta=n);self.assertEqual(decode(ctx,encode(ctx,x)).delta,n)
       plain=P._SDL_DESCRIPTOR
       import re
-      plain=re.sub(r' wire\([^)]*\)','',plain)
+      plain=re.sub(r'@[^;]*','',plain)
       self.assertTrue(compare_catalogues(P._SDL_DESCRIPTOR,plain).compatible)
       # Representation comes from the sender's catalogue, independently of local types.
       self.assertEqual(decode(prepare(plain,[P]),encode(prepare(plain,[P]),P(delta=-9))).delta,-9)

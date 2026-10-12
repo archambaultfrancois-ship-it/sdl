@@ -6,3 +6,8 @@ struct Records {
  packed BitRecord items;
  uint8 tail;
 }
+enum Bounds {
+ MIN = -2147483648;
+ MID = 165;
+ MAX = 2147483647;
+}

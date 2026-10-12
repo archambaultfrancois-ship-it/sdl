@@ -1,7 +1,1 @@
-SDL2
-message Packet {
-  1: required bool active;
-  2: optional int16 code;
-  3: required string label;
-  4: packed int16 samples;
-}
+SDL2|Packet{1:bool:active;2?:int16:code;3:string:label;4+:int16:samples;}

@@ -154,10 +154,10 @@ fn nested_and_fixed_arrays() {
 #[test]
 fn evolution_and_unknown_fields() {
     let remote = Packet::DESCRIPTOR
-        .replace("bool active;", "bool enabled;")
+        .replace("bool:active;", "bool:enabled;")
         .replace(
-            "packed int16 samples;",
-            "repeated int16 samples;\n  5: required string extra;",
+            "4+:int16:samples;",
+            "4*:int16:samples;5:string:extra;",
         );
     let ctx = prepare(&remote, &[Packet::type_info()]).unwrap();
     let mut bytes = FIXTURE.to_vec();
@@ -169,7 +169,7 @@ fn evolution_and_unknown_fields() {
     bytes[18] = 255;
     assert!(decode::<Packet>(&ctx, &bytes).is_err());
     let ctx = prepare(
-        "SDL2\nmessage Packet {\n  1: required bool active;\n}\n",
+        "SDL2|Packet{1:bool:active;}",
         &[Packet::type_info()],
     )
     .unwrap();
@@ -181,7 +181,7 @@ fn evolution_and_unknown_fields() {
         }
     );
     assert!(prepare(
-        &Packet::DESCRIPTOR.replace("bool active;", "int32 active;"),
+        &Packet::DESCRIPTOR.replace("bool:active;", "int32:active;"),
         &[Packet::type_info()]
     )
     .is_err());
@@ -189,8 +189,8 @@ fn evolution_and_unknown_fields() {
 #[test]
 fn nested_evolution() {
     let text = RootPayload::DESCRIPTOR
-        .replace("fl32 x;", "fl32 renamed_x;")
-        .replace("fl32 y;", "fl32 y;\n  3: required int32 extra;");
+        .replace("fl32:x;", "fl32:renamed_x;")
+        .replace("fl32:y;", "fl32:y;3:int32:extra;");
     let ctx = prepare(&text, &[RootPayload::type_info()]).unwrap();
     let id = ctx_id(&text, "RootPayload");
     let mut data = vec![id, 0, 1];
@@ -204,9 +204,9 @@ fn nested_evolution() {
     );
 }
 fn ctx_id(text: &str, name: &str) -> u8 {
-    text.lines()
-        .filter(|l| l.starts_with("message "))
-        .position(|l| l == format!("message {} {{", name))
+    text[5..].split('|')
+        .filter(|l| !l.starts_with('#'))
+        .position(|l| l.starts_with(&format!("{}{{", name)))
         .unwrap() as u8
         + 1
 }
@@ -243,10 +243,10 @@ fn malformed_catalogues() {
     for s in [
         "SDL1\n",
         "SDL2\n",
-        "SDL2\nmessage A {\n  1: required A a;\n}\n",
-        "SDL2\nmessage A {\n  1: required Missing a;\n}\n",
-        "SDL2\nmessage A {\n  1: packed string a;\n}\n",
-        "SDL2\nmessage A {\n}\nenum E {\n}\n",
+        "SDL2|A{1:A:a;}",
+        "SDL2|A{1:Missing:a;}",
+        "SDL2|A{1+:string:a;}",
+        "SDL2|A{}|#E{}",
     ] {
         assert!(prepare(s, &[]).is_err());
     }
@@ -271,18 +271,19 @@ fn counter_boundaries() {
 #[test]
 fn shared_subtypes_and_depth() {
     fn graph(count: usize, shared: bool) -> String {
-        let mut text = String::from("SDL2\n");
+        let mut text = String::from("SDL2|");
         for i in 0..count {
-            text.push_str(&format!("message N{:03} {{\n", i));
+            if i > 0 { text.push('|'); }
+            text.push_str(&format!("N{:03}{{", i));
             if i == 0 {
-                text.push_str("  1: required int8 value;\n");
+                text.push_str("1:int8:value;");
             } else {
-                text.push_str(&format!("  1: optional N{:03} left;\n", i - 1));
+                text.push_str(&format!("1?:N{:03}:left;", i - 1));
                 if shared {
-                    text.push_str(&format!("  2: optional N{:03} right;\n", i - 1));
+                    text.push_str(&format!("2?:N{:03}:right;", i - 1));
                 }
             }
-            text.push_str("}\n");
+            text.push('}');
         }
         text
     }
@@ -354,7 +355,7 @@ fn packed_struct_binary_layout_and_truncation() {
     let hostile = [expected[0], 255, 255, 255, 255, 15];
     assert!(decode::<BenchRecordBatch>(&ctx, &hostile).is_err());
     // A field added to each record must retain the generic evolution path.
-    let remote = text.replace("  3: required fl32[2] measures;", "  3: required fl32[2] measures;\n  4: required int8 extra;");
+    let remote = text.replace("3:fl32[2]:measures;", "3:fl32[2]:measures;4:int8:extra;");
     let changed = prepare(&remote, &[BenchRecordBatch::type_info()]).unwrap();
     let mut evolved = expected[..2].to_vec();
     for record in expected[2..].chunks_exact(40) {
@@ -375,7 +376,7 @@ fn packed_fixed_enum_validation_and_evolution() {
     wire[2..6].copy_from_slice(&123i32.to_be_bytes());
     assert_eq!(decode::<EnumRecordBatch>(&ctx, &wire), Err(CodecError::InvalidEnum));
     // The enum subset differs although the structure layout itself is identical.
-    let subset = text.replace("  READY = 1;\n", "");
+    let subset = text.replace("READY=1;", "");
     let subset_ctx = prepare(&subset, &[EnumRecordBatch::type_info()]).unwrap();
     let valid_wire = encode(&ctx, &value).unwrap();
     assert_eq!(decode::<EnumRecordBatch>(&subset_ctx, &valid_wire), Err(CodecError::InvalidEnum));

@@ -35,7 +35,7 @@ class ContractTests(unittest.TestCase):
     def test_example_baseline_matches_canonical_emission(self):
         contract = load_contract()
         self.assertEqual(contract.baseline, description([V1]))
-        self.assertEqual(contract.metadata()['baseline_catalogue_id'], '678f661f')
+        self.assertEqual(contract.metadata()['baseline_catalogue_id'], '88330348')
         self.assertEqual(contract.root_type, 'Temperature')
 
     def test_relative_path_independent_of_current_directory(self):
@@ -55,7 +55,7 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(caught.exception.diagnostic['path'], 'Temperature.celsius')
 
     def test_required_policy(self):
-        text = description([V1]).replace('  2: required fl64 celsius;\n', '')
+        text = description([V1]).replace('2:fl64:celsius;', '')
         load_contract(self.manifest).prepare_candidate(text)
         self.document['require_required'] = True
         self.write_manifest()
@@ -66,7 +66,7 @@ class ContractTests(unittest.TestCase):
 
     def test_single_root_rule_and_invalid_candidate(self):
         contract = load_contract()
-        for text in ('SDL2\nmessage Other {\n}\n', description([V1]).replace('SDL2\n', 'SDL2\nmessage Other {\n}\n', 1)):
+        for text in ("SDL2|Other{}", description([V1]).replace('SDL2|', 'SDL2|Other{}|', 1)):
             with self.assertRaises(IntegrationError) as caught:
                 contract.prepare_candidate(text)
             self.assertEqual(caught.exception.code, 'TOPIC_CONTRACT')

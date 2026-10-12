@@ -1,6 +1,1 @@
-SDL2
-message A {
-}
-enum Root {
-  ONE = 1;
-}
+SDL2|A{}|#Root{ONE=1;}

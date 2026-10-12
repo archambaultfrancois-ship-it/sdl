@@ -4,12 +4,12 @@ switch action
 case 'parse'
  text=varargin{1};w=struct();parts=strsplit(text,',','CollapseDelimiters',false);
  for k=1:numel(parts)
-  p=regexp(parts{k},'^(bits|encoding|align|pad_after)=([A-Za-z]+|[0-9]+)$','tokens','once');
-  if isempty(p)||isfield(w,p{1}),error('SDL:Descriptor','invalid wire option');end
-  key=p{1};v=p{2};
-  if strcmp(key,'encoding'),if ~any(strcmp(v,{'varint','zigzag'})),error('SDL:Descriptor','invalid encoding');end
-  else,v=str2double(v);if ~isfinite(v)||v<0||v~=fix(v)||v>4294967295,error('SDL:Descriptor','invalid wire number');end,end
-  w.(key)=v;
+  item=parts{k};if strcmp(item,'v')||strcmp(item,'z'),key='encoding';if strcmp(item,'v'),v='varint';else,v='zigzag';end
+  elseif ~isempty(regexp(item,'^[bap][0-9]+$','once'))
+   if item(1)=='b',key='bits';elseif item(1)=='a',key='align';else,key='pad_after';end
+   v=str2double(item(2:end));if ~isfinite(v)||v<0||v~=fix(v)||v>4294967295,error('SDL:Descriptor','invalid wire number');end
+  else,error('SDL:Descriptor','invalid wire option');end
+  if isfield(w,key),error('SDL:Descriptor','duplicate wire option');end;w.(key)=v;
  end
  result=w;
 case 'validate'
@@ -21,9 +21,12 @@ case 'validate'
  if isfield(w,'pad_after')&&w.pad_after>65535,error('SDL:Descriptor','invalid wire padding');end
  result=true;
 case 'suffix'
- w=varargin{1};keys={'bits','encoding','align','pad_after'};parts={};
- for k=1:numel(keys),key=keys{k};if isfield(w,key),v=w.(key);if ~ischar(v),v=sprintf('%d',v);end;parts{end+1}=[key '=' v];end,end
- if isempty(parts),result='';else,result=[' wire(' strjoin(parts,',') ')'];end
+ w=varargin{1};parts={};
+ if isfield(w,'bits'),parts{end+1}=sprintf('b%d',w.bits);end
+ if isfield(w,'encoding'),if strcmp(w.encoding,'varint'),parts{end+1}='v';else,parts{end+1}='z';end,end
+ if isfield(w,'align'),parts{end+1}=sprintf('a%d',w.align);end
+ if isfield(w,'pad_after'),parts{end+1}=sprintf('p%d',w.pad_after);end
+ if isempty(parts),result='';else,result=['@' strjoin(parts,',')];end
 case 'transform'
  result=transform(varargin{1},varargin{2},varargin{3});
 otherwise,error('SDL:InvalidAction','invalid representation action');

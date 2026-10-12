@@ -305,11 +305,9 @@ public final class SdlCodec {
       }
    }
    private static final String IDENT = "[\\p{L}\\p{N}_$]+";
-   private static final Pattern HEAD = Pattern.compile("(message|enum) (" + IDENT + ") \\{");
-   private static final Pattern FIELD =
-       Pattern.compile("  ([0-9]+): (required|optional|repeated|packed) (" + IDENT +
-                       ")((?:\\[[0-9]+\\])*) (" + IDENT + ")(?: wire\\(([^()]*)\\))?;");
-   private static final Pattern ITEM = Pattern.compile("  (" + IDENT + ") = (-?[0-9]+);");
+   private static final Pattern HEAD = Pattern.compile("(#?)(" + IDENT + ")\\{([^{}]*)\\}");
+   private static final Pattern FIELD = Pattern.compile("([0-9]+)([?*+]?):(" + IDENT + ")((?:\\[[0-9]+\\])*):(" + IDENT + ")(?:@([^@]+))?");
+   private static final Pattern ITEM = Pattern.compile("(" + IDENT + ")=(-?[0-9]+)");
    private static long number(String s) {
       try {
          long n = Long.parseLong(s);
@@ -321,85 +319,67 @@ public final class SdlCodec {
       }
    }
    private static Schema parse(String text) {
-      if (text == null || text.getBytes(StandardCharsets.UTF_8).length > MAX_DESCRIPTOR ||
-          !text.startsWith("SDL2\n") || !text.endsWith("\n") || text.indexOf('\0') >= 0)
-         throw malformed("expected SDL2 description");
-      utf8(text);
-      String[] lines = text.substring(5).split("\n");
+      if (text == null || utf8(text).length > MAX_DESCRIPTOR || !text.startsWith("SDL2|")
+          || text.indexOf('\0') >= 0 || Pattern.compile("\\s").matcher(text).find())
+         throw malformed("expected compact SDL2 description");
       Schema schema = new Schema();
       String previousMessage = "", previousEnum = "";
-      for (int i = 0; i < lines.length; i++) {
-         Matcher head = HEAD.matcher(lines[i]);
-         if (!head.matches())
-            throw malformed("invalid declaration");
+      for (String declaration : text.substring(5).split("\\|", -1)) {
+         Matcher head = HEAD.matcher(declaration);
+         if (!head.matches()) throw malformed("invalid declaration");
          String type = head.group(2);
-         if (type.getBytes(StandardCharsets.UTF_8).length > 65535)
-            throw malformed("identifier limit");
-         if (wireSize(type) > 0 || type.equals("string"))
-            throw malformed("reserved type name");
-         if (head.group(1).equals("message")) {
+         if (utf8(type).length > 65535 || wireSize(type) > 0 || type.equals("string"))
+            throw malformed("invalid type name");
+         String body = head.group(3);
+         if (body.length() > 0 && !body.endsWith(";")) throw malformed("missing field separator");
+         String[] rows = body.length() == 0 ? new String[0] : body.substring(0, body.length()-1).split(";", -1);
+         if (rows.length > 65535) throw malformed("declaration limit");
+         HashSet<String> names = new HashSet<String>();
+         if (head.group(1).equals("#")) {
+            if (compareNames(type, previousEnum) <= 0 || schema.enums.size() >= 65535 || rows.length == 0)
+               throw malformed("invalid enum order or size");
+            previousEnum = type;
+            Map<Integer, String> items = new java.util.LinkedHashMap<Integer, String>();
+            for (String row : rows) {
+               Matcher item = ITEM.matcher(row);
+               if (!item.matches() || utf8(item.group(1)).length > 65535) throw malformed("invalid enum");
+               int n;
+               try { n = Integer.parseInt(item.group(2)); }
+               catch (NumberFormatException error) { throw new CodecException("enum overflow", error); }
+               if (items.containsKey(n) || !names.add(item.group(1))) throw malformed("duplicate enum value");
+               items.put(n, item.group(1));
+            }
+            schema.enums.put(type, items);
+         } else {
             if (compareNames(type, previousMessage) <= 0 || schema.messages.size() >= 65535)
                throw malformed("message order");
             previousMessage = type;
             Declaration d = new Declaration(type);
-            HashSet<String> names = new HashSet<String>();
             long previous = 0;
-            while (++i < lines.length && !lines[i].equals("}")) {
-               Matcher f = FIELD.matcher(lines[i]);
-               if (!f.matches() || d.fields.size() >= 65535)
+            for (String row : rows) {
+               Matcher f = FIELD.matcher(row);
+               if (!f.matches() || utf8(f.group(3)).length > 65535 || utf8(f.group(5)).length > 65535)
                   throw malformed("invalid field");
-               if (f.group(3).getBytes(StandardCharsets.UTF_8).length > 65535 ||
-                   f.group(5).getBytes(StandardCharsets.UTF_8).length > 65535)
-                  throw malformed("identifier limit");
                long id = number(f.group(1));
-               if (id <= previous || !names.add(f.group(5)))
-                  throw malformed("duplicate field");
+               if (id <= previous || !names.add(f.group(5))) throw malformed("duplicate field");
                previous = id;
+               String marker = f.group(2);
+               String modifier = marker.equals("?") ? "optional" : marker.equals("*") ? "repeated" : marker.equals("+") ? "packed" : "required";
                Matcher dimensions = Pattern.compile("\\[([0-9]+)\\]").matcher(f.group(4));
                List<Integer> dims = new ArrayList<Integer>();
                while (dimensions.find()) {
                   long n = number(dimensions.group(1));
-                  if (n == 0 || n > Integer.MAX_VALUE || dims.size() >= 255)
-                     throw malformed("invalid dimension");
+                  if (n == 0 || n > Integer.MAX_VALUE || dims.size() >= 255) throw malformed("invalid dimension");
                   dims.add((int)n);
                }
                int[] ds = new int[dims.size()];
-               for (int j = 0; j < ds.length; j++)
-                  ds[j] = dims.get(j);
-               if (ds.length > 0 && !f.group(2).equals("required"))
-                  throw malformed("array cardinality");
-               Field field=new Field(id,f.group(5),f.group(2),f.group(3),null,ds,false);
-               field.wire=WireOptions.parse(f.group(6));
+               for (int j = 0; j < ds.length; j++) ds[j] = dims.get(j);
+               if (ds.length > 0 && !modifier.equals("required")) throw malformed("array cardinality");
+               Field field = new Field(id, f.group(5), modifier, f.group(3), null, ds, false);
+               field.wire = WireOptions.parse(f.group(6));
                d.fields.add(field);
             }
-            if (i == lines.length)
-               throw malformed("unclosed message");
             schema.messages.put(type, d);
-         } else {
-            if (compareNames(type, previousEnum) <= 0 || schema.enums.size() >= 65535)
-               throw malformed("enum order");
-            previousEnum = type;
-            Map<Integer, String> items = new java.util.LinkedHashMap<Integer, String>();
-            HashSet<String> names = new HashSet<String>();
-            while (++i < lines.length && !lines[i].equals("}")) {
-               Matcher item = ITEM.matcher(lines[i]);
-               if (!item.matches() || items.size() >= 65535)
-                  throw malformed("invalid enum");
-               if (item.group(1).getBytes(StandardCharsets.UTF_8).length > 65535)
-                  throw malformed("identifier limit");
-               int n;
-               try {
-                  n = Integer.parseInt(item.group(2));
-               } catch (NumberFormatException e) {
-                  throw new CodecException("enum overflow", e);
-               }
-               if (items.containsKey(n) || !names.add(item.group(1)))
-                  throw malformed("duplicate enum value");
-               items.put(n, item.group(1));
-            }
-            if (i == lines.length || items.isEmpty())
-               throw malformed("invalid enum");
-            schema.enums.put(type, items);
          }
       }
       if (schema.messages.isEmpty())
@@ -518,31 +498,21 @@ public final class SdlCodec {
       }
    }
    private static String render(Schema schema) {
-      StringBuilder out = new StringBuilder("SDL2\n");
+      StringBuilder out = new StringBuilder("SDL2|");
+      String separator="";
       for (Declaration d : schema.messages.values()) {
-         out.append("message ").append(d.name).append(" {\n");
+         out.append(separator).append(d.name).append('{');separator="|";
          for (Field f : d.fields) {
-            out.append("  ")
-                .append(f.id)
-                .append(": ")
-                .append(f.modifier)
-                .append(' ')
-                .append(f.typeName);
-            for (int n : f.dimensions)
-               out.append('[').append(n).append(']');
-            out.append(' ').append(f.name).append(f.wire.suffix()).append(";\n");
+            out.append(f.id).append(f.modifier.equals("optional")?"?":f.modifier.equals("repeated")?"*":f.modifier.equals("packed")?"+":"").append(':').append(f.typeName);
+            for (int n : f.dimensions) out.append('[').append(n).append(']');
+            out.append(':').append(f.name).append(f.wire.suffix()).append(';');
          }
-         out.append("}\n");
+         out.append('}');
       }
       for (String n : schema.enums.keySet()) {
-         out.append("enum ").append(n).append(" {\n");
-         for (Map.Entry<Integer, String> item : schema.enums.get(n).entrySet())
-            out.append("  ")
-                .append(item.getValue())
-                .append(" = ")
-                .append(item.getKey())
-                .append(";\n");
-         out.append("}\n");
+         out.append(separator).append('#').append(n).append('{');separator="|";
+         for (Map.Entry<Integer,String> item : schema.enums.get(n).entrySet()) out.append(item.getValue()).append('=').append(item.getKey()).append(';');
+         out.append('}');
       }
       return out.toString();
    }
@@ -1254,25 +1224,35 @@ public final class SdlCodec {
          WireOptions w=new WireOptions(); if(text==null)return w;
          java.util.HashSet<String> seen=new java.util.HashSet<String>();
          for(String item:text.split(",",-1)) {
-            String[] pair=item.split("=",-1);
-            if(pair.length!=2||!seen.add(pair[0]))throw malformed("invalid wire option");
-            String k=pair[0],v=pair[1];
-            if(k.equals("encoding")){if(!v.equals("varint")&&!v.equals("zigzag"))throw malformed("invalid wire encoding");w.encoding=v;}
-            else {
-               if(!v.matches("[0-9]+"))throw malformed("invalid wire integer");
-               long n=number(v);if(n>Integer.MAX_VALUE)throw malformed("wire option overflow");
-               if(k.equals("bits")){if(n==0)throw malformed("zero bit width");w.bits=(int)n;}
-               else if(k.equals("align")){w.align=(int)n;w.presentAlign=true;}
-               else if(k.equals("pad_after")){w.pad=(int)n;w.presentPad=true;}
-               else throw malformed("unknown wire option");
+            String key; long n = 0;
+            if(item.equals("v")||item.equals("z")) {
+               key="encoding";w.encoding=item.equals("v")?"varint":"zigzag";
+            } else {
+               if(!item.matches("[bap][0-9]+"))throw malformed("invalid wire option");
+               key=item.substring(0,1);n=number(item.substring(1));
+               if(n>Integer.MAX_VALUE)throw malformed("wire option overflow");
+               if(key.equals("b")){if(n==0)throw malformed("zero bit width");w.bits=(int)n;}
+               else if(key.equals("a")){w.align=(int)n;w.presentAlign=true;}
+               else {w.pad=(int)n;w.presentPad=true;}
             }
+            if(!seen.add(key))throw malformed("duplicate wire option");
          } return w;
       }
       void validate(String t,boolean enumeration){
          int width=t.equals("bool")?1:t.startsWith("int")||t.startsWith("uint")?wireSize(t)*8:enumeration?32:0;
          if(bits>width||encoding!=null&&(width==0||t.equals("bool")||bits!=0||encoding.equals("zigzag")&&t.startsWith("uint"))||presentAlign&&(align<1||align>256||(align&(align-1))!=0)||pad>65535)throw malformed("invalid wire representation");
       }
-      String suffix(){java.util.List<String> p=new java.util.ArrayList<String>();if(bits!=0)p.add("bits="+bits);if(encoding!=null)p.add("encoding="+encoding);if(presentAlign)p.add("align="+align);if(presentPad)p.add("pad_after="+pad);if(p.isEmpty())return "";StringBuilder s=new StringBuilder(" wire(");for(String v:p){if(s.length()>6)s.append(',');s.append(v);}return s.append(')').toString();}
+      String suffix(){
+         java.util.List<String> parts=new java.util.ArrayList<String>();
+         if(bits!=0)parts.add("b"+bits);
+         if(encoding!=null)parts.add(encoding.equals("varint")?"v":"z");
+         if(presentAlign)parts.add("a"+align);
+         if(presentPad)parts.add("p"+pad);
+         if(parts.isEmpty())return "";
+         StringBuilder out=new StringBuilder("@");
+         for(String part:parts){if(out.length()>1)out.append(',');out.append(part);}
+         return out.toString();
+      }
    }
    private static final class RepStream {
       final byte[] input; final ByteArrayOutputStream output=new ByteArrayOutputStream(); int bit, pending;

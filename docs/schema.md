@@ -22,7 +22,7 @@ struct Packet {
 ```
 
 These aliases have identical semantics and generate identical code, catalogue
-bytes, and hashes. The canonical SDL2 catalogue always uses `message`, regardless
+bytes, and hashes. The compact canonical SDL2 catalogue omits the declaration keyword, regardless
 of the source spelling.
 
 Put one declaration on each line;
@@ -125,8 +125,9 @@ message Position {
 ```
 
 These defaults are source-language conveniences shared by all six backends;
-runtime catalogues still require explicit field IDs and modifiers. The canonical
-catalogue always emits the resolved modifier explicitly. The four
+runtime catalogues require explicit field IDs. The compact canonical catalogue
+encodes required fields without a marker and the other cardinalities with
+`?`, `*`, or `+`. The four
 field modifiers are:
 
 - `required`: a singular field without a presence flag. Every field declared required by the sender must be
@@ -289,7 +290,8 @@ message Envelope {
 }
 ```
 
-Representation clauses appear in canonical catalogues, participate in their
+Representation clauses appear as compact suffixes (`@b12`, `@v`, `@z`,
+`@a4,p1`) in canonical catalogues, participate in their
 hashes, and must be understood by receiving runtimes. Older runtimes reject the
 extended clauses and new unsigned primitive names. Without clauses, existing
 schemas retain their previous bytes. Logical compatibility checks compare

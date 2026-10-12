@@ -116,7 +116,7 @@ class PubSubIntegrationTests(unittest.TestCase):
         self.assertEqual(issue['consumer_type'], 'fl64')
 
     def test_required_field_policy_is_separate_from_default_compatibility(self):
-        text = description([V1]).replace('  2: required fl64 celsius;\n', '')
+        text = description([V1]).replace('2:fl64:celsius;', '')
         self.client.call('put_catalogue', catalogue_id=catalogue_id(text), text=text)
         self.broker.state = BrokerState(description([V1]), require_required=True)
         with self.assertRaises(PocError) as caught:
@@ -136,11 +136,11 @@ class PubSubIntegrationTests(unittest.TestCase):
 
     def test_envelope_uses_four_byte_digest_and_version_two(self):
         text = description([V1])
-        self.assertEqual(catalogue_id(text), '678f661f')
+        self.assertEqual(catalogue_id(text), '88330348')
         self.assertEqual(HEADER_SIZE, 9)
         frame = pack_envelope(catalogue_id(text), b'\x01')
-        self.assertEqual(frame, b'S2PS\x02\x67\x8f\x66\x1f\x01')
-        self.assertEqual(unpack_envelope(frame), ('678f661f', b'\x01'))
+        self.assertEqual(frame, b'S2PS\x02\x88\x33\x03\x48\x01')
+        self.assertEqual(unpack_envelope(frame), ('88330348', b'\x01'))
         for invalid_id in ('0' * 64, 'not-hex!', '00', '67 8f 66 1f'):
             self.assert_code('INVALID_ENVELOPE', lambda: pack_envelope(invalid_id, b'\x01'))
         self.assert_code('INVALID_ENVELOPE', lambda: unpack_envelope(
@@ -179,7 +179,7 @@ class PubSubIntegrationTests(unittest.TestCase):
         self.assertEqual(self.broker.state.sequence, 0)
 
     def test_wrong_root_type_rejected(self):
-        text = 'SDL2\nmessage Other {\n  1: required bool active;\n}\n'
+        text = "SDL2|Other{1:bool:active;}"
         self.assert_code('TOPIC_CONTRACT', lambda: self.client.call(
             'put_catalogue', catalogue_id=catalogue_id(text), text=text))
 

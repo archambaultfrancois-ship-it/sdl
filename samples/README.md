@@ -11,3 +11,6 @@
   C, Rust, and Python examples, including cross-language wire interoperability.
   Java and Matlab/Octave backends are supported by the generator and covered by
   their runtime tests, but are not part of this sample.
+
+- [`PoC_PubSub`](PoC_PubSub/README.md): Python TCP/IP pub/sub broker with
+  catalogue identities, topic contracts, schema evolution and catalogue resolution.

@@ -8,14 +8,20 @@ impl WireOptions {
     pub(crate) fn parse(text: &str) -> Result<Self, CodecError> {
         let mut w = Self::default();
         for item in text.split(',') {
-            let (key,value)=item.split_once('=').ok_or(CodecError::InvalidDescriptor)?;
-            let number=|| -> Result<u32,CodecError> { if !value.bytes().all(|b| b.is_ascii_digit()) { return Err(CodecError::InvalidDescriptor); } value.parse().map_err(|_|CodecError::InvalidDescriptor) };
-            match key {
-                "bits" if w.bits.is_none()=>w.bits=Some(number()?),
-                "align" if w.align.is_none()=>w.align=Some(number()?),
-                "pad_after" if w.pad_after.is_none()=>w.pad_after=Some(number()?),
-                "encoding" if w.encoding.is_none() && matches!(value,"varint"|"zigzag")=>w.encoding=Some(value.to_owned()),
-                _=>return Err(CodecError::InvalidDescriptor),
+            if matches!(item, "v" | "z") {
+                if w.encoding.is_some() { return Err(CodecError::InvalidDescriptor); }
+                w.encoding = Some(if item == "v" { "varint" } else { "zigzag" }.to_owned());
+                continue;
+            }
+            if item.len() < 2 || !item.as_bytes()[1..].iter().all(u8::is_ascii_digit) {
+                return Err(CodecError::InvalidDescriptor);
+            }
+            let value = item[1..].parse().map_err(|_| CodecError::InvalidDescriptor)?;
+            match item.as_bytes()[0] {
+                b'b' if w.bits.is_none() => w.bits = Some(value),
+                b'a' if w.align.is_none() => w.align = Some(value),
+                b'p' if w.pad_after.is_none() => w.pad_after = Some(value),
+                _ => return Err(CodecError::InvalidDescriptor),
             }
         }
         Ok(w)
@@ -27,11 +33,11 @@ impl WireOptions {
     }
     pub(crate) fn suffix(&self)->String {
         let mut parts=Vec::new();
-        if let Some(b)=self.bits {parts.push(format!("bits={b}"));}
-        if let Some(e)=&self.encoding {parts.push(format!("encoding={e}"));}
-        if let Some(a)=self.align {parts.push(format!("align={a}"));}
-        if let Some(p)=self.pad_after {parts.push(format!("pad_after={p}"));}
-        if parts.is_empty(){String::new()}else{format!(" wire({})",parts.join(","))}
+        if let Some(b)=self.bits {parts.push(format!("b{b}"));}
+        if let Some(e)=&self.encoding {parts.push(if e == "varint" { "v".to_owned() } else { "z".to_owned() });}
+        if let Some(a)=self.align {parts.push(format!("a{a}"));}
+        if let Some(p)=self.pad_after {parts.push(format!("p{p}"));}
+        if parts.is_empty(){String::new()}else{format!("@{}",parts.join(","))}
     }
 }
 struct Stream<'a> { input: Option<&'a [u8]>, out: Vec<u8>, bit:usize }

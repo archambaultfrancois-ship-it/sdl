@@ -81,7 +81,7 @@ class AdaBackend:
          'with Ada.Containers.Vectors;\nwith Ada.Strings.Unbounded; use Ada.Strings.Unbounded;\n',
          'with Interfaces; use Interfaces;\npackage ' + self.package + ' is\n']
       desc = canonical_type_descriptor(self.schema).decode('utf-8')
-      out.append('   Description : constant String :=\n      ' + ' & Character\'Val (10) &\n      '.join(quote(line) for line in desc.splitlines()) + ' & Character\'Val (10);\n')
+      out.append('   Description : constant String :=\n      ' + ' &\n      '.join(quote(desc[i:i+200]) for i in range(0, len(desc), 200)) + ';\n')
       out.append('   function Prepare (Catalogue : String := Description; Use_Direct : Boolean := True) return Context;\n')
       for enum in self.schema.enums.values():
          out.append('   subtype ' + typ(enum.name) + ' is Int32;\n')

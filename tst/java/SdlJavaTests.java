@@ -20,25 +20,26 @@ public final class SdlJavaTests {
       throw new AssertionError("invalid input accepted");
    }
    static String graph(int count, boolean shared) {
-      StringBuilder text = new StringBuilder("SDL2\n");
+      StringBuilder text = new StringBuilder("SDL2|");
       for (int i = 0; i < count; ++i) {
-         text.append(String.format("message N%03d {\n", i));
+         if(i>0)text.append('|');
+         text.append(String.format("N%03d{", i));
          if (i == 0)
-            text.append("  1: required int8 value;\n");
+            text.append("1:int8:value;");
          else {
-            text.append(String.format("  1: optional N%03d left;\n", i - 1));
+            text.append(String.format("1?:N%03d:left;", i - 1));
             if (shared)
-               text.append(String.format("  2: optional N%03d right;\n", i - 1));
+               text.append(String.format("2?:N%03d:right;", i - 1));
          }
-         text.append("}\n");
+         text.append('}');
       }
       return text.toString();
    }
    static int messageId(String description,String name) {
       int id=0;
-      for(String line:description.split("\n")) {
-         if(line.startsWith("message ")) id++;
-         if(line.equals("message "+name+" {")) return id;
+      for(String line:description.substring(5).split("\\|")) {
+         if(!line.startsWith("#")) id++;
+         if(line.startsWith(name+"{")) return id;
       }
       throw new AssertionError("missing type");
    }
@@ -78,7 +79,7 @@ public final class SdlJavaTests {
          packed_validation.PackedBatch decoded=(packed_validation.PackedBatch)SdlCodec.decode(ctx,expected);
          check(decoded.records.size()==count && Arrays.equals(expected,SdlCodec.encode(ctx,decoded)));
          // Renaming preserves compatibility; changing enum sets must fall back and validate sender values.
-         SdlCodec.Context renamed=SdlCodec.prepare(desc.replace("bool enabled;","bool renamed;"),packed_validation.PackedBatch.class);
+         SdlCodec.Context renamed=SdlCodec.prepare(desc.replace("bool:enabled;","bool:renamed;"),packed_validation.PackedBatch.class);
          check(Arrays.equals(expected,SdlCodec.encode(ctx,SdlCodec.decode(renamed,expected))));
          if(trial==1) {
             for(int n=0;n<expected.length;n++) {
@@ -93,14 +94,14 @@ public final class SdlJavaTests {
             invalid(new Action(){public void run(){SdlCodec.decode(ctx,badEnum);}});
             final byte[] hostile={(byte)messageId(desc,"PackedBatch"),(byte)255,(byte)255,(byte)255,(byte)255,15};
             invalid(new Action(){public void run(){SdlCodec.decode(ctx,hostile);}});
-            final SdlCodec.Context subset=SdlCodec.prepare(desc.replace("  NEGATIVE = -7;\n",""),packed_validation.PackedBatch.class);
+            final SdlCodec.Context subset=SdlCodec.prepare(desc.replace("NEGATIVE=-7;",""),packed_validation.PackedBatch.class);
             invalid(new Action(){public void run(){SdlCodec.decode(subset,expected);}});
-            final SdlCodec.Context superset=SdlCodec.prepare(desc.replace("  NEGATIVE = -7;","  NEGATIVE = -7;\n  EXTRA = 9;"),packed_validation.PackedBatch.class);
+            final SdlCodec.Context superset=SdlCodec.prepare(desc.replace("NEGATIVE=-7;","NEGATIVE=-7;EXTRA=9;"),packed_validation.PackedBatch.class);
             byte[] localInvalid=expected.clone(); localInvalid[57]=9;
             final byte[] badLocalEnum=localInvalid;
             invalid(new Action(){public void run(){SdlCodec.decode(superset,badLocalEnum);}});
             // A removed field uses the generic decoder and preserves local defaults.
-            String removed=desc.replace("  10: required PackedState state;\n","");
+            String removed=desc.replace("10:PackedState:state;","");
             SdlCodec.Context evolution=SdlCodec.prepare(removed,packed_validation.PackedBatch.class);
             java.nio.ByteBuffer shorter=java.nio.ByteBuffer.allocate(2+count*76);
             shorter.put(expected,0,2);
@@ -257,9 +258,9 @@ public final class SdlJavaTests {
          public void run() { SdlCodec.decode(ctx, bad); }
       });
       final String evolved =
-          wire_example.Packet.SDL_DESCRIPTOR.replace("bool active;", "bool enabled;")
-              .replace("packed int16 samples;",
-                       "repeated int16 samples;\n  5: required string extra;");
+          wire_example.Packet.SDL_DESCRIPTOR.replace("bool:active;", "bool:enabled;")
+              .replace("4+:int16:samples;",
+                       "4*:int16:samples;5:string:extra;");
       SdlCodec.Context remote = SdlCodec.prepare(evolved, wire_example.Packet.class);
       byte[] extended = Arrays.copyOf(fixture, 19);
       extended[16] = 2;
@@ -267,14 +268,14 @@ public final class SdlJavaTests {
       extended[18] = 'k';
       p = (wire_example.Packet)SdlCodec.decode(remote, extended);
       check(p.active && p.samples.length == 2);
-      remote = SdlCodec.prepare("SDL2\nmessage Packet {\n  1: required bool active;\n}\n",
+      remote = SdlCodec.prepare("SDL2|Packet{1:bool:active;}",
                                 wire_example.Packet.class);
       p = (wire_example.Packet)SdlCodec.decode(remote, new byte[] {1, 1});
       check(p.active && p.code == null && p.samples.length==0);
       invalid(new Action() {
          public void run() {
             SdlCodec.prepare(
-                wire_example.Packet.SDL_DESCRIPTOR.replace("bool active;", "int32 active;"),
+                wire_example.Packet.SDL_DESCRIPTOR.replace("bool:active;", "int32:active;"),
                 wire_example.Packet.class);
          }
       });
@@ -311,9 +312,9 @@ public final class SdlJavaTests {
             Double.doubleToRawLongBits(copy.precise) == Double.doubleToRawLongBits(-0.0) &&
             copy.labels.equals(c.labels) && copy.points.size() == 2 && copy.points.re[1] == 2);
       for (String text :
-           new String[] {"SDL1\n", "SDL2\n", "SDL2\nmessage A {\n  1: required A a;\n}\n",
-                         "SDL2\nmessage A {\n  1: packed string a;\n}\n",
-                         "SDL2\nmessage A {\n}\nenum E {\n}\n"}) {
+           new String[] {"SDL1\n", "SDL2\n", "SDL2|A{1:A:a;}",
+                         "SDL2|A{1+:string:a;}",
+                         "SDL2|A{}|#E{}"}) {
          final String t = text;
          invalid(new Action() {
             public void run() { SdlCodec.prepare(t); }
@@ -333,16 +334,10 @@ public final class SdlJavaTests {
       r.var_array.add(v);
       schema.RootPayload q = (schema.RootPayload)SdlCodec.decode(root, SdlCodec.encode(root, r));
       check(q.fixed_array.get(0).x == 1f && q.var_array.get(0).id == 7L);
-      String nested = schema.RootPayload.SDL_DESCRIPTOR.replace("fl32 x;", "fl32 renamed_x;")
-                          .replace("fl32 y;", "fl32 y;\n  3: required int32 extra;");
+      String nested = schema.RootPayload.SDL_DESCRIPTOR.replace("fl32:x;", "fl32:renamed_x;")
+                          .replace("fl32:y;", "fl32:y;3:int32:extra;");
       root = SdlCodec.prepare(nested, schema.RootPayload.class);
-      int id = 1;
-      for (String line : nested.split("\n")) {
-         if (line.equals("message RootPayload {"))
-            break;
-         if (line.startsWith("message "))
-            id++;
-      }
+      int id = messageId(nested,"RootPayload");
       byte[] data = {(byte)id, 0, 1, 0x3f, (byte)0x80, 0, 0, 0x40, 0, 0, 0, 0, 0, 0, 7, 0};
       q = (schema.RootPayload)SdlCodec.decode(root, data);
       check(q.fixed_array.get(0).y == 2f);

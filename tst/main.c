@@ -100,12 +100,14 @@ static SdlContext *context(const char *name) {
    SdlContext *ctx;
    assert(d);
    if (!strcmp(name, "Packet")) {
-      char expected[132];
+      char expected[4096];
+      size_t expected_size;
       FILE *file = fopen("tst/fixtures/packet.sdl2", "rb");
-      assert(file && fread(expected, 1, sizeof(expected), file) == sizeof(expected));
+      assert(file);
+      expected_size = fread(expected, 1, sizeof(expected), file);
       assert(fgetc(file) == EOF);
       fclose(file);
-      assert(size == sizeof(expected) && !memcmp(d, expected, size));
+      assert(size == expected_size && !memcmp(d, expected, size));
    }
    ctx = type_prepare(d, size);
    type_free(d);
@@ -176,8 +178,7 @@ static void packet_cases(void) {
 }
 static void evolution(void) {
    const char text[] =
-       "SDL2\nmessage Packet {\n  1: required bool enabled;\n  2: optional int16 code;\n  3: "
-       "required string label;\n  4: repeated int16 samples;\n  5: required string extra;\n}\n";
+       "SDL2|Packet{1:bool:enabled;2?:int16:code;3:string:label;4*:int16:samples;5:string:extra;}";
    SdlContext *ctx = type_prepare(text, strlen(text));
    unsigned char data[20];
    Packet *p;
@@ -193,7 +194,7 @@ static void evolution(void) {
    assert(!type_decode(ctx, data, 19));
    type_context_free(ctx);
    {
-      const char removed[] = "SDL2\nmessage Packet {\n  1: required bool active;\n}\n";
+      const char removed[] = "SDL2|Packet{1:bool:active;}";
       unsigned char small[] = {1, 1};
       ctx = type_prepare(removed, strlen(removed));
       assert(ctx);
@@ -203,15 +204,12 @@ static void evolution(void) {
       type_context_free(ctx);
    }
    {
-      const char incompatible[] = "SDL2\nmessage Packet {\n  1: required int32 active;\n}\n";
+      const char incompatible[] = "SDL2|Packet{1:int32:active;}";
       assert(!type_prepare(incompatible, strlen(incompatible)));
    }
    {
       const char nested[] =
-          "SDL2\nmessage FixedItem {\n  1: required fl32 renamed_x;\n  2: required fl32 y;\n  3: "
-          "required int32 extra;\n}\nmessage RootPayload {\n  1: optional string header;\n  2: "
-          "packed FixedItem fixed_array;\n  3: repeated VarItem var_array;\n}\nmessage VarItem {\n "
-          " 1: optional string name;\n  2: required int64 id;\n}\n";
+          "SDL2|FixedItem{1:fl32:renamed_x;2:fl32:y;3:int32:extra;}|RootPayload{1?:string:header;2+:FixedItem:fixed_array;3*:VarItem:var_array;}|VarItem{1?:string:name;2:int64:id;}";
       unsigned char body[] = {2, 0, 1, 0x3f, 0x80, 0, 0, 0x40, 0, 0, 0, 0, 0, 0, 7, 0};
       RootPayload *root;
       ctx = type_prepare(nested, strlen(nested));
@@ -295,17 +293,17 @@ static void graph_limits(void) {
    for (shared = 0; shared < 2; ++shared) {
       size_t used = 5;
       SdlContext *ctx;
-      memcpy(text, "SDL2\n", 5);
+      memcpy(text, "SDL2|", 5);
       for (count = 0; count < (shared ? 30u : 66u); ++count) {
-         used += (size_t)sprintf(text + used, "message N%03u {\n", count);
+         used += (size_t)sprintf(text + used, "%sN%03u{", count ? "|" : "", count);
          if (!count)
-            used += (size_t)sprintf(text + used, "  1: required int8 value;\n");
+            used += (size_t)sprintf(text + used, "1:int8:value;");
          else {
-            used += (size_t)sprintf(text + used, "  1: optional N%03u left;\n", count - 1);
+            used += (size_t)sprintf(text + used, "1?:N%03u:left;", count - 1);
             if (shared)
-               used += (size_t)sprintf(text + used, "  2: optional N%03u right;\n", count - 1);
+               used += (size_t)sprintf(text + used, "2?:N%03u:right;", count - 1);
          }
-         used += (size_t)sprintf(text + used, "}\n");
+         used += (size_t)sprintf(text + used, "}");
       }
       ctx = type_prepare(text, used);
       assert(shared ? ctx != NULL : ctx == NULL);
@@ -346,10 +344,7 @@ static const SdlTypeDesc packed_test_batch_desc = {
 };
 static void packed_records(void) {
    static const char text[] =
-      "SDL2\nenum State {\n  READY = 1;\n  NEGATIVE = -7;\n}\n"
-      "message PackedTestBatch {\n  1: packed PackedTestRecord records;\n}\n"
-      "message PackedTestRecord {\n  1: required bool enabled;\n  2: required int16 code;\n"
-      "  3: required fl64 precise;\n  4: required State state;\n  5: required c32 point;\n}\n";
+      "SDL2|#State{READY=1;NEGATIVE=-7;}|PackedTestBatch{1+:PackedTestRecord:records;}|PackedTestRecord{1:bool:enabled;2:int16:code;3:fl64:precise;4:State:state;5:c32:point;}";
    PackedTestRecord records[2] = {{0}};
    PackedTestBatch batch = {2, records}, *copy;
    unsigned char expected[48] = {1, 2};
@@ -392,15 +387,15 @@ static void packed_records(void) {
    /* Unknown fields validate against the remote enum, not the local subset. */
    {
       char remote[1024];
-      const char *closing = strstr(text, "}\nmessage");
+      const char *closing = strstr(text, "}|PackedTestBatch");
       SdlContext *changed;
       assert(closing);
-      snprintf(remote, sizeof(remote), "%.*s  OTHER = 123;\n%s",
+      snprintf(remote, sizeof(remote), "%.*sOTHER=123;%s",
                (int)(closing - text), text, closing);
       changed = type_prepare(remote, strlen(remote));
       assert(changed && !type_decode(changed, expected, sizeof(expected)));
       type_context_free(changed);
-      strstr(remote, "  1: packed")[2] = '2';
+      strstr(remote, "1+:PackedTestRecord")[0] = '2';
       changed = type_prepare(remote, strlen(remote));
       assert(changed);
       copy = type_decode(changed, expected, sizeof(expected));
@@ -427,8 +422,8 @@ static void packed_records(void) {
       char remote[1024];
       unsigned char evolved[50] = {1, 2};
       SdlContext *changed;
-      memcpy(remote, text, strlen(text) - 2);
-      strcpy(remote + strlen(text) - 2, "  6: required int8 extra;\n}\n");
+      memcpy(remote, text, strlen(text) - 1);
+      strcpy(remote + strlen(text) - 1, "6:int8:extra;}");
       changed = type_prepare(remote, strlen(remote));
       assert(changed);
       for (i = 0; i < 2; ++i) {
@@ -493,11 +488,11 @@ static void wire_word_arrays(void) {
 
 static void invalid(void) {
    const char *bad[] = {"SDL1\n",
-                        "SDL2\nmessage A {\n  1: required A a;\n}\n",
-                        "SDL2\nmessage A {\n  1: required Missing a;\n}\n",
-                        "SDL2\nmessage A {\n  1: required bool a;\n  1: required bool b;\n}\n",
-                        "SDL2\nmessage A {\n  1: packed string a;\n}\n",
-                        "SDL2\nenum E {\n}\nmessage A {\n}\n"};
+                        "SDL2|A{1:A:a;}",
+                        "SDL2|A{1:Missing:a;}",
+                        "SDL2|A{1:bool:a;1:bool:b;}",
+                        "SDL2|A{1+:string:a;}",
+                        "SDL2|#E{}|A{}"};
    size_t i;
    for (i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i)
       assert(!type_prepare(bad[i], strlen(bad[i])));

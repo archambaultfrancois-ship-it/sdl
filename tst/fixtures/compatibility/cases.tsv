@@ -29,3 +29,8 @@ all-roots-unknown	base.sdl2	other.sdl2	-	0	ROOT_UNKNOWN	Root	Root	0	Root	-	0
 all-roots-nested	nested.sdl2	nested_wide.sdl2	-	0	FIELD_TYPE_MISMATCH	Child	Child.value	7	int16	int32	0
 high-field-id	high_id.sdl2	high_id_wide.sdl2	Root	0	FIELD_TYPE_MISMATCH	Root	Root.value	4294967295	int16	int32	0
 negative-enum-value	enum_min.sdl2	enum_old.sdl2	Root	0	ENUM_VALUE_UNKNOWN	Root	Root.state	2	State	State	-2147483648
+compact-bad-space	compact_bad_space.sdl2	base.sdl2	Root	0	INVALID_PUBLISHER_CATALOGUE	-	-	0	-	-	0
+compact-bad-separator	compact_bad_separator.sdl2	base.sdl2	Root	0	INVALID_PUBLISHER_CATALOGUE	-	-	0	-	-	0
+compact-bad-wire	compact_bad_wire.sdl2	base.sdl2	Root	0	INVALID_PUBLISHER_CATALOGUE	-	-	0	-	-	0
+compact-bad-duplicate	compact_bad_duplicate.sdl2	base.sdl2	Root	0	INVALID_PUBLISHER_CATALOGUE	-	-	0	-	-	0
+readable-rejected	readable_rejected.sdl2	base.sdl2	Root	0	INVALID_PUBLISHER_CATALOGUE	-	-	0	-	-	0

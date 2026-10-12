@@ -34,7 +34,7 @@ def parse_wire_options(text):
 
 
 def wire_suffix(options):
-   return ' wire(' + ','.join(key + '=' + str(options[key]) for key in WIRE_KEYS if key in options) + ')' if options else ''
+   return '@' + ','.join({'bits':'b','align':'a','pad_after':'p'}[key] + str(options[key]) if key != 'encoding' else {'varint':'v','zigzag':'z'}[options[key]] for key in WIRE_KEYS if key in options) if options else ''
 
 
 def validate_wire_options(options, type_name, enum=False):
@@ -53,23 +53,20 @@ def validate_wire_options(options, type_name, enum=False):
 
 
 def canonical_type_descriptor(schema, root_name=None):
-   """Canonical SDL2 UTF-8 catalogue (all declarations in this schema)."""
+   """Compact canonical SDL2 UTF-8 catalogue (all schema declarations)."""
    if root_name is not None and root_name not in schema.messages:
       raise ValueError('unknown root message: ' + root_name)
-   lines = ['SDL2']
+   declarations = []
+   markers = {'required':'', 'optional':'?', 'repeated':'*', 'packed':'+'}
    for name in sorted(schema.messages, key=lambda value: value.encode('utf-8')):
-      lines.append('message ' + name + ' {')
+      fields = []
       for field in sorted(schema.messages[name].fields, key=lambda item: item.index):
          dimensions = ''.join('[' + str(n) + ']' for n in field.array_dimensions)
-         lines.append('  %d: %s %s%s %s%s;' %
-            (field.index, field.modifier, field.type_name, dimensions, field.name, wire_suffix(field.wire)))
-      lines.append('}')
+         fields.append('%d%s:%s%s:%s%s;' % (field.index, markers[field.modifier], field.type_name, dimensions, field.name, wire_suffix(field.wire)))
+      declarations.append(name + '{' + ''.join(fields) + '}')
    for name in sorted(schema.enums, key=lambda value: value.encode('utf-8')):
-      lines.append('enum ' + name + ' {')
-      for item, value in schema.enums[name].pairs:
-         lines.append('  ' + item + ' = ' + str(int(value)) + ';')
-      lines.append('}')
-   result = ('\n'.join(lines) + '\n').encode('utf-8')
+      declarations.append('#' + name + '{' + ''.join(item + '=' + str(int(value)) + ';' for item, value in schema.enums[name].pairs) + '}')
+   result = ('SDL2|' + '|'.join(declarations)).encode('utf-8')
    if len(result) > MAX_SCHEMA_DESCRIPTOR_SIZE:
       raise ValueError('wire descriptor exceeds 1 MiB')
    return result

@@ -70,7 +70,7 @@ helper through `TcpCatalogueResolver`.
 An absent catalogue is rejected immediately with `CATALOGUE_UNKNOWN`. There is
 no queue, automatic retry, background thread, or new runtime dependency.
 Invalid catalogues are not cached; backend failures propagate to the application.
-The helper and adapter remain isolated in `tools/poc`; no runtime changes are
+The helper and adapter remain isolated in `samples/PoC_PubSub`; no runtime changes are
 needed for this point. See [usage and policies](README.md#optional-resolution-helper).
 
 Kafka and MQTT adapters remain future optional integration modules. Metadata
@@ -91,7 +91,7 @@ exit statuses for acceptance, rejection, and configuration errors. Broker
 registration and offline validation share `TopicContract.prepare_candidate`,
 including the single-root rule. See [usage](README.md#topic-contract-manifest-and-offline-validation).
 
-All additions remain in `tools/poc`; no runtime changes are required. The
+All additions remain in `samples/PoC_PubSub`; no runtime changes are required. The
 manifest is deployment configuration, not an SDL2 wire extension. It is loaded
 once and supports one topic per broker in this PoC. General code generation,
 multi-topic routing, and registry administration are outside this first step.

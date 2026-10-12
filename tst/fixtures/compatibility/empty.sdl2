@@ -1,3 +1,1 @@
-SDL2
-message Root {
-}
+SDL2|Root{}

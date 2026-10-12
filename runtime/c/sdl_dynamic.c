@@ -250,8 +250,8 @@ static char *token(Lexer *l) {
    if (l->p == l->end)
       return NULL;
    start = l->p++;
-   if (strchr("{}[]:;=(),", *start) == NULL)
-      while (l->p < l->end && *l->p != ' ' && *l->p != '\n' && strchr("{}[]:;=(),", *l->p) == NULL)
+   if (strchr("{}[]:;=(),|#?*+@", *start) == NULL)
+      while (l->p < l->end && *l->p != ' ' && *l->p != '\n' && strchr("{}[]:;=(),|#?*+@", *l->p) == NULL)
          ++l->p;
    n = (size_t)(l->p - start);
    out = (char *)malloc(n + 1);
@@ -301,40 +301,6 @@ static bool identifier(const char *s) {
    }
    return true;
 }
-static bool parse_wire(Lexer *l, SdlDynamicFieldDesc *f) {
-   const char *saved = l->p;
-   char *t = token(l);
-   if (!t || strcmp(t, "wire")) { free(t); l->p = saved; return true; }
-   free(t);
-   if (!expect(l, "(")) return false;
-   for (;;) {
-      unsigned flag = 0; uint32_t n = 0;
-      t = token(l);
-      if (!t) return false;
-      if (!strcmp(t,"bits")) flag=1;
-      else if (!strcmp(t,"encoding")) flag=2;
-      else if (!strcmp(t,"align")) flag=4;
-      else if (!strcmp(t,"pad_after")) flag=8;
-      free(t);
-      if (!flag || (f->wire_flags & flag) || !expect(l,"=")) return false;
-      f->wire_flags |= flag;
-      if (flag == 2) {
-         t=token(l); if (!t) return false;
-         if (!strcmp(t,"varint")) f->wire_encoding=1;
-         else if (!strcmp(t,"zigzag")) f->wire_encoding=2;
-         free(t); if (!f->wire_encoding) return false;
-      } else {
-         if (!number(l,&n)) return false;
-         if (flag==1) f->wire_bits=n;
-         else if(flag==4) f->wire_align=n;
-         else f->wire_pad=n;
-      }
-      t=token(l); if(!t) return false;
-      if(!strcmp(t,")")){free(t);return true;}
-      if(strcmp(t,",")){free(t);return false;}
-      free(t);
-   }
-}
 static bool valid_wire(const SdlDynamicSchema *s, const SdlDynamicFieldDesc *f) {
    unsigned width=0;
    const char *t=f->type_name;
@@ -349,21 +315,40 @@ static bool valid_wire(const SdlDynamicSchema *s, const SdlDynamicFieldDesc *f) 
    if((f->wire_flags&4)&&(!f->wire_align||f->wire_align>256||(f->wire_align&(f->wire_align-1)))) return false;
    return f->wire_pad<=65535;
 }
+static bool parse_compact_wire(Lexer *l, SdlDynamicFieldDesc *f) {
+   if (l->p == l->end || *l->p != '@') return true;
+   ++l->p;
+   for (;;) {
+      char *option=token(l);unsigned flag;uint32_t n=0;
+      if(!option)return false;
+      flag=option[0]=='b'?1:option[0]=='v'||option[0]=='z'?2:option[0]=='a'?4:option[0]=='p'?8:0;
+      if(!flag||(f->wire_flags&flag)){free(option);return false;}
+      if(flag==2){if(option[1]){free(option);return false;}f->wire_encoding=option[0]=='v'?1:2;}
+      else {Lexer digits={option+1,option+strlen(option)};if(!number(&digits,&n)){free(option);return false;}if(flag==1)f->wire_bits=n;else if(flag==4)f->wire_align=n;else f->wire_pad=n;}
+      free(option);f->wire_flags|=flag;
+      if(l->p==l->end||*l->p!=',')return true;
+      ++l->p;
+   }
+}
+
 static bool parse_descriptor(const uint8_t *data, size_t size, SdlDynamicSchema *schema) {
    Lexer l;
    size_t i, j;
    uint8_t *dependency_states = NULL;
    memset(schema, 0, sizeof(*schema));
-   if (!data || size < 5 || size > SDL_DYNAMIC_MAX_DESCRIPTOR || memcmp(data, "SDL2\n", 5) ||
-       data[size - 1] != '\n' || memchr(data, 0, size) || !sdl_wire_valid_utf8(data, size))
+   if (!data || size < 5 || size > SDL_DYNAMIC_MAX_DESCRIPTOR || memcmp(data, "SDL2|", 5) || memchr(data, 0, size) || !sdl_wire_valid_utf8(data, size))
       return false;
+   for(i=0;i<size;++i) if(data[i]==' '||data[i]=='\n'||data[i]=='\r'||data[i]=='\t')return false;
    l.p = (const char *)data + 5;
    l.end = (const char *)data + size;
    for (;;) {
       char *kind = token(&l), *name;
       if (!kind)
          break;
-      name = token(&l);
+      {
+         if(!strcmp(kind,"#")){free(kind);kind=malloc(5);if(!kind)goto fail;memcpy(kind,"enum",5);name=token(&l);}
+         else{name=kind;kind=malloc(8);if(!kind){free(name);goto fail;}memcpy(kind,"message",8);}
+      }
       if (!identifier(name) || is_builtin_type(name) || !expect(&l, "{")) {
          free(kind);
          free(name);
@@ -409,18 +394,18 @@ static bool parse_descriptor(const uint8_t *data, size_t size, SdlDynamicSchema 
             m->fields = fs;
             f = &fs[m->field_count++];
             memset(f, 0, sizeof(*f));
-            if (!number(&l, &f->id) || !f->id || !expect(&l, ":")) {
+            if (!number(&l, &f->id) || !f->id) {
                free(kind);
                goto fail;
             }
             t = token(&l);
-            if (t && !strcmp(t, "required"))
+            if (t && !strcmp(t, ":"))
                f->modifier = 0;
-            else if (t && !strcmp(t, "optional"))
+            else if (t && !strcmp(t,"?"))
                f->modifier = 1;
-            else if (t && !strcmp(t, "repeated"))
+            else if (t && !strcmp(t,"*"))
                f->modifier = 2;
-            else if (t && !strcmp(t, "packed"))
+            else if (t && !strcmp(t,"+"))
                f->modifier = 3;
             else {
                free(t);
@@ -428,6 +413,7 @@ static bool parse_descriptor(const uint8_t *data, size_t size, SdlDynamicSchema 
                goto fail;
             }
             free(t);
+            if(f->modifier && !expect(&l,":")){free(kind);goto fail;}
             f->type_name = token(&l);
             if (!identifier(f->type_name)) {
                free(kind);
@@ -461,8 +447,9 @@ static bool parse_descriptor(const uint8_t *data, size_t size, SdlDynamicSchema 
                   ds[f->dimension_count++] = n;
                }
             }
+            if(!expect(&l,":")){free(kind);goto fail;}
             f->name = token(&l);
-            if (!identifier(f->name) || !parse_wire(&l, f) || !expect(&l, ";") || (f->dimension_count && f->modifier)) {
+            if (!identifier(f->name) || !parse_compact_wire(&l,f) || !expect(&l, ";") || (f->dimension_count && f->modifier)) {
                free(kind);
                goto fail;
             }
@@ -544,6 +531,7 @@ static bool parse_descriptor(const uint8_t *data, size_t size, SdlDynamicSchema 
          goto fail;
       }
       free(kind);
+      if(l.p<l.end){if(!expect(&l,"|")||l.p==l.end)goto fail;}
    }
    if (!schema->message_count)
       goto fail;
@@ -1403,48 +1391,47 @@ static bool decimal_out(Writer *w, long long n) {
 static bool render_wire(const SdlDynamicFieldDesc *f, Writer *w) {
    unsigned flag; bool first=true;
    if(!f->wire_flags) return true;
-   if(!text_out(w," wire(")) return false;
+   if(!text_out(w,"@")) return false;
    for(flag=1;flag<=8;flag*=2) if(f->wire_flags&flag) {
       if(!first&&!text_out(w,",")) return false;
       first=false;
-      if(!text_out(w,flag==1?"bits=":flag==2?"encoding=":flag==4?"align=":"pad_after=")) return false;
-      if(flag==2) { if(!text_out(w,f->wire_encoding==1?"varint":"zigzag")) return false; }
+      if(!text_out(w,flag==1?"b":flag==2?"":flag==4?"a":"p")) return false;
+      if(flag==2) { if(!text_out(w,f->wire_encoding==1?"v":"z")) return false; }
       else if(!decimal_out(w,flag==1?f->wire_bits:flag==4?f->wire_align:f->wire_pad)) return false;
    }
-   return text_out(w,")");
+   return true;
 }
 static bool render_schema(const SdlDynamicSchema *s, Writer *w) {
    size_t i, j, k;
-   const char *mods[] = {"required", "optional", "repeated", "packed"};
-   if (!text_out(w, "SDL2\n"))
+   const char *mods[] = {"", "?", "*", "+"};
+   if (!text_out(w, "SDL2|"))
       return false;
    for (i = 0; i < s->message_count; ++i) {
       const SdlDynamicMessageDesc *m = &s->messages[i];
-      if (!text_out(w, "message ") || !text_out(w, m->name) || !text_out(w, " {\n"))
+      if ((i && !text_out(w,"|")) || !text_out(w, m->name) || !text_out(w, "{"))
          return false;
       for (j = 0; j < m->field_count; ++j) {
          const SdlDynamicFieldDesc *f = &m->fields[j];
-         if (!text_out(w, "  ") || !decimal_out(w, f->id) || !text_out(w, ": ") ||
-             !text_out(w, mods[f->modifier]) || !text_out(w, " ") || !text_out(w, f->type_name))
+         if (!decimal_out(w, f->id) || !text_out(w, mods[f->modifier]) || !text_out(w, ":") || !text_out(w, f->type_name))
             return false;
          for (k = 0; k < f->dimension_count; ++k)
             if (!text_out(w, "[") || !decimal_out(w, f->dimensions[k]) || !text_out(w, "]"))
                return false;
-         if (!text_out(w, " ") || !text_out(w, f->name) || !render_wire(f, w) || !text_out(w, ";\n"))
+         if (!text_out(w, ":") || !text_out(w, f->name) || !render_wire(f, w) || !text_out(w, ";"))
             return false;
       }
-      if (!text_out(w, "}\n"))
+      if (!text_out(w, "}"))
          return false;
    }
    for (i = 0; i < s->enum_count; ++i) {
       const SdlDynamicEnumDesc *e = &s->enums[i];
-      if (!text_out(w, "enum ") || !text_out(w, e->name) || !text_out(w, " {\n"))
+      if (!text_out(w, "|#") || !text_out(w, e->name) || !text_out(w, "{"))
          return false;
       for (j = 0; j < e->item_count; ++j)
-         if (!text_out(w, "  ") || !text_out(w, e->items[j].name) || !text_out(w, " = ") ||
-             !decimal_out(w, e->items[j].value) || !text_out(w, ";\n"))
+         if (!text_out(w, e->items[j].name) || !text_out(w, "=") ||
+             !decimal_out(w, e->items[j].value) || !text_out(w, ";"))
             return false;
-      if (!text_out(w, "}\n"))
+      if (!text_out(w, "}"))
          return false;
    }
    return true;

@@ -1,5 +1,1 @@
-SDL2
-message Root {
-  1: required int16 value;
-  2: required string extra;
-}
+SDL2|Root{1:int16:value;2:string:extra;}
