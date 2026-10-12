@@ -1652,6 +1652,80 @@ bool type_context_validate(const SdlContext *c, const void *data, size_t size) {
    const SdlDynamicMessageDesc *m = start_message(c, data, size, &r);
    return m && read_native_message(&c->schema, m, NULL, &r, NULL, 0) && r.offset == size;
 }
+
+/* SHA-256 compression, using unsigned modular arithmetic and byte loads. */
+static uint32_t catalogue_rotr(uint32_t x, unsigned n) {
+   return (x >> n) | (x << (32 - n));
+}
+static void catalogue_block(uint32_t h[8], const uint8_t block[64]) {
+   static const uint32_t k[64] = {
+      0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
+      0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U, 0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U,
+      0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU, 0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU,
+      0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U, 0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U,
+      0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U, 0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U,
+      0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U, 0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U,
+      0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U, 0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U,
+      0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U, 0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U
+   };
+   uint32_t w[64], a, b, c, d, e, f, g, v;
+   size_t i;
+   for (i = 0; i < 16; ++i)
+      w[i] = sdl_wire_read_u32(block + 4 * i);
+   for (i = 16; i < 64; ++i) {
+      uint32_t x = w[i - 15], y = w[i - 2];
+      w[i] = w[i - 16] + (catalogue_rotr(x, 7) ^ catalogue_rotr(x, 18) ^ (x >> 3)) +
+             w[i - 7] + (catalogue_rotr(y, 17) ^ catalogue_rotr(y, 19) ^ (y >> 10));
+   }
+   a = h[0]; b = h[1]; c = h[2]; d = h[3];
+   e = h[4]; f = h[5]; g = h[6]; v = h[7];
+   for (i = 0; i < 64; ++i) {
+      uint32_t t1 = v + (catalogue_rotr(e, 6) ^ catalogue_rotr(e, 11) ^ catalogue_rotr(e, 25)) +
+                    ((e & f) ^ (~e & g)) + k[i] + w[i];
+      uint32_t t2 = (catalogue_rotr(a, 2) ^ catalogue_rotr(a, 13) ^ catalogue_rotr(a, 22)) +
+                    ((a & b) ^ (a & c) ^ (b & c));
+      v = g; g = f; f = e; e = d + t1;
+      d = c; c = b; b = a; a = t1 + t2;
+   }
+   h[0] += a; h[1] += b; h[2] += c; h[3] += d;
+   h[4] += e; h[5] += f; h[6] += g; h[7] += v;
+}
+bool type_catalogue_id(const void *description, size_t size, uint32_t *id) {
+   const uint8_t *data = (const uint8_t *)description;
+   uint32_t h[8] = {
+      0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU, 0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U
+   };
+   uint8_t tail[128] = {0};
+   size_t offset = 0, remaining, padded, i;
+   uint64_t bits;
+   if (!id || (!data && size) || size > SDL_DYNAMIC_MAX_DESCRIPTOR ||
+       !sdl_wire_valid_utf8(data, size))
+      return false;
+   while (size - offset >= 64) {
+      catalogue_block(h, data + offset);
+      offset += 64;
+   }
+   remaining = size - offset;
+   if (remaining)
+      memcpy(tail, data + offset, remaining);
+   tail[remaining] = 0x80;
+   padded = remaining < 56 ? 64 : 128;
+   bits = (uint64_t)size * 8;
+   for (i = 0; i < 8; ++i)
+      tail[padded - 1 - i] = (uint8_t)(bits >> (8 * i));
+   catalogue_block(h, tail);
+   if (padded == 128)
+      catalogue_block(h, tail + 64);
+   *id = h[0];
+   return true;
+}
+size_t type_context_message_count(const SdlContext *c) {
+   return c ? c->schema.message_count : 0;
+}
+const char *type_context_message_name(const SdlContext *c, uint32_t id) {
+   return c && id && id <= c->schema.message_count ? c->schema.messages[id - 1].name : NULL;
+}
+
 uint32_t type_context_message_id(const SdlContext *c, const char *name) {
    const SdlDynamicMessageDesc *m = c ? schema_message_const(&c->schema, name) : NULL;
    return m ? (uint32_t)(m - c->schema.messages + 1) : 0;
@@ -1663,6 +1737,144 @@ static bool foreign_field_match(const SdlDynamicFieldDesc *a, const SdlDynamicFi
       (!a->dimension_count || !memcmp(a->dimensions, b->dimensions,
                                       a->dimension_count * sizeof(uint32_t)));
 }
+const char *type_compatibility_code_name(SdlCompatibilityCode code) {
+   static const char *const names[] = {"COMPATIBLE", "INVALID_PUBLISHER_CATALOGUE", "INVALID_CONSUMER_CATALOGUE", "ROOT_UNKNOWN", "TYPE_KIND_MISMATCH", "FIELD_TYPE_MISMATCH", "FIELD_DIMENSIONS_MISMATCH", "FIELD_CARDINALITY_MISMATCH", "ENUM_VALUE_UNKNOWN", "REQUIRED_FIELD_MISSING"};
+   return (unsigned)code < sizeof(names) / sizeof(names[0]) ? names[code] : "UNKNOWN";
+}
+void type_compatibility_free(SdlCompatibilityDiagnostic *d) {
+   if (!d) return;
+   free((void *)d->message); free((void *)d->path);
+   free((void *)d->publisher_type); free((void *)d->consumer_type);
+   free(d);
+}
+static bool compatibility_issue(SdlCompatibilityDiagnostic *d, SdlCompatibilityCode code,
+   const char *message, const char *path, uint32_t field_id,
+   const char *publisher_type, const char *consumer_type, int32_t enum_value) {
+   char *m = copy_string(message), *p = copy_string(path);
+   char *a = copy_string(publisher_type), *b = copy_string(consumer_type);
+   if (!m || !p || !a || !b) {
+      free(m); free(p); free(a); free(b); return false;
+   }
+   free((void *)d->message); free((void *)d->path);
+   free((void *)d->publisher_type); free((void *)d->consumer_type);
+   d->message = m; d->path = p; d->publisher_type = a; d->consumer_type = b;
+   d->code = code; d->field_id = field_id; d->enum_value = enum_value;
+   return true;
+}
+static char *compatibility_path(const char *path, const char *field) {
+   size_t n = strlen(path), m = strlen(field);
+   char *result = malloc(n + m + 2);
+   if (result) { memcpy(result, path, n); result[n] = '.'; memcpy(result + n + 1, field, m + 1); }
+   return result;
+}
+static int compatibility_kind(const SdlDynamicSchema *s, const char *name) {
+   return schema_message_const(s, name) ? 1 : schema_enum(s, name) ? 2 : 0;
+}
+static int compatibility_enum_compare(const void *a, const void *b) {
+   int32_t x = *(const int32_t *)a, y = *(const int32_t *)b;
+   return (x > y) - (x < y);
+}
+static bool compatibility_visit(const SdlDynamicSchema *p, const SdlDynamicSchema *c,
+   const char *name, const char *message, const char *path, uint32_t field_id,
+   bool required, uint8_t *memo, SdlCompatibilityDiagnostic *d) {
+   const SdlDynamicMessageDesc *pm = schema_message_const(p, name), *cm = schema_message_const(c, name);
+   const SdlDynamicEnumDesc *pe = schema_enum(p, name);
+   size_t i, j = 0, index;
+   if (compatibility_kind(p, name) != compatibility_kind(c, name))
+      return compatibility_issue(d, SDL_COMPAT_TYPE_KIND_MISMATCH, message, path, field_id, name, name, 0);
+   if (!pm && !pe) return true;
+   index = pm ? (size_t)(pm - p->messages) : p->message_count + (size_t)(pe - p->enums);
+   if (memo[index]) return true;
+   if (pe) {
+      const SdlDynamicEnumDesc *ce = schema_enum(c, name);
+      int32_t *accepted = malloc(ce->item_count * sizeof(*accepted));
+      if (!accepted) return false;
+      for (i = 0; i < ce->item_count; ++i) accepted[i] = ce->items[i].value;
+      qsort(accepted, ce->item_count, sizeof(*accepted), compatibility_enum_compare);
+      for (i = 0; i < pe->item_count; ++i) {
+         if (!bsearch(&pe->items[i].value, accepted, ce->item_count, sizeof(*accepted), compatibility_enum_compare)) {
+            bool ok = compatibility_issue(d, SDL_COMPAT_ENUM_VALUE_UNKNOWN, message, path, field_id,
+                                          name, name, pe->items[i].value);
+            free(accepted); return ok;
+         }
+      }
+      free(accepted);
+   } else {
+      for (i = 0; i < pm->field_count; ++i) {
+         const SdlDynamicFieldDesc *a = &pm->fields[i], *b;
+         SdlCompatibilityCode code = SDL_COMPAT_COMPATIBLE;
+         char *at;
+         bool ok;
+         while (j < cm->field_count && cm->fields[j].id < a->id) ++j;
+         if (j == cm->field_count || cm->fields[j].id != a->id) continue;
+         b = &cm->fields[j];
+         at = compatibility_path(path, a->name);
+         if (!at) return false;
+         if (strcmp(a->type_name, b->type_name)) code = SDL_COMPAT_FIELD_TYPE_MISMATCH;
+         else if (a->dimension_count != b->dimension_count ||
+                  (a->dimension_count && memcmp(a->dimensions, b->dimensions, a->dimension_count * sizeof(uint32_t))))
+            code = SDL_COMPAT_FIELD_DIMENSIONS_MISMATCH;
+         else if (!(a->modifier == b->modifier || (a->modifier >= 2 && b->modifier >= 2)))
+            code = SDL_COMPAT_FIELD_CARDINALITY_MISMATCH;
+         ok = code != SDL_COMPAT_COMPATIBLE ?
+            compatibility_issue(d, code, message, at, a->id, a->type_name, b->type_name, 0) :
+            compatibility_visit(p, c, a->type_name, message, at, a->id, required, memo, d);
+         free(at);
+         if (!ok || d->code != SDL_COMPAT_COMPATIBLE) return ok;
+      }
+      if (required) {
+         j = 0;
+         for (i = 0; i < cm->field_count; ++i) {
+            const SdlDynamicFieldDesc *b = &cm->fields[i];
+            while (j < pm->field_count && pm->fields[j].id < b->id) ++j;
+            if (b->modifier == 0 && (j == pm->field_count || pm->fields[j].id != b->id)) {
+               char *at = compatibility_path(path, b->name);
+               bool ok;
+               if (!at) return false;
+               ok = compatibility_issue(d, SDL_COMPAT_REQUIRED_FIELD_MISSING, message, at, b->id, "", b->type_name, 0);
+               free(at); return ok;
+            }
+         }
+      }
+   }
+   memo[index] = 1;
+   return true;
+}
+SdlCompatibilityDiagnostic *type_compare_catalogues(
+   const void *publisher, size_t pn, const void *consumer, size_t cn,
+   const char *root, bool require_required) {
+   SdlDynamicSchema p = {0}, c = {0};
+   SdlCompatibilityDiagnostic *d = calloc(1, sizeof(*d));
+   uint8_t *memo = NULL;
+   size_t i, count;
+   bool ok = true;
+   if (!d) return NULL;
+   if (!compatibility_issue(d, SDL_COMPAT_COMPATIBLE, "", "", 0, "", "", 0)) { ok = false; goto done; }
+   if (!publisher || !parse_descriptor(publisher, pn, &p)) {
+      d->code = SDL_COMPAT_INVALID_PUBLISHER_CATALOGUE; goto done;
+   }
+   if (!consumer || !parse_descriptor(consumer, cn, &c)) {
+      d->code = SDL_COMPAT_INVALID_CONSUMER_CATALOGUE; goto done;
+   }
+   memo = calloc(p.message_count + p.enum_count, 1);
+   if (!memo) { ok = false; goto done; }
+   count = root ? 1 : p.message_count;
+   for (i = 0; i < count; ++i) {
+      const char *name = root ? root : p.messages[i].name;
+      if (!schema_message_const(&p, name) || !compatibility_kind(&c, name)) {
+         ok = compatibility_issue(d, SDL_COMPAT_ROOT_UNKNOWN, name, name, 0,
+            schema_message_const(&p, name) ? name : "", compatibility_kind(&c, name) ? name : "", 0);
+      } else {
+         ok = compatibility_visit(&p, &c, name, name, name, 0, require_required, memo, d);
+      }
+      if (!ok || d->code != SDL_COMPAT_COMPATIBLE) break;
+   }
+done:
+   free(memo); schema_clear(&p); schema_clear(&c);
+   if (!ok) { type_compatibility_free(d); return NULL; }
+   return d;
+}
+
 bool type_context_compatible(const SdlContext *remote, const SdlContext *local) {
    size_t i, j, k;
    if (!remote || !local)
@@ -1755,4 +1967,21 @@ uint8_t *type_context_direct_layouts(const SdlContext *remote, const SdlContext 
    }
    free(memo);
    return flags;
+}
+
+/* Fixed, transport-independent S2PS/2 profile; SDL2 codecs remain independent. */
+void *type_envelope_pack(uint32_t id, const void *payload, size_t size, size_t *out_size) {
+   unsigned char *out;
+   if (!payload || !size || !out_size || size > SIZE_MAX - SDL_ENVELOPE_HEADER_SIZE) return NULL;
+   out = malloc(size + SDL_ENVELOPE_HEADER_SIZE); if (!out) return NULL;
+   memcpy(out, "S2PS\002", 5);
+   out[5]=(unsigned char)(id>>24);out[6]=(unsigned char)(id>>16);
+   out[7]=(unsigned char)(id>>8);out[8]=(unsigned char)id;
+   memcpy(out+9,payload,size);*out_size=size+9;return out;
+}
+bool type_envelope_unpack(const void *data,size_t size,uint32_t *id,const void **payload,size_t *payload_size) {
+   const unsigned char *p=data;
+   if (!p || size<=9 || !id || !payload || !payload_size || memcmp(p,"S2PS\002",5)) return false;
+   *id=((uint32_t)p[5]<<24)|((uint32_t)p[6]<<16)|((uint32_t)p[7]<<8)|p[8];
+   *payload=p+9;*payload_size=size-9;return true;
 }

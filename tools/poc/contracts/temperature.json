@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "topic": "usine/temperature/v1",
+  "root_type": "Temperature",
+  "baseline_catalogue": "temperature_v1.sdl2",
+  "compatibility": "readable-by-baseline-consumer",
+  "require_required": false
+}

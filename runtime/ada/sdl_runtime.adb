@@ -9,6 +9,25 @@ package body SDL_Runtime is
    use type Interfaces.C.size_t;
    function C_Prepare (R : System.Address; RN : Interfaces.C.size_t; L : System.Address; LN : Interfaces.C.size_t) return System.Address
      with Import, Convention => C, External_Name => "sdl_ada_prepare";
+   function C_Catalogue_Id (P : System.Address; N : Interfaces.C.size_t; Id : out Unsigned_32) return Interfaces.C.int
+     with Import, Convention => C, External_Name => "sdl_ada_catalogue_id";
+   function C_Message_Count (P : System.Address) return Interfaces.C.size_t
+     with Import, Convention => C, External_Name => "sdl_ada_message_count";
+   function C_Message_Name (P : System.Address; Id : Unsigned_32) return Interfaces.C.Strings.chars_ptr
+     with Import, Convention => C, External_Name => "sdl_ada_message_name";
+   function C_Compare (P : System.Address; PN : Interfaces.C.size_t; C : System.Address; CN : Interfaces.C.size_t;
+                       Root : Interfaces.C.char_array; Required : Interfaces.C.int) return System.Address
+     with Import, Convention => C, External_Name => "sdl_ada_compare";
+   function C_Diagnostic_Code (D : System.Address) return Interfaces.C.int
+     with Import, Convention => C, External_Name => "sdl_ada_diagnostic_code";
+   function C_Diagnostic_Text (D : System.Address; Field : Interfaces.C.int) return Interfaces.C.Strings.chars_ptr
+     with Import, Convention => C, External_Name => "sdl_ada_diagnostic_text";
+   function C_Diagnostic_Field (D : System.Address) return Unsigned_32
+     with Import, Convention => C, External_Name => "sdl_ada_diagnostic_field";
+   function C_Diagnostic_Enum (D : System.Address) return Int32
+     with Import, Convention => C, External_Name => "sdl_ada_diagnostic_enum";
+   procedure C_Diagnostic_Free (D : System.Address)
+     with Import, Convention => C, External_Name => "type_compatibility_free";
    procedure C_Retain (P : System.Address) with Import, Convention => C, External_Name => "sdl_ada_retain";
    procedure C_Release (P : System.Address) with Import, Convention => C, External_Name => "sdl_ada_release";
    function C_Id (P : System.Address; N : Interfaces.C.char_array) return Unsigned_32 with Import, Convention => C, External_Name => "sdl_ada_id";
@@ -52,6 +71,65 @@ package body SDL_Runtime is
          Result.Handle := C_Prepare (Remote'Address, Remote'Length, Local'Address, Local'Length);
          if Result.Handle = System.Null_Address then raise Codec_Error with "invalid or incompatible catalogue"; end if;
       end return;
+   end;
+   function Is_Compatible (D : Compatibility_Diagnostic) return Boolean is
+   begin return D.Code = COMPATIBLE; end;
+   function Compare_Catalogues (Publisher, Consumer : String; Root : String := "";
+                                Require_Required : Boolean := False) return Compatibility_Diagnostic is
+      Handle : System.Address := C_Compare (Publisher'Address, Publisher'Length,
+         Consumer'Address, Consumer'Length, Interfaces.C.To_C (Root), Boolean'Pos (Require_Required));
+      Result : Compatibility_Diagnostic;
+   begin
+      if Handle = System.Null_Address then raise Codec_Error with "compatibility allocation failed"; end if;
+      Result.Code := Compatibility_Code'Val (C_Diagnostic_Code (Handle));
+      Result.Message := To_Unbounded_String (Interfaces.C.Strings.Value (C_Diagnostic_Text (Handle, 0)));
+      Result.Path := To_Unbounded_String (Interfaces.C.Strings.Value (C_Diagnostic_Text (Handle, 1)));
+      Result.Publisher_Type := To_Unbounded_String (Interfaces.C.Strings.Value (C_Diagnostic_Text (Handle, 2)));
+      Result.Consumer_Type := To_Unbounded_String (Interfaces.C.Strings.Value (C_Diagnostic_Text (Handle, 3)));
+      Result.Field_Id := C_Diagnostic_Field (Handle); Result.Enum_Value := C_Diagnostic_Enum (Handle);
+      C_Diagnostic_Free (Handle); Handle := System.Null_Address;
+      return Result;
+   exception when others =>
+      if Handle /= System.Null_Address then C_Diagnostic_Free (Handle); end if;
+      raise;
+   end;
+   function Pack_Envelope (Catalogue : Unsigned_32; Payload : Bytes) return Bytes is
+      Result : Bytes (1 .. Payload'Length + Envelope_Header_Size);
+   begin
+      if Payload'Length = 0 then raise Codec_Error with "empty envelope payload"; end if;
+      Result (1 .. 5) := (83, 50, 80, 83, 2);
+      for I in 0 .. 3 loop
+         Result (6 + I) := Unsigned_8 (Shift_Right (Catalogue, 24 - I * 8) and 255);
+      end loop;
+      Result (10 .. Result'Last) := Payload;
+      return Result;
+   end;
+   function Unpack_Envelope (Data : Bytes) return Envelope is
+      F : constant Positive := Data'First;
+      Id : Unsigned_32 := 0;
+   begin
+      if Data'Length <= 9 or else Data (F .. F + 4) /= Bytes'(83, 50, 80, 83, 2) then
+         raise Codec_Error with "unsupported envelope or empty payload";
+      end if;
+      for I in 5 .. 8 loop Id := Shift_Left (Id, 8) or Unsigned_32 (Data (F + I)); end loop;
+      return (Payload_Size => Data'Length - 9, Catalogue => Id, Payload => Data (F + 9 .. Data'Last));
+   end;
+   function Catalogue_Id (Description : String) return Unsigned_32 is
+      Id : Unsigned_32;
+   begin
+      if C_Catalogue_Id (Description'Address, Description'Length, Id) = 0 then
+         raise Codec_Error with "invalid catalogue identity input";
+      end if;
+      return Id;
+   end;
+   function Message_Count (C : Context) return Natural is
+   begin return Natural (C_Message_Count (C.Handle)); end;
+   function Message_Name (C : Context; Id : Unsigned_32) return String is
+      Name : constant Interfaces.C.Strings.chars_ptr := C_Message_Name (C.Handle, Id);
+      use type Interfaces.C.Strings.chars_ptr;
+   begin
+      if Name = Interfaces.C.Strings.Null_Ptr then raise Codec_Error with "unknown message ID"; end if;
+      return Interfaces.C.Strings.Value (Name);
    end;
    function Message_Id (C : Context; Name : String) return Unsigned_32 is
       Id : constant Unsigned_32 := C_Id (C.Handle, Interfaces.C.To_C (Name));

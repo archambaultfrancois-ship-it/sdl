@@ -1,4 +1,36 @@
 function run_tests()
+for id=[uint32(0),uint32(hex2dec('89abcdef')),uint32(4294967295)]
+ wire=sdl_matlab_runtime('pack_envelope',id,uint8([1 0]));
+ [received,payload]=sdl_matlab_runtime('unpack_envelope',wire);
+ assert(received==id&&isequal(payload,uint8([1 0]))&&numel(wire)==11);
+ assert(isequal(wire(1:5),[uint8('S2PS') uint8(2)]));
+ assert(isequal(wire(6:9),uint8([bitshift(id,-24),bitand(bitshift(id,-16),255),bitand(bitshift(id,-8),255),bitand(id,255)])));
+ for n=0:9,must_fail(@() sdl_matlab_runtime('unpack_envelope',wire(1:n)));end
+ for i=1:5,bad=wire;bad(i)=bitxor(bad(i),uint8(1));must_fail(@() sdl_matlab_runtime('unpack_envelope',bad));end
+end
+must_fail(@() sdl_matlab_runtime('pack_envelope',uint32(0),uint8([])));
+f=fopen('tst/fixtures/compatibility/cases.tsv','r');
+while true
+ line=fgetl(f);if ~ischar(line),break;end
+ cols=strsplit(line,char(9),'CollapseDelimiters',false);root=cols{4};if strcmp(root,'-'),root='';end
+ d=sdl_matlab_runtime('compare_catalogues',fileread(['tst/fixtures/compatibility/' cols{2}]),fileread(['tst/fixtures/compatibility/' cols{3}]),root,strcmp(cols{5},'1'));
+ for i=[7,8,10,11],if strcmp(cols{i},'-'),cols{i}='';end,end
+ assert(strcmp(d.code,cols{6}),cols{1});assert(strcmp(d.message,cols{7}));assert(strcmp(d.path,cols{8}));
+ assert(d.field_id==uint32(str2double(cols{9})));assert(strcmp(d.publisher_type,cols{10}));assert(strcmp(d.consumer_type,cols{11}));
+ assert(d.enum_value==int32(str2double(cols{12})));assert(d.compatible==strcmp(cols{6},'COMPATIBLE'));
+end
+fclose(f);
+f=fopen('tst/fixtures/catalogue_ids.tsv','r');
+while true
+ line=fgetl(f);if ~ischar(line),break;end
+ tab=find(line==char(9),1);raw=line(1:tab-1);data=uint8(sscanf(raw,'%2x'));expected=uint32(hex2dec(line(tab+1:end)));
+ assert(sdl_matlab_runtime('catalogue_id',data)==expected);
+end
+fclose(f);
+must_fail(@() sdl_matlab_runtime('catalogue_id',uint8(255)));
+namesctx=sdl_matlab_runtime('prepare',sdl_matlab_runtime('description',{'Packet','EmptyMessage'}));
+assert(isequal(sdl_matlab_runtime('message_names',namesctx),{'EmptyMessage','Packet'}));
+assert(strcmp(Packet('name'),'Packet'));
 cases = CodecCases('new');
 % Enum defaults must work in MATLAB R2017a, including fixed arrays.
 defaults = State();

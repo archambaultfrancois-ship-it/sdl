@@ -203,6 +203,10 @@ pub struct Context {
     sizes: BTreeMap<String, Option<usize>>,
     fixed_matches: HashSet<String>,
 }
+impl Context {
+    /// Logical names in wire ID order, excluding enums.
+    pub fn message_names(&self) -> &[String] { &self.names }
+}
 fn merge(catalogues: &[&str]) -> Result<SchemaDesc, CodecError> {
     let mut result = SchemaDesc {
         messages: Default::default(),

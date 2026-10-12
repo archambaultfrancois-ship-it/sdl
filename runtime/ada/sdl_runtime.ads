@@ -19,11 +19,45 @@ package SDL_Runtime is
       Re, Im : Float64 := 0.0;
    end record;
    type Bytes is array (Positive range <>) of Interfaces.Unsigned_8;
+   Envelope_Header_Size : constant := 9;
+   -- Optional S2PS/2 wrapping; payload remains opaque and must be nonempty.
+   function Pack_Envelope (Catalogue : Interfaces.Unsigned_32; Payload : Bytes) return Bytes;
+   type Envelope (Payload_Size : Natural) is record
+      Catalogue : Interfaces.Unsigned_32;
+      Payload : Bytes (1 .. Payload_Size);
+   end record;
+   function Unpack_Envelope (Data : Bytes) return Envelope;
    package Byte_Vectors is new Ada.Containers.Vectors (Positive, Interfaces.Unsigned_8, Interfaces."=");
    subtype Buffer is Byte_Vectors.Vector;
+   type Compatibility_Code is (
+      COMPATIBLE,
+      INVALID_PUBLISHER_CATALOGUE,
+      INVALID_CONSUMER_CATALOGUE,
+      ROOT_UNKNOWN,
+      TYPE_KIND_MISMATCH,
+      FIELD_TYPE_MISMATCH,
+      FIELD_DIMENSIONS_MISMATCH,
+      FIELD_CARDINALITY_MISMATCH,
+      ENUM_VALUE_UNKNOWN,
+      REQUIRED_FIELD_MISSING);
+   type Compatibility_Diagnostic is record
+      Code : Compatibility_Code := COMPATIBLE;
+      Message, Path, Publisher_Type, Consumer_Type : Text;
+      Field_Id : Interfaces.Unsigned_32 := 0;
+      Enum_Value : Interfaces.Integer_32 := 0;
+   end record;
+   function Is_Compatible (D : Compatibility_Diagnostic) return Boolean;
+   -- Consumer reads publisher; empty Root selects all publisher messages.
+   function Compare_Catalogues (Publisher, Consumer : String; Root : String := "";
+                                Require_Required : Boolean := False) return Compatibility_Diagnostic;
    type Context is new Ada.Finalization.Controlled with private;
    overriding procedure Adjust (C : in out Context);
    overriding procedure Finalize (C : in out Context);
+   -- Exact UTF-8 identity: first 32 SHA-256 bits, without normalization.
+   function Catalogue_Id (Description : String) return Interfaces.Unsigned_32;
+   function Message_Count (C : Context) return Natural;
+   -- Message IDs are 1-based. Enums are excluded.
+   function Message_Name (C : Context; Id : Interfaces.Unsigned_32) return String;
    function Prepare (Remote, Local : String; Use_Direct : Boolean := True) return Context;
    function Message_Id (C : Context; Name : String) return Interfaces.Unsigned_32;
    procedure Check_Encode (C : Context; Name : String);

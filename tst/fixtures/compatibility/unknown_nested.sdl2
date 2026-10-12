@@ -1,0 +1,8 @@
+SDL2
+message Child {
+  7: required int16 value;
+}
+message Root {
+  1: required int16 value;
+  2: required Child extra;
+}

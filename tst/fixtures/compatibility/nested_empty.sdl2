@@ -1,0 +1,6 @@
+SDL2
+message Child {
+}
+message Root {
+  1: required Child child;
+}

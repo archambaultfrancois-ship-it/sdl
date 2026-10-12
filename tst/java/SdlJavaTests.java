@@ -164,7 +164,51 @@ public final class SdlJavaTests {
       }
       System.out.println("Java packed independent wire oracles, raw float bits, truncations and schema evolution passed.");
    }
+   private static void envelopeProfile() {
+      for (long id : new long[]{0,0x89abcdefL,0xffffffffL}) {
+         byte[] wire=SdlCodec.packEnvelope(id,new byte[]{1,0});
+         SdlCodec.Envelope e=SdlCodec.unpackEnvelope(wire);
+         if(e.catalogueId!=id || !Arrays.equals(e.payload,new byte[]{1,0}) || wire.length!=11 || (SdlCodec.getInt(wire,5)&0xffffffffL)!=id) throw new AssertionError("envelope");
+         for(int n=0;n<=9;n++) {
+            try {SdlCodec.unpackEnvelope(Arrays.copyOf(wire,n));throw new AssertionError("truncation");}
+            catch(SdlCodec.CodecException expected) {}
+         }
+         for(int i=0;i<5;i++) {
+            wire[i]^=1;
+            try {SdlCodec.unpackEnvelope(wire);throw new AssertionError("header");}
+            catch(SdlCodec.CodecException expected) {}
+            wire[i]^=1;
+         }
+      }
+      try {SdlCodec.packEnvelope(0,new byte[0]);throw new AssertionError("empty");} catch(SdlCodec.CodecException expected) {}
+      try {SdlCodec.packEnvelope(0x100000000L,new byte[]{1});throw new AssertionError("id");} catch(SdlCodec.CodecException expected) {}
+   }
    public static void main(String[] args) throws Exception {
+      envelopeProfile();
+      for (String line : Files.readAllLines(Paths.get("tst/fixtures/compatibility/cases.tsv"), StandardCharsets.UTF_8)) {
+         String[] cols=line.split("\\t");
+         String p=new String(Files.readAllBytes(Paths.get("tst/fixtures/compatibility",cols[1])),StandardCharsets.UTF_8);
+         String c=new String(Files.readAllBytes(Paths.get("tst/fixtures/compatibility",cols[2])),StandardCharsets.UTF_8);
+         SdlCodec.CompatibilityDiagnostic d=SdlCodec.compareCatalogues(p,c,cols[3].equals("-")?null:cols[3],cols[4].equals("1"));
+         for(int i=6;i<=10;i++) if(cols[i].equals("-")) cols[i]="";
+         check(d.code.equals(cols[5])); check(d.message.equals(cols[6])); check(d.path.equals(cols[7]));
+         check(d.fieldId==Long.parseLong(cols[8])); check(d.publisherType.equals(cols[9])); check(d.consumerType.equals(cols[10]));
+         check(d.enumValue==Integer.parseInt(cols[11])); check(d.compatible()==cols[5].equals("COMPATIBLE"));
+      }
+      for (String line : Files.readAllLines(Paths.get("tst/fixtures/catalogue_ids.tsv"), StandardCharsets.UTF_8)) {
+         String[] parts = line.split("\\t", -1);
+         byte[] bytes = new byte[parts[0].length() / 2];
+         for (int i = 0; i < bytes.length; i++)
+            bytes[i] = (byte)Integer.parseInt(parts[0].substring(2*i, 2*i+2), 16);
+         check(SdlCodec.catalogueId(new String(bytes, StandardCharsets.UTF_8)) == Long.parseLong(parts[1], 16));
+      }
+      invalid(new Action(){public void run(){SdlCodec.catalogueId("\ud800");}});
+      check(SdlCodec.messageName(wire_example.Packet.class).equals("Packet"));
+      SdlCodec.Context namesContext = SdlCodec.prepare(SdlCodec.description(wire_example.Packet.class, empty_message.EmptyMessage.class));
+      String[] names = SdlCodec.messageNames(namesContext);
+      check(Arrays.equals(names, new String[]{"EmptyMessage", "Packet"}));
+      names[0] = "modified";
+      check(SdlCodec.messageNames(namesContext)[0].equals("EmptyMessage"));
       final byte[] fixture = Files.readAllBytes(Paths.get("tst/fixtures/packet.bin"));
       final SdlCodec.Context ctx = SdlCodec.prepare(SdlCodec.description(wire_example.Packet.class),
                                                     wire_example.Packet.class);

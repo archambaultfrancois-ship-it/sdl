@@ -1,0 +1,7 @@
+SDL2
+message Root {
+  1: required Child child;
+}
+enum Child {
+  ONE = 1;
+}

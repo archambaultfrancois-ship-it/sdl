@@ -1,3 +1,9 @@
+mod envelope;
+pub use envelope::{pack_envelope, unpack_envelope, ENVELOPE_HEADER_SIZE};
+mod compatibility;
+pub use compatibility::{compare_catalogues, CompatibilityDiagnostic};
+mod catalogue;
+pub use catalogue::catalogue_id;
 mod dynamic;
 mod wire;
 pub use dynamic::{decode_dynamic, DynamicMessage, DynamicValue, FieldDesc};

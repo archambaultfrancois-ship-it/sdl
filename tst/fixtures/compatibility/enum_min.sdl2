@@ -1,0 +1,7 @@
+SDL2
+message Root {
+  2: required State state;
+}
+enum State {
+  MINIMUM = -2147483648;
+}

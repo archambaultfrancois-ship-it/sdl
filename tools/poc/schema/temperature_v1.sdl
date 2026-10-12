@@ -1,0 +1,4 @@
+message Temperature {
+   1: required string sensor;
+   2: required fl64 celsius;
+}

@@ -1,5 +1,7 @@
 """Small dependency-free runtime for SDL generated Python messages."""
 
+import hashlib
+from collections import namedtuple
 import re
 import struct
 import json
@@ -28,6 +30,26 @@ _BUILTIN_TYPES = frozenset(tuple(_PRIMITIVE_WIRE_SIZES) + ('string',))
 
 class CodecError(ValueError):
    """Raised when an SDL wire payload is malformed or has the wrong type."""
+
+
+ENVELOPE_HEADER_SIZE = 9
+
+def pack_envelope(catalogue_id, payload):
+   """Wrap nonempty opaque SDL2 bytes in the optional fixed S2PS/2 profile."""
+   if not isinstance(catalogue_id, int) or not 0 <= catalogue_id <= 0xffffffff:
+      raise CodecError('invalid envelope catalogue ID')
+   if not isinstance(payload, (bytes, bytearray, memoryview)) or not payload:
+      raise CodecError('empty or invalid envelope payload')
+   return b'S2PS\x02' + struct.pack('>I', catalogue_id) + bytes(payload)
+
+def unpack_envelope(data):
+   """Return (unsigned catalogue ID, payload bytes); reject other versions."""
+   if not isinstance(data, (bytes, bytearray, memoryview)):
+      raise CodecError('invalid envelope input')
+   data = bytes(data)
+   if len(data) <= ENVELOPE_HEADER_SIZE or data[:5] != b'S2PS\x02':
+      raise CodecError('unsupported envelope or empty payload')
+   return struct.unpack('>I', data[5:9])[0], data[9:]
 
 
 class Complex32:
@@ -561,6 +583,117 @@ def _classes(types):
          if isinstance(child, type) and issubclass(child, SdlMessage):
             pending.append(child)
    return result
+
+
+class CompatibilityDiagnostic(namedtuple('CompatibilityDiagnosticBase',
+      'code message path field_id publisher_type consumer_type enum_value')):
+   """First directional incompatibility. Names in paths come from the publisher."""
+   __slots__ = ()
+
+   @property
+   def compatible(self):
+      return self.code == 'COMPATIBLE'
+
+
+def compare_catalogues(publisher, consumer, root=None, *, require_required=False):
+   """Check whether consumer can read every publisher value for the selected roots.
+
+   No generated types are required. Missing local fields retain defaults unless
+   require_required is enabled. Unknown publisher fields are skipped. With no
+   root, every publisher message declaration is checked in wire ID order.
+   """
+   def diagnostic(code='COMPATIBLE', message='', path='', field_id=0,
+                  publisher_type='', consumer_type='', enum_value=0):
+      return CompatibilityDiagnostic(code, message, path, field_id,
+         publisher_type, consumer_type, enum_value)
+
+   try:
+      pm, pe = _parse_description(publisher)
+   except CodecError:
+      return diagnostic('INVALID_PUBLISHER_CATALOGUE')
+   try:
+      cm, ce = _parse_description(consumer)
+   except CodecError:
+      return diagnostic('INVALID_CONSUMER_CATALOGUE')
+   checked = set()
+
+   def kind(name, messages, enums):
+      return 'message' if name in messages else 'enum' if name in enums else 'primitive'
+
+   def visit(name, message, path, field_id):
+      if kind(name, pm, pe) != kind(name, cm, ce):
+         return diagnostic('TYPE_KIND_MISMATCH', message, path, field_id, name, name)
+      if name in checked:
+         return diagnostic()
+      if name in pe:
+         for value in pe[name]:
+            if value not in ce[name]:
+               return diagnostic('ENUM_VALUE_UNKNOWN', message, path, field_id, name, name, value)
+      elif name in pm:
+         local = {f['id']: f for f in cm[name]}
+         for field in pm[name]:
+            other = local.get(field['id'])
+            if other is None:
+               continue
+            at = path + '.' + field['name']
+            args = (message, at, field['id'], field['type'], other['type'])
+            if field['type'] != other['type']:
+               return diagnostic('FIELD_TYPE_MISMATCH', *args)
+            if field['dimensions'] != other['dimensions']:
+               return diagnostic('FIELD_DIMENSIONS_MISMATCH', *args)
+            if _cardinality(field['modifier']) != _cardinality(other['modifier']):
+               return diagnostic('FIELD_CARDINALITY_MISMATCH', *args)
+            result = visit(field['type'], message, at, field['id'])
+            if not result.compatible:
+               return result
+         if require_required:
+            ids = {f['id'] for f in pm[name]}
+            for field in cm[name]:
+               if field['modifier'] == 'required' and field['id'] not in ids:
+                  return diagnostic('REQUIRED_FIELD_MISSING', message,
+                     path + '.' + field['name'], field['id'], '', field['type'])
+      checked.add(name)
+      return diagnostic()
+
+   for name in ([root] if root is not None else sorted(pm, key=lambda n: n.encode('utf-8'))):
+      if name not in pm or name not in cm and name not in ce:
+         return diagnostic('ROOT_UNKNOWN', name, name, 0,
+            name if name in pm else '', name if name in cm or name in ce else '')
+      result = visit(name, name, name, 0)
+      if not result.compatible:
+         return result
+   return diagnostic()
+
+
+def catalogue_id(text):
+   """First 32 SHA-256 bits of exact UTF-8 text; no parsing or normalization.
+
+   Use description() output for canonical identity. Collisions must be checked
+   by comparing full catalogues in the registry that owns this short ID.
+   """
+   try:
+      data = text.encode('utf-8') if isinstance(text, str) else text
+      if not isinstance(data, bytes) or len(data) > _MAX_DESCRIPTOR_SIZE:
+         raise CodecError('invalid catalogue identity input')
+      data.decode('utf-8')
+   except UnicodeError as error:
+      raise CodecError('invalid catalogue identity UTF-8') from error
+   return int.from_bytes(hashlib.sha256(data).digest()[:4], 'big')
+
+
+def message_name(message):
+   """Return the logical SDL name of a generated message instance or class."""
+   cls = message if isinstance(message, type) else type(message)
+   if not issubclass(cls, SdlMessage) or not isinstance(cls._SDL_NAME, str):
+      raise CodecError('expected generated SDL message')
+   return cls._SDL_NAME
+
+
+def message_names(context):
+   """Return message names in wire ID order; enums are excluded."""
+   if not isinstance(context, Context):
+      raise CodecError('expected prepared context')
+   return context.names
 
 
 def description(types):

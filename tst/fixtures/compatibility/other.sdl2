@@ -1,0 +1,4 @@
+SDL2
+message Other {
+  1: required int16 value;
+}

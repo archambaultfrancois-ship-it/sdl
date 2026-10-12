@@ -1,0 +1,5 @@
+SDL2
+message Root {
+  1: required int16 value;
+  2: required string extra;
+}

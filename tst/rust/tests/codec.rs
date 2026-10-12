@@ -1,12 +1,48 @@
 use sdl_runtime::{
     decode, decode_any, decode_dynamic, description, encode, prepare, Complex32, DynamicValue,
-    SdlMessage,
+    SdlMessage, catalogue_id, compare_catalogues,
 };
 use sdl_schema_tests::codec_cases::{CodecCases, EnumRecord, EnumRecordBatch, State};
 use sdl_schema_tests::empty_message::EmptyMessage;
 use sdl_schema_tests::schema::{FixedBoard, FixedItem, FixedRow, RootPayload, VarItem};
 use sdl_schema_tests::wire_example::Packet;
 const FIXTURE: &[u8] = include_bytes!("../../fixtures/packet.bin");
+
+#[test]
+fn directional_compatibility() {
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/compatibility");
+    for line in include_str!("../../fixtures/compatibility/cases.tsv").lines() {
+        let columns: Vec<_> = line.split('\t').collect();
+        let p = std::fs::read_to_string(folder.join(columns[1])).unwrap();
+        let c = std::fs::read_to_string(folder.join(columns[2])).unwrap();
+        let d = compare_catalogues(&p, &c, if columns[3] == "-" { None } else { Some(columns[3]) }, columns[4] == "1");
+        let text = |i: usize| if columns[i] == "-" { "" } else { columns[i] };
+        assert_eq!(d.code, columns[5], "{}", columns[0]);
+        assert_eq!(d.message, text(6)); assert_eq!(d.path, text(7));
+        assert_eq!(d.field_id, columns[8].parse::<u32>().unwrap());
+        assert_eq!(d.publisher_type, text(9)); assert_eq!(d.consumer_type, text(10));
+        assert_eq!(d.enum_value, columns[11].parse::<i32>().unwrap());
+        assert_eq!(d.compatible(), columns[5] == "COMPATIBLE");
+    }
+}
+
+#[test]
+fn catalogue_api() {
+    for line in include_str!("../../fixtures/catalogue_ids.tsv").lines() {
+        let (hex, expected) = line.split_once('\t').unwrap();
+        let bytes: Vec<u8> = (0..hex.len()).step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i+2], 16).unwrap()).collect();
+        assert_eq!(catalogue_id(std::str::from_utf8(&bytes).unwrap()).unwrap(),
+                   u32::from_str_radix(expected, 16).unwrap());
+    }
+    assert!(catalogue_id(&"a".repeat(1024 * 1024 + 1)).is_err());
+    let types = [Packet::type_info(), EmptyMessage::type_info()];
+    let text = description(&types).unwrap();
+    assert_eq!(text, description(&[types[1], types[0]]).unwrap());
+    let ctx = prepare(&text, &[]).unwrap();
+    assert_eq!(ctx.message_names(), &["EmptyMessage", "Packet"]);
+    assert_eq!(Packet::NAME, "Packet");
+}
 
 #[test]
 fn fixture_and_dynamic() {
@@ -508,4 +544,18 @@ fn packed_complex_bulk_bits_bounds_and_unaligned_input() {
     for len in 1..16 {
         assert_eq!(Complex64::decode_fixed_sequence(&vec![0; len]), Err(CodecError::Truncated));
     }
+}
+
+#[test]
+fn envelope_profile() {
+    use sdl_runtime::{pack_envelope, unpack_envelope};
+    for id in [0, 0x89abcdef, u32::MAX] {
+        let wire = pack_envelope(id, &[1,0]).unwrap();
+        assert_eq!(&wire[..5], b"S2PS\x02");
+        assert_eq!(&wire[5..9], &id.to_be_bytes());
+        assert_eq!(unpack_envelope(&wire).unwrap(), (id, &[1,0][..]));
+        for n in 0..=9 { assert!(unpack_envelope(&wire[..n]).is_err()); }
+        for i in 0..5 { let mut bad=wire.clone();bad[i]^=1;assert!(unpack_envelope(&bad).is_err()); }
+    }
+    assert!(pack_envelope(0, &[]).is_err());
 }

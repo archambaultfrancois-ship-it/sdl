@@ -1,0 +1,7 @@
+SDL2
+message Root {
+  1: required int16 value;
+}
+enum Child {
+  ONE = 1;
+}

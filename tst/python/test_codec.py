@@ -3,7 +3,7 @@ import pathlib
 import struct
 import unittest
 from sdl_runtime import (CodecError, Complex32, Complex64, SdlMessage,
-   description, prepare, encode, decode, decode_dynamic)
+   description, prepare, encode, decode, decode_dynamic, catalogue_id, message_name, message_names, compare_catalogues)
 from wire_example import Packet
 from codec_cases import CodecCases, State, EnumRecord, EnumRecordBatch
 from schema import (RootPayload, FixedItem, VarItem, FixedBoard, FixedRow,
@@ -18,6 +18,53 @@ def context(*types):
 
 
 class CodecTests(unittest.TestCase):
+   def test_01_codec_envelope(self):
+      from sdl_runtime import pack_envelope, unpack_envelope
+      for identity in (0, 0x89abcdef, 0xffffffff):
+         wire = pack_envelope(identity, b'\x01\x00')
+         self.assertEqual(wire, b'S2PS\x02' + identity.to_bytes(4, 'big') + b'\x01\x00')
+         self.assertEqual(unpack_envelope(wire), (identity, b'\x01\x00'))
+         for n in range(10):
+            with self.assertRaises(CodecError): unpack_envelope(wire[:n])
+         for i in range(5):
+            invalid = bytearray(wire); invalid[i] ^= 1
+            with self.assertRaises(CodecError): unpack_envelope(invalid)
+      for identity in (-1, 0x100000000):
+         with self.assertRaises(CodecError): pack_envelope(identity, b'\x01')
+      with self.assertRaises(CodecError): pack_envelope(0, b'')
+
+   def test_01_codec_directional_compatibility(self):
+      folder = FIXTURES / 'compatibility'
+      for line in (folder / 'cases.tsv').read_text().splitlines():
+         name, p, c, root, policy, code, message, path, field_id, pt, ct, value = line.split('\t')
+         with self.subTest(name=name):
+            result = compare_catalogues((folder/p).read_text(), (folder/c).read_text(),
+               None if root == '-' else root, require_required=policy == '1')
+            expected = (code, *('' if s == '-' else s for s in (message, path)),
+               int(field_id), *('' if s == '-' else s for s in (pt, ct)), int(value))
+            self.assertEqual(tuple(result), expected)
+            self.assertEqual(result.compatible, code == 'COMPATIBLE')
+
+   def test_01_codec_catalogue_identity_and_inspection(self):
+      for line in (FIXTURES / 'catalogue_ids.tsv').read_text().splitlines():
+         raw, expected = line.split('\t')
+         data = bytes.fromhex(raw)
+         self.assertEqual(catalogue_id(data), int(expected, 16))
+         self.assertEqual(catalogue_id(data.decode('utf-8')), int(expected, 16))
+      for data in (b'\xff', '\ud800', object(), b'a' * (1024 * 1024 + 1)):
+         with self.assertRaises(CodecError):
+            catalogue_id(data)
+      self.assertEqual(message_name(Packet), 'Packet')
+      self.assertEqual(message_name(Packet()), 'Packet')
+      with self.assertRaises(CodecError):
+         message_name(object())
+      ctx = context(Packet, EmptyMessage)
+      self.assertEqual(message_names(ctx), ('EmptyMessage', 'Packet'))
+      self.assertEqual(message_names(prepare(description([CodecCases]))),
+         message_names(context(CodecCases)))
+      self.assertNotIn('State', message_names(context(CodecCases)))
+      self.assertEqual(description([Packet, EmptyMessage]), description([EmptyMessage, Packet]))
+
    def test_01_codec_fixture(self):
       ctx = context(Packet)
       self.assertEqual(description([Packet]), (FIXTURES/'packet.sdl2').read_text())

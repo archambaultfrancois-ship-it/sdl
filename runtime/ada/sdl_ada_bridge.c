@@ -11,6 +11,14 @@ void *sdl_ada_prepare(const void *remote,size_t rn,const void *local,size_t ln) 
    if(!c->direct){type_context_free(c->remote);type_context_free(c->local);free(c);return NULL;}
    return c;
 }
+int sdl_ada_catalogue_id(const void *text,size_t size,uint32_t *id){return type_catalogue_id(text,size,id);}
+size_t sdl_ada_message_count(AdaContext *c){return c?type_context_message_count(c->remote):0;}
+const char *sdl_ada_message_name(AdaContext *c,uint32_t id){return c?type_context_message_name(c->remote,id):NULL;}
+void *sdl_ada_compare(const void *p,size_t pn,const void *c,size_t cn,const char *root,int required){return type_compare_catalogues(p,pn,c,cn,*root?root:NULL,required!=0);}
+int sdl_ada_diagnostic_code(const SdlCompatibilityDiagnostic *d){return d->code;}
+const char *sdl_ada_diagnostic_text(const SdlCompatibilityDiagnostic *d,int field){return field==0?d->message:field==1?d->path:field==2?d->publisher_type:d->consumer_type;}
+uint32_t sdl_ada_diagnostic_field(const SdlCompatibilityDiagnostic *d){return d->field_id;}
+int32_t sdl_ada_diagnostic_enum(const SdlCompatibilityDiagnostic *d){return d->enum_value;}
 void sdl_ada_retain(AdaContext *c){if(c)++c->refs;}
 void sdl_ada_release(AdaContext *c){if(c && !--c->refs){type_context_free(c->remote);type_context_free(c->local);free(c->direct);free(c);}}
 uint32_t sdl_ada_id(AdaContext *c,const char *name){return c?type_context_message_id(c->remote,name):0;}

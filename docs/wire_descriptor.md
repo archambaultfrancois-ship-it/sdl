@@ -47,6 +47,21 @@ support diagnostics; IDs identify fields across revisions.
 The generated representation is canonical. A decoder may accept additional
 whitespace; senders must use the canonical rendering above.
 
+## Optional catalogue identity
+
+The runtime identity algorithm `sha256-prefix32-v1` hashes the exact canonical
+UTF-8 catalogue bytes, excluding any terminating NUL or transport framing.
+Its unsigned 32-bit result is the first four SHA-256 digest bytes interpreted
+in big-endian order. The canonical rendering above remains unchanged; the
+identity API does not normalize a received catalogue.
+
+An identity is optional metadata for an application or transport profile. It
+is not added to the SDL2 catalogue or message data by the core codecs. A
+transport carrying it must specify the envelope and catalogue registry scope.
+Registries using 32-bit identities must detect collisions by comparing full
+canonical catalogue bytes before publication; a short identity alone cannot
+resolve a collision. See [runtime APIs](runtime.md#catalogue-identity-and-message-inspection).
+
 ## Values
 
 | Value | Wire representation |

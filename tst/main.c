@@ -10,10 +10,89 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const unsigned char fixture[] = {1,   1,   1,   255, 254, 5,  195, 169,
                                         116, 195, 169, 2,   1,   44, 255, 255};
+static void envelope_cases(void) {
+   const unsigned char payload[]={1,0};
+   const uint32_t ids[]={0,0x89abcdefu,0xffffffffu};
+   size_t i,j,n,pn;uint32_t id;const void *p;
+   for(i=0;i<3;i++) {
+      unsigned char *wire=type_envelope_pack(ids[i],payload,2,&n);
+      assert(wire && n==11 && !memcmp(wire,"S2PS\002",5));
+      assert(wire[5]==(unsigned char)(ids[i]>>24) && wire[8]==(unsigned char)ids[i]);
+      assert(type_envelope_unpack(wire,n,&id,&p,&pn) && id==ids[i] && pn==2 && p==wire+9 && !memcmp(p,payload,2));
+      for(j=0;j<=9;j++) assert(!type_envelope_unpack(wire,j,&id,&p,&pn));
+      for(j=0;j<5;j++){wire[j]^=1;assert(!type_envelope_unpack(wire,n,&id,&p,&pn));wire[j]^=1;}
+      free(wire);
+   }
+   assert(!type_envelope_pack(0,payload,0,&n));
+   assert(!type_envelope_pack(0,payload,SIZE_MAX,&n));
+   assert(!type_envelope_unpack(NULL,11,&id,&p,&pn));
+}
+static void compatibility_cases(void) {
+   FILE *file = fopen("tst/fixtures/compatibility/cases.tsv", "r");
+   char line[1024];
+   assert(file);
+   while (fgets(line, sizeof(line), file)) {
+      char *columns[12], filename[256], p[1024], c[1024];
+      size_t i, pn, cn;
+      FILE *schema;
+      SdlCompatibilityDiagnostic *d;
+      columns[0] = strtok(line, "\t\n");
+      for (i = 1; i < 12; ++i) { columns[i] = strtok(NULL, "\t\n"); assert(columns[i]); }
+      snprintf(filename, sizeof(filename), "tst/fixtures/compatibility/%s", columns[1]);
+      schema = fopen(filename, "rb"); assert(schema); pn = fread(p, 1, sizeof(p), schema); fclose(schema);
+      snprintf(filename, sizeof(filename), "tst/fixtures/compatibility/%s", columns[2]);
+      schema = fopen(filename, "rb"); assert(schema); cn = fread(c, 1, sizeof(c), schema); fclose(schema);
+      d = type_compare_catalogues(p, pn, c, cn, !strcmp(columns[3], "-") ? NULL : columns[3], !strcmp(columns[4], "1"));
+      assert(d);
+      assert(!strcmp(type_compatibility_code_name(d->code), columns[5]));
+      assert(!strcmp(d->message, !strcmp(columns[6], "-") ? "" : columns[6]));
+      assert(!strcmp(d->path, !strcmp(columns[7], "-") ? "" : columns[7]));
+      assert(d->field_id == (uint32_t)strtoul(columns[8], NULL, 10));
+      assert(!strcmp(d->publisher_type, !strcmp(columns[9], "-") ? "" : columns[9]));
+      assert(!strcmp(d->consumer_type, !strcmp(columns[10], "-") ? "" : columns[10]));
+      assert(d->enum_value == (int32_t)strtol(columns[11], NULL, 10));
+      type_compatibility_free(d);
+   }
+   fclose(file);
+}
+static void catalogue_api_cases(void) {
+   FILE *file = fopen("tst/fixtures/catalogue_ids.tsv", "r");
+   char line[1024];
+   assert(file);
+   while (fgets(line, sizeof(line), file)) {
+      char *tab = strchr(line, '\t');
+      uint8_t data[256];
+      size_t n, i;
+      uint32_t id = 0;
+      unsigned long expected;
+      assert(tab);
+      n = (size_t)(tab - line) / 2;
+      for (i = 0; i < n; ++i) {
+         unsigned byte;
+         assert(sscanf(line + 2 * i, "%2x", &byte) == 1);
+         data[i] = (uint8_t)byte;
+      }
+      assert(sscanf(tab + 1, "%lx", &expected) == 1);
+      assert(type_catalogue_id(data, n, &id) && id == (uint32_t)expected);
+   }
+   fclose(file);
+   {
+      uint32_t id = 123;
+      uint8_t invalid = 255;
+      assert(!type_catalogue_id(&invalid, 1, &id) && id == 123);
+      assert(!type_catalogue_id(NULL, 1, &id));
+      assert(!type_catalogue_id("a", 1, NULL));
+      assert(!type_catalogue_id("a", 1024U * 1024U + 1, &id));
+      assert(type_catalogue_id(NULL, 0, &id) && id == 0xe3b0c442U);
+      assert(type_context_message_count(NULL) == 0);
+      assert(!type_context_message_name(NULL, 1));
+   }
+}
 static SdlContext *context(const char *name) {
    const char *names[] = {name};
    size_t size;
@@ -35,6 +114,12 @@ static SdlContext *context(const char *name) {
 }
 static void packet_cases(void) {
    SdlContext *ctx = context("Packet");
+   catalogue_api_cases();
+   compatibility_cases();
+   assert(type_context_message_count(ctx) == 1);
+   assert(!strcmp(type_context_message_name(ctx, 1), "Packet"));
+   assert(!type_context_message_name(ctx, 0));
+   assert(!type_context_message_name(ctx, 2));
    int16_t samples[] = {300, -1};
    Packet m = {0}, *copy;
    size_t n;
@@ -427,6 +512,7 @@ static void invalid(void) {
 }
 int main(void) {
    register_all_types();
+   envelope_cases();
    packet_cases();
    evolution();
    composites();

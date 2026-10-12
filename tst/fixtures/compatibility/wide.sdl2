@@ -1,0 +1,4 @@
+SDL2
+message Root {
+  1: required int32 value;
+}

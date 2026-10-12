@@ -1,4 +1,5 @@
 with Ada.Text_IO;
+with Ada.Strings.Fixed;
 with Ada.Unchecked_Conversion;
 with Ada.Streams.Stream_IO;
 with Ada.Streams;
@@ -35,6 +36,49 @@ procedure Run_Tests is
          return B;
       end;
    end;
+   function Catalogue (Path : String) return String is
+      Data : constant Bytes := Load (Path);
+      Result : String (1 .. Data'Length);
+   begin
+      for I in Result'Range loop Result (I) := Character'Val (Data (I)); end loop;
+      return Result;
+   end;
+   procedure Compatibility_Cases is
+      File : Ada.Text_IO.File_Type;
+      type Columns is array (1 .. 12) of Text;
+      function Plain (S : Text) return String is
+      begin if To_String (S) = "-" then return ""; end if; return To_String (S); end;
+   begin
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, "tst/fixtures/compatibility/cases.tsv");
+      while not Ada.Text_IO.End_Of_File (File) loop
+         declare
+            Line : constant String := Ada.Text_IO.Get_Line (File);
+            Col : Columns;
+            Start : Positive := 1;
+            Index : Positive := 1;
+         begin
+            for I in Line'Range loop
+               if Line (I) = Character'Val (9) then
+                  Col (Index) := To_Unbounded_String (Line (Start .. I - 1)); Start := I + 1; Index := Index + 1;
+               end if;
+            end loop;
+            Col (Index) := To_Unbounded_String (Line (Start .. Line'Last));
+            declare
+               D : constant Compatibility_Diagnostic := Compare_Catalogues (
+                  Catalogue ("tst/fixtures/compatibility/" & To_String (Col (2))),
+                  Catalogue ("tst/fixtures/compatibility/" & To_String (Col (3))),
+                  Plain (Col (4)), To_String (Col (5)) = "1");
+            begin
+               Check (D.Code = Compatibility_Code'Value (To_String (Col (6))), "compatibility code: " & To_String (Col (1)));
+               Check (To_String (D.Message) = Plain (Col (7)) and then To_String (D.Path) = Plain (Col (8)), "diagnostic path");
+               Check (D.Field_Id = Unsigned_32'Value (To_String (Col (9))), "diagnostic field ID");
+               Check (To_String (D.Publisher_Type) = Plain (Col (10)) and then To_String (D.Consumer_Type) = Plain (Col (11)), "diagnostic types");
+               Check (D.Enum_Value = Int32'Value (To_String (Col (12))), "diagnostic enum value");
+            end;
+         end;
+      end loop;
+      Ada.Text_IO.Close (File);
+   end Compatibility_Cases;
    C : constant Context := SDL_Wire_Example.Prepare;
    P : T_Packet;
    procedure Reject (Data : Bytes) is
@@ -90,6 +134,60 @@ procedure Run_Tests is
    function Packet_Catalogue (Fields : String) return String is
    begin return "SDL2" & LF & "message Packet {" & LF & Fields & "}" & LF; end;
 begin
+   declare
+      File : Ada.Text_IO.File_Type;
+   begin
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, "tst/fixtures/catalogue_ids.tsv");
+      while not Ada.Text_IO.End_Of_File (File) loop
+         declare
+            Line : constant String := Ada.Text_IO.Get_Line (File);
+            Tab : constant Natural := Ada.Strings.Fixed.Index (Line, String'(1 => Character'Val (9)));
+            Text : String (1 .. (Tab - 1) / 2);
+            Expected : constant Unsigned_32 := Unsigned_32'Value ("16#" & Line (Tab + 1 .. Line'Last) & "#");
+         begin
+            for I in Text'Range loop
+               Text (I) := Character'Val (Integer'Value ("16#" & Line (2 * I - 1 .. 2 * I) & "#"));
+            end loop;
+            Check (Catalogue_Id (Text) = Expected, "shared catalogue identity fixture");
+         end;
+      end loop;
+      Ada.Text_IO.Close (File);
+   end;
+   Check (Message_Count (C) = 1 and then Message_Name (C, 1) = "Packet", "public message inspection");
+   declare
+      Ids : constant array (1 .. 3) of Unsigned_32 := (0, 16#89ABCDEF#, 16#FFFFFFFF#);
+   begin
+      for Id of Ids loop
+         declare
+            Wire : constant Bytes := Pack_Envelope (Id, (1, 0));
+            E : constant Envelope := Unpack_Envelope (Wire);
+         begin
+            Check (Wire (1 .. 5) = Bytes'(83, 50, 80, 83, 2), "envelope magic and version");
+            Check (Wire (6) = Unsigned_8 (Shift_Right (Id, 24)) and then
+                   Wire (7) = Unsigned_8 (Shift_Right (Id, 16) and 255) and then
+                   Wire (8) = Unsigned_8 (Shift_Right (Id, 8) and 255) and then
+                   Wire (9) = Unsigned_8 (Id and 255), "envelope big endian ID");
+            Check (Wire'Length = 11 and then E.Catalogue = Id and then E.Payload = Bytes'(1, 0), "envelope roundtrip");
+            for N in 0 .. 9 loop
+               begin
+                  declare Bad : constant Envelope := Unpack_Envelope (Wire (1 .. N));
+                  begin Check (False, "envelope truncation accepted"); end;
+               exception when Codec_Error => Check (True, "envelope truncation"); end;
+            end loop;
+            for I in 1 .. 5 loop
+               declare Bad_Wire : Bytes := Wire;
+               begin
+                  Bad_Wire (I) := Bad_Wire (I) xor 1;
+                  begin
+                     declare Bad : constant Envelope := Unpack_Envelope (Bad_Wire);
+                     begin Check (False, "envelope header accepted"); end;
+                  exception when Codec_Error => Check (True, "envelope header"); end;
+               end;
+            end loop;
+         end;
+      end loop;
+   end;
+   Compatibility_Cases;
    P.F_active := True; P.H_code := True; P.F_code := -2;
    P.F_label := To_Unbounded_String (Character'Val (195) & Character'Val (169) & "t" & Character'Val (195) & Character'Val (169));
    P.F_samples.Append (300); P.F_samples.Append (-1);
