@@ -31,15 +31,22 @@ fn bench<T: SdlMessage>(case: &str, message: T, useful: usize) {
         for _ in 0..3 {
             let start = Instant::now();
             let mut n = 0usize;
-            while n < min_iterations || start.elapsed().as_secs_f64() < 0.1 {
-                if operation == "encode" {
-                    std::hint::black_box(encode(std::hint::black_box(&ctx), std::hint::black_box(&message)).unwrap());
-                } else {
-                    std::hint::black_box(decode::<T>(std::hint::black_box(&ctx), std::hint::black_box(&bytes)).unwrap());
+            let mut elapsed;
+            loop {
+                for _ in 0..256 {
+                    if operation == "encode" {
+                        std::hint::black_box(encode(std::hint::black_box(&ctx), std::hint::black_box(&message)).unwrap());
+                    } else {
+                        std::hint::black_box(decode::<T>(std::hint::black_box(&ctx), std::hint::black_box(&bytes)).unwrap());
+                    }
                 }
-                n += 1;
+                n += 256;
+                elapsed = start.elapsed().as_secs_f64();
+                if n >= min_iterations && elapsed >= 0.1 {
+                    break;
+                }
             }
-            rates.push(n as f64 / start.elapsed().as_secs_f64());
+            rates.push(n as f64 / elapsed);
         }
         rates.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let rate = rates[1];

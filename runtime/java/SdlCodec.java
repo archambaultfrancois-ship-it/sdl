@@ -202,13 +202,6 @@ public final class SdlCodec {
          throw new CodecException("missing SDL fields", e);
       }
    }
-   private static Object instance(Class<?> t) {
-      try {
-         return t.getDeclaredConstructor().newInstance();
-      } catch (Exception e) {
-         throw new CodecException("cannot instantiate message", e);
-      }
-   }
    private static Object get(Object o, String n) {
       try {
          return o.getClass().getField(n).get(o);
@@ -255,11 +248,16 @@ public final class SdlCodec {
    private static final class Binding {
       final Class<?> type;
       final FixedCodec fixed;
+      final java.lang.reflect.Constructor<?> constructor;
       final Map<Long, Field> fields = new HashMap<Long, Field>();
       final Map<Long, java.lang.reflect.Field> access =
           new HashMap<Long, java.lang.reflect.Field>();
       Binding(Class<?> t) {
          type = t;
+         java.lang.reflect.Constructor<?> preparedConstructor = null;
+         try { preparedConstructor = t.getDeclaredConstructor(); }
+         catch (NoSuchMethodException e) { /* Encoding does not require a constructor. */ }
+         constructor = preparedConstructor;
          FixedCodec codec=null;
          try { codec=(FixedCodec)t.getField("SDL_FIXED").get(null); }
          catch (NoSuchFieldException e) { /* Handwritten and variable messages use generic codecs. */ }
@@ -268,7 +266,10 @@ public final class SdlCodec {
          for (Field f : messageFields(t)) {
             fields.put(f.id, f);
             try {
-               access.put(f.id, t.getField(f.name));
+               java.lang.reflect.Field reflected = t.getField(f.name);
+               try { reflected.setAccessible(true); }
+               catch (SecurityException e) { /* Public access remains valid with access checks. */ }
+               access.put(f.id, reflected);
             } catch (Exception e) {
                throw new CodecException("missing field", e);
             }
@@ -279,15 +280,21 @@ public final class SdlCodec {
       private final Schema schema, localSchema;
       private final boolean hasRepresentation;
       private final String[] names;
+      private final Map<String, Declaration> messages;
+      private final Map<String, Map<Integer, String>> enums;
       private final Map<String, Binding> bindings = new HashMap<String, Binding>();
       private final Map<String, FixedCodec> fixed = new HashMap<String, FixedCodec>();
       private final Map<String, Integer> sizes = new HashMap<String, Integer>();
+      private final Map<Class<?>, String> classNames = new HashMap<Class<?>, String>();
+      private final Map<String, Integer> messageIds = new HashMap<String, Integer>();
       private Context(Schema schema, Schema local) {
          boolean represented=false;for(Declaration d:schema.messages.values())for(Field f:d.fields)represented|=!f.wire.suffix().isEmpty();
          this.hasRepresentation=represented;
          this.schema = schema;
          this.localSchema = local;
          this.names = schema.messages.keySet().toArray(new String[0]);
+         this.messages = new HashMap<String, Declaration>(schema.messages);
+         this.enums = new HashMap<String, Map<Integer, String>>(schema.enums);
       }
    }
    private static String name(Class<?> t) {
@@ -675,6 +682,11 @@ public final class SdlCodec {
          if(binding.fixed!=null && fixedCompatible(ctx.schema,ctx.localSchema,item.getKey(),matches))
             ctx.fixed.put(item.getKey(),binding.fixed);
       }
+      for (int i = 0; i < ctx.names.length; i++) {
+         ctx.messageIds.put(ctx.names[i], i + 1);
+         Binding binding = ctx.bindings.get(ctx.names[i]);
+         if (binding != null) ctx.classNames.put(binding.type, ctx.names[i]);
+      }
       return ctx;
    }
 
@@ -832,7 +844,7 @@ public final class SdlCodec {
       }
    }
    private static void writeMessage(Context ctx, String name, Object value, Sink sink) {
-      Declaration d = ctx.schema.messages.get(name);
+      Declaration d = ctx.messages.get(name);
       Binding b = ctx.bindings.get(name);
       if (d == null || b == null || value == null || !b.type.isInstance(value) ||
           d.fields.size() != b.fields.size())
@@ -923,13 +935,13 @@ public final class SdlCodec {
       }
       if (v == null)
          throw malformed("null required value");
-      if (ctx.schema.messages.containsKey(name)) {
+      if (ctx.messages.containsKey(name)) {
          writeMessage(ctx, name, v, sink);
          return;
       }
-      if (ctx.schema.enums.containsKey(name)) {
+      if (ctx.enums.containsKey(name)) {
          if (!(v instanceof EnumValue) ||
-             !ctx.schema.enums.get(name).containsKey(((EnumValue)v).wireValue()))
+             !ctx.enums.get(name).containsKey(((EnumValue)v).wireValue()))
             throw malformed("invalid enum");
          sink.integer(((EnumValue)v).wireValue(), 4);
          return;
@@ -968,10 +980,12 @@ public final class SdlCodec {
          sink.integer(((Number)v).longValue(), wireSize(name));
    }
    public static byte[] encode(Context ctx, Message value) {
-      String name = name(value.getClass());
-      int id = Arrays.asList(ctx.names).indexOf(name) + 1;
-      if (id == 0)
+      String name = ctx.classNames.get(value.getClass());
+      if (name == null) name = name(value.getClass());
+      Integer preparedId = ctx.messageIds.get(name);
+      if (preparedId == null)
          throw malformed("unknown message type");
+      int id = preparedId;
       Sink measure = new Sink(null);
       measure.count(id);
       writeMessage(ctx, name, value, measure);
@@ -1037,9 +1051,10 @@ public final class SdlCodec {
       long n = f.modifier.equals("required") ? 1 : r.count();
       if (f.modifier.equals("optional") && n > 1)
          throw malformed("optional count exceeds one");
+      if (n == 0) return 0;
       int size = wireSize(f.typeName);
       if (size == 0) {
-         if (ctx.schema.enums.containsKey(f.typeName))
+         if (ctx.enums.containsKey(f.typeName))
             size = 4;
          else {
             Integer cached = ctx.sizes.get(f.typeName);
@@ -1061,7 +1076,7 @@ public final class SdlCodec {
    private static Object readMessage(Context ctx, String name, Cursor r, int depth, boolean skip) {
       if (depth > 64)
          throw malformed("message nesting too deep");
-      Declaration d = ctx.schema.messages.get(name);
+      Declaration d = ctx.messages.get(name);
       Binding b = ctx.bindings.get(name);
       if (!skip && b == null)
          throw malformed("unknown local type");
@@ -1071,7 +1086,13 @@ public final class SdlCodec {
          Object value=fixed.read(r.bytes,r.offset); r.offset+=fixed.size();
          return value;
       }
-      Object result = skip ? null : instance(b.type);
+      Object result = null;
+      if (!skip) {
+         try {
+            if (b.constructor == null) throw malformed("missing message constructor");
+            result = b.constructor.newInstance();
+         } catch (Exception e) { throw new CodecException("cannot instantiate message", e); }
+      }
       for (Field f : d.fields) {
          int count = sequenceCount(ctx, f, r);
          Field local = skip ? null : b.fields.get(f.id);
@@ -1129,7 +1150,7 @@ public final class SdlCodec {
          }
          return array;
       }
-      if (ctx.schema.messages.containsKey(name))
+      if (ctx.messages.containsKey(name))
          return readMessage(ctx, name, r, depth + 1, skip);
       if (name.equals("string")) {
          long n = r.count();
@@ -1149,9 +1170,9 @@ public final class SdlCodec {
          r.offset += (int)n;
          return skip ? null : value;
       }
-      if (ctx.schema.enums.containsKey(name)) {
+      if (ctx.enums.containsKey(name)) {
          int n = (int)r.integer(4);
-         if (!ctx.schema.enums.get(name).containsKey(n))
+         if (!ctx.enums.get(name).containsKey(n))
             throw malformed("invalid sender enum");
          if (skip)
             return null;

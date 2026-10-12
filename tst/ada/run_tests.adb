@@ -129,10 +129,24 @@ procedure Run_Tests is
    procedure Packed_Oracle is new Oracle (T_PackedBatch, SDL_Packed_Validation.Encode, SDL_Packed_Validation.Decode);
    procedure Primitive_Oracle is new Oracle (T_PrimitiveBatch, SDL_Packed_Validation.Encode, SDL_Packed_Validation.Decode);
    procedure Payload_Oracle is new Oracle (SDL_Benchmark.T_BenchPayload, SDL_Benchmark.Encode, SDL_Benchmark.Decode);
+   procedure Optional_Oracle is new Oracle (SDL_Bench_Cases.T_BenchOptionals, SDL_Bench_Cases.Encode, SDL_Bench_Cases.Decode);
+   procedure Small_Oracle is new Oracle (SDL_Bench_Cases.T_BenchSmall, SDL_Bench_Cases.Encode, SDL_Bench_Cases.Decode);
    function Float_From_Bits is new Ada.Unchecked_Conversion (Unsigned_32, Float32);
    function Packet_Catalogue (Fields : String) return String is
    begin return "SDL2|Packet{" & Fields & "}"; end;
 begin
+   Small_Oracle (SDL_Bench_Cases.Description, SDL_Bench_Cases.T_BenchSmall'(True, 123, -2));
+   for Mask in Unsigned_16 range 0 .. 255 loop
+      declare
+         M : constant SDL_Bench_Cases.T_BenchOptionals :=
+           ((Mask and 1) /= 0, 1, (Mask and 2) /= 0, 2,
+            (Mask and 4) /= 0, 3, (Mask and 8) /= 0, 4,
+            (Mask and 16) /= 0, 5, (Mask and 32) /= 0, 6,
+            (Mask and 64) /= 0, 7, (Mask and 128) /= 0, 8);
+      begin
+         Optional_Oracle (SDL_Bench_Cases.Description, M);
+      end;
+   end loop;
    declare
       File : Ada.Text_IO.File_Type;
    begin

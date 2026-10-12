@@ -7,6 +7,7 @@
 #include "codec_cases.h"
 #include "schema.h"
 #include "empty_message.h"
+#include "bench_cases.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -789,6 +790,41 @@ static void wire_word_arrays(void) {
       }
 }
 
+static void optional_scalar_cases(void) {
+   SdlContext *ctx = context("BenchOptionals");
+   BenchOptionals input = {0}, *copy;
+   unsigned char *wire;
+   size_t size, cut;
+   unsigned mask;
+   for (mask = 0; mask < 256; ++mask) {
+      input.has_a = (mask & 1) != 0; input.a = 1;
+      input.has_b = (mask & 2) != 0; input.b = 2;
+      input.has_c = (mask & 4) != 0; input.c = 3;
+      input.has_d = (mask & 8) != 0; input.d = 4;
+      input.has_e = (mask & 16) != 0; input.e = 5;
+      input.has_f = (mask & 32) != 0; input.f = 6;
+      input.has_g = (mask & 64) != 0; input.g = 7;
+      input.has_h = (mask & 128) != 0; input.h = 8;
+      wire = type_encode(ctx, "BenchOptionals", &input, &size);
+      assert(wire);
+      copy = type_decode(ctx, wire, size);
+      assert(copy && copy->has_a == input.has_a && copy->has_h == input.has_h);
+      assert(copy->a == (input.has_a ? 1 : 0) && copy->h == (input.has_h ? 8 : 0));
+      {
+         size_t encoded_size;
+         void *encoded = type_encode(ctx, "BenchOptionals", copy, &encoded_size);
+         assert(encoded && encoded_size == size && !memcmp(encoded, wire, size));
+         type_free(encoded);
+      }
+      type_free(copy);
+      for (cut = 0; cut < size; ++cut) assert(!type_decode(ctx, wire, cut));
+      /* Root ID is one byte; optional count must be exactly zero or one. */
+      wire[1] = 2;
+      assert(!type_decode(ctx, wire, size));
+      type_free(wire);
+   }
+   type_context_free(ctx);
+}
 static void invalid(void) {
    const char *bad[] = {"SDL1\n",
                         "SDL2|A{1:A:a;}",
@@ -816,6 +852,7 @@ int main(void) {
    composites();
    packed_records();
    wire_word_arrays();
+   optional_scalar_cases();
    invalid();
    graph_limits();
    deep_messages();

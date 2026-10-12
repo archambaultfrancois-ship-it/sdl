@@ -199,7 +199,7 @@ pub struct Context {
     pub(crate) schema: SchemaDesc,
     names: Vec<String>,
     locals: BTreeMap<String, TypeInfo>,
-    emissions: BTreeMap<String, bool>,
+    encode_types: BTreeMap<String, (usize, Option<std::any::TypeId>, bool)>,
     sizes: BTreeMap<String, Option<usize>>,
     fixed_matches: HashSet<String>,
     has_representation: bool,
@@ -283,6 +283,11 @@ pub fn prepare(text: &str, types: &[TypeInfo]) -> Result<Context, CodecError> {
     for name in &names {
         emission_match(&schema, &local_schema, name, &mut emissions);
     }
+    // Resolve the root ID, local identity and emission permission once.
+    let encode_types = names.iter().enumerate().map(|(index, name)| {
+        (name.clone(), (index + 1, locals.get(name).map(|info| info.type_id),
+                        emissions.get(name).copied().unwrap_or(false)))
+    }).collect();
     let mut fixed_cache = BTreeMap::new();
     for name in schema.messages.keys().chain(schema.enums.keys()) {
         fixed_match(&schema, &local_schema, name, &mut fixed_cache);
@@ -296,7 +301,7 @@ pub fn prepare(text: &str, types: &[TypeInfo]) -> Result<Context, CodecError> {
         schema,
         names,
         locals,
-        emissions,
+        encode_types,
         sizes,
         fixed_matches,
     })
@@ -373,18 +378,9 @@ fn emission_match(
     result
 }
 pub fn encode<T: SdlMessage>(ctx: &Context, value: &T) -> Result<Vec<u8>, CodecError> {
-    if let Some(info) = ctx.locals.get(T::NAME) {
-        if info.type_id != std::any::TypeId::of::<T>() {
-            return Err(CodecError::TypeMismatch);
-        }
-    }
-    let id = ctx
-        .names
-        .iter()
-        .position(|n| n == T::NAME)
-        .ok_or(CodecError::TypeMismatch)?
-        + 1;
-    if !ctx.emissions.get(T::NAME).copied().unwrap_or(false) {
+    let &(id, local_type, permitted) = ctx.encode_types.get(T::NAME)
+        .ok_or(CodecError::TypeMismatch)?;
+    if !permitted || local_type.is_some_and(|id| id != std::any::TypeId::of::<T>()) {
         return Err(CodecError::TypeMismatch);
     }
     let mut out = Vec::new();
@@ -470,6 +466,7 @@ impl<'a> Reader<'a> {
             depth: 0,
         }
     }
+    #[inline]
     pub fn take(&mut self, n: usize) -> Result<&'a [u8], CodecError> {
         if n > self.data.len() - self.offset {
             return Err(CodecError::Truncated);
@@ -478,6 +475,7 @@ impl<'a> Reader<'a> {
         self.offset += n;
         Ok(&self.data[start..self.offset])
     }
+    #[inline]
     pub fn count(&mut self) -> Result<usize, CodecError> {
         let mut n = 0u32;
         for i in 0..5 {
@@ -530,10 +528,15 @@ impl<'a> Reader<'a> {
             .map(|m| m.fields.as_slice())
             .ok_or(CodecError::TypeMismatch)
     }
+    #[inline]
     pub fn field_count(&mut self, f: &FieldDesc) -> Result<usize, CodecError> {
         let n = if f.modifier == 0 { 1 } else { self.count()? };
         if f.modifier == 1 && n > 1 {
             return Err(CodecError::TypeMismatch);
+        }
+        // Absent fields consume no value bytes and need no size/type lookup.
+        if n == 0 {
+            return Ok(0);
         }
         let size = match f.type_name.as_str() {
             "bool" | "int8" | "uint8" => Some(1),

@@ -46,14 +46,16 @@ procedure Bench is
          for Trial in Rates'Range loop
             Start := Clock; N := 0;
             loop
-               if Operation = 1 then
-                  declare B : constant Bytes := Emit (C, M); begin Sink := Sink + Unsigned_64 (B'Length); end;
-               else
-                  declare R : constant Message_Type := Parse (C, Wire);
-                     pragma Unreferenced (R);
-                  begin Sink := Sink + Unsigned_64 (Wire'Length); end;
-               end if;
-               N := N + 1; Seconds := To_Duration (Clock - Start);
+               for Item in 1 .. 256 loop
+                  if Operation = 1 then
+                     declare B : constant Bytes := Emit (C, M); begin Sink := Sink + Unsigned_64 (B'Length); end;
+                  else
+                     declare R : constant Message_Type := Parse (C, Wire);
+                        pragma Unreferenced (R);
+                     begin Sink := Sink + Unsigned_64 (Wire'Length); end;
+                  end if;
+               end loop;
+               N := N + 256; Seconds := To_Duration (Clock - Start);
                exit when N >= Iterations and Seconds >= 0.1;
             end loop;
             Rates (Trial) := Long_Float (N) / Long_Float (Seconds);

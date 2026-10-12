@@ -38,6 +38,8 @@ typedef struct {
    char *wire_quantum_text;
    const SdlFieldDesc *local;
    const SdlFixedPlan *record_plan;
+   const SdlTypeDesc *primitive;
+   size_t fixed_unit;
 } SdlDynamicFieldDesc;
 
 typedef struct {
@@ -47,7 +49,7 @@ typedef struct {
    const SdlTypeDesc *local;
    size_t height, fixed_size;
    SdlFixedPlan plan;
-   bool fixed_ready, emission_ready, can_encode;
+   bool fixed_ready, emission_ready, can_encode, inline_storage;
 } SdlDynamicMessageDesc;
 
 typedef struct {
@@ -238,6 +240,7 @@ static const SdlDynamicEnumDesc *schema_enum(const SdlDynamicSchema *schema, con
    return NULL;
 }
 
+static const SdlTypeDesc *primitive_native(const char *name);
 static size_t sdl_fixed_type_size(const char *type_name, const SdlDynamicSchema *schema,
                                   const SdlDynamicMessageDesc **active, size_t depth);
 
@@ -632,9 +635,20 @@ static bool parse_descriptor(const uint8_t *data, size_t size, SdlDynamicSchema 
    for (i = 0; i < schema->message_count; ++i)
       sdl_fixed_type_size(schema->messages[i].name, schema, NULL, 0);
    for (i = 0; i < schema->message_count; ++i) {
-      const SdlDynamicMessageDesc *message = &schema->messages[i];
+      SdlDynamicMessageDesc *message = &schema->messages[i];
+      message->inline_storage = true;
       for (j = 0; j < message->field_count; ++j) {
-         const SdlDynamicFieldDesc *field = &message->fields[j];
+         SdlDynamicFieldDesc *field = &message->fields[j];
+         size_t k;
+         field->primitive = primitive_native(field->type_name);
+         field->fixed_unit = sdl_fixed_type_size(field->type_name, schema, NULL, 0);
+         for (k = 0; k < field->dimension_count; ++k) {
+            if (field->fixed_unit > SIZE_MAX / field->dimensions[k])
+               goto fail;
+            field->fixed_unit *= field->dimensions[k];
+         }
+         if (!field->fixed_unit || field->modifier >= 2)
+            message->inline_storage = false;
          bool known =
              strcmp(field->type_name, "bool") == 0 || (strcmp(field->type_name, "int8") == 0 || strcmp(field->type_name, "uint8") == 0) ||
              (strcmp(field->type_name, "int16") == 0 || strcmp(field->type_name, "uint16") == 0) || (strcmp(field->type_name, "int32") == 0 || strcmp(field->type_name, "uint32") == 0) ||
@@ -1061,6 +1075,8 @@ static bool write_native(const SdlDynamicSchema *s, const SdlTypeDesc *t,
             if ((count && !items) || !write_count(w, count))
                return false;
          }
+         if (!count)
+            continue;
          if (f->type->kind == SDL_TYPE_STRUCT) {
             const SdlDynamicMessageDesc *child = schema_message_const(s, native_name(f->type));
             if (child && child->plan.span_count) {
@@ -1149,14 +1165,22 @@ void *type_encode_plain(const SdlContext *c, const char *name, const void *value
    if (!size)
       return NULL;
    *size = 0;
-   w.size = type_encode_size_plain(c, name, value);
-   if (!w.size)
+   if (!c || !name || !value)
       return NULL;
+   m = schema_message_const(&c->schema, name);
+   if (!m || !m->can_encode)
+      return NULL;
+   w.data = NULL;
+   w.size = 0;
+   w.offset = 0;
+   if (!write_count(&w, (size_t)(m - c->schema.messages) + 1) ||
+       !write_native(&c->schema, m->local, value, &w, SIZE_MAX))
+      return NULL;
+   w.size = w.offset;
    w.data = (uint8_t *)malloc(w.size);
    w.offset = 0;
    if (!w.data)
       return NULL;
-   m = schema_message_const(&c->schema, name);
    if (!write_count(&w, (size_t)(m - c->schema.messages) + 1) ||
        !write_native(&c->schema, m->local, value, &w, SIZE_MAX)) {
       free(w.data);
@@ -1252,9 +1276,7 @@ static bool read_native_message(const SdlDynamicSchema *s, const SdlDynamicMessa
       if (f->modifier == 1 && count > 1)
          return false;
       {
-         size_t unit = sdl_fixed_type_size(f->type_name, s, NULL, 0), k;
-         for (k = 0; unit && k < f->dimension_count; ++k)
-            unit *= f->dimensions[k];
+         size_t unit = f->fixed_unit;
          if (unit && count > (r->size - r->offset) / unit)
             return false;
          if (!unit && count > 1048576)
@@ -1287,19 +1309,21 @@ static bool read_native_message(const SdlDynamicSchema *s, const SdlDynamicMessa
             }
          }
       }
+      if (!count)
+         continue;
       if (f->record_plan) {
          if (!read_fixed_records(s, f->record_plan, count, local ? items : NULL,
                                   f->local && pool, r))
             return false;
          continue;
       }
-      /* Resolve once per field and validate a whole primitive span. No numeric
+      /* Use the prepared type and validate a whole primitive span. No numeric
          conversion is needed in the storage sizing or unknown-field pass. */
       if (!f->dimension_count) {
-         const SdlTypeDesc *primitive = primitive_native(f->type_name);
+         const SdlTypeDesc *primitive = f->primitive;
          if (primitive) {
             const uint8_t *bytes;
-            size_t unit = primitive_size(f->type_name), n, width = unit, components = count;
+            size_t unit = f->fixed_unit, n, width = unit, components = count;
             if (count > SIZE_MAX / unit || !reader_read(r, n = (size_t)count * unit, &bytes))
                return false;
             if (primitive->kind == SDL_TYPE_BOOL) {
@@ -1419,14 +1443,19 @@ static size_t type_decode_size_plain(const SdlContext *c, const void *data, size
    return m->local->size + p.used;
 }
 void *type_decode_plain(const SdlContext *c, const void *data, size_t size) {
-   size_t n = type_decode_size_plain(c, data, size);
+   size_t n;
    SdlDynamicReader r;
    const SdlDynamicMessageDesc *m;
    void *out;
    Pool p;
+   m = start_message(c, data, size, &r);
+   if (!m || !m->local)
+      return NULL;
+   /* Fixed values and optional fixed values need no trailing storage pool.
+      Validate while filling; malformed input still releases the allocation. */
+   n = m->inline_storage ? m->local->size : type_decode_size_plain(c, data, size);
    if (!n)
       return NULL;
-   m = start_message(c, data, size, &r);
    out = calloc(1, n);
    if (!out)
       return NULL;

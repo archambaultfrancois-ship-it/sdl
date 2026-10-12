@@ -64,18 +64,24 @@ static void bench(const char *label, const char *name, const void *value, size_t
       size_t trial;
       for (trial = 0; trial < 3; ++trial) {
          size_t count = 0;
+         const size_t batch_size = 256;
+         double elapsed;
          start = now();
          do {
-            size_t sz;
-            if (i == 0)
-               copy = type_encode(ctx, name, value, &sz);
-            else
-               copy = type_decode(ctx, wire, n);
-            assert(copy);
-            type_free(copy);
-            ++count;
-         } while (count < min_iterations || now() - start < 0.1);
-         rates[trial] = (double)count / (now() - start);
+            size_t item;
+            for (item = 0; item < batch_size; ++item) {
+               size_t sz;
+               if (i == 0)
+                  copy = type_encode(ctx, name, value, &sz);
+               else
+                  copy = type_decode(ctx, wire, n);
+               assert(copy);
+               type_free(copy);
+            }
+            count += batch_size;
+            elapsed = now() - start;
+         } while (count < min_iterations || elapsed < 0.1);
+         rates[trial] = (double)count / elapsed;
       }
       {
          double temp;

@@ -22,7 +22,7 @@ public final class SdlJavaBench {
       SdlCodec.Message copy = SdlCodec.decode(ctx, wire);
       if (!Arrays.equals(wire, SdlCodec.encode(ctx, copy)))
          throw new AssertionError("round trip differs: " + label);
-      for (int i = 0; i < 1000; i++) {
+      for (int i = 0; i < (useful <= 32 ? 100000 : 1000); i++) {
          sink = SdlCodec.encode(ctx, value);
          sink = SdlCodec.decode(ctx, wire);
       }
@@ -34,12 +34,16 @@ public final class SdlJavaBench {
          for (int trial = 0; trial < 3; trial++) {
             start = System.nanoTime();
             int n = 0;
-            while (n < minIterations || System.nanoTime() - start < 100000000L) {
-               sink = operation.equals("encode") ? SdlCodec.encode(ctx, value)
-                                                 : SdlCodec.decode(ctx, wire);
-               n++;
-            }
-            rates[trial] = n / ((System.nanoTime() - start) / 1e9);
+            long elapsed;
+            do {
+               for (int item = 0; item < 256; item++) {
+                  sink = operation.equals("encode") ? SdlCodec.encode(ctx, value)
+                                                    : SdlCodec.decode(ctx, wire);
+               }
+               n += 256;
+               elapsed = System.nanoTime() - start;
+            } while (n < minIterations || elapsed < 100000000L);
+            rates[trial] = n / (elapsed / 1e9);
          }
          Arrays.sort(rates);
          System.out.printf("%s %s %.1f msg/s %.4f MiB/s (%d bytes/message)%n", label, operation,

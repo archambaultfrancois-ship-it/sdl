@@ -12,6 +12,7 @@ class DirectCodecs:
       self.schema = backend.schema
       self.fixed = {}
       self.packed = {}
+      self.direct = {}
       self.minimum = {}
       for name in self.schema.message_order:
          fields = self.schema.messages[name].fields
@@ -20,6 +21,11 @@ class DirectCodecs:
             for f, n in zip(fields, sizes)) else None
          self.minimum[name] = sum(1 if f.modifier != 'required' else self.min_width(f.type_name, f.array_dimensions) for f in fields)
          self.packed[name] = any(f.modifier == 'packed' or self.packed.get(f.type_name, False) for f in fields)
+         # Scalar records need no dynamic tree or growable output buffer.
+         # Runtime layout checks still guard schema evolution and wire options.
+         self.direct[name] = self.packed[name] or all(
+            f.modifier in ('required', 'optional') and f.type_name in WIDTHS
+            for f in fields)
 
    def min_width(self, name, dims):
       return (4 if name in self.schema.enums else WIDTHS.get(name, self.minimum.get(name, 1))) * prod(dims)
@@ -114,7 +120,7 @@ class DirectCodecs:
       return ''.join(out)
 
    def encode(self, name):
-      if not self.packed[name]:return ''
+      if not self.direct[name]:return ''
       return '''      if Direct_Layout (C, %s) then
          declare
             Id : constant Unsigned_32 := Message_Id (C, %s);
@@ -130,7 +136,7 @@ class DirectCodecs:
 ''' % (quote(name),quote(name),typ(name),typ(name))
 
    def decode(self, name):
-      if not self.packed[name]:return ''
+      if not self.direct[name]:return ''
       return '''      if Direct_Layout (C, %s) then
          declare Position : Natural := Data'First; begin
             if Get_Count (Data, Position) /= Message_Id (C, %s) then

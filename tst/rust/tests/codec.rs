@@ -560,3 +560,24 @@ fn envelope_profile() {
     }
     assert!(pack_envelope(0, &[]).is_err());
 }
+
+#[test]
+fn optional_scalar_presence_and_truncation() {
+    use sdl_schema_tests::bench_cases::BenchOptionals;
+    let text = description(&[BenchOptionals::type_info()]).unwrap();
+    let ctx = prepare(&text, &[BenchOptionals::type_info()]).unwrap();
+    for mask in 0u16..256 {
+        let field = |bit: u32, value: i32| if mask & (1u16 << bit) != 0 { Some(value) } else { None };
+        let input = BenchOptionals {
+            a: field(0, 1), b: field(1, 2), c: field(2, 3), d: field(3, 4),
+            e: field(4, 5), f: field(5, 6), g: field(6, 7), h: field(7, 8),
+        };
+        let mut bytes = encode(&ctx, &input).unwrap();
+        assert_eq!(decode::<BenchOptionals>(&ctx, &bytes).unwrap(), input);
+        for cut in 0..bytes.len() {
+            assert!(decode::<BenchOptionals>(&ctx, &bytes[..cut]).is_err());
+        }
+        bytes[1] = 2;
+        assert!(decode::<BenchOptionals>(&ctx, &bytes).is_err());
+    }
+}

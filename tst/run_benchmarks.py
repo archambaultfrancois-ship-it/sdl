@@ -56,8 +56,8 @@ def main():
    iterations = sys.argv[2] if len(sys.argv)>2 else '200'
    matlab = sys.argv[3] if len(sys.argv)>3 else ('Matlab' if shutil.which('matlab') else 'Octave')
    rows=[];sizes={};buffer_table=None
-   for label, target in (('C','bench-c'), ('Rust','bench-rust'), ('Python','bench-python'),
-         (matlab,'bench-matlab'), ('Java','bench-java'), ('Ada','bench-ada')):
+   for label, target in (('C','bench-c'), ('Rust','bench-rust'), ('Java','bench-java'),
+         ('Ada','bench-ada'), ('Python','bench-python'), (matlab,'bench-matlab')):
       print('Running {} benchmark...'.format(label), flush=True)
       process=subprocess.run(make+['--no-print-directory','BENCH_ITERATIONS='+iterations,target],
          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)

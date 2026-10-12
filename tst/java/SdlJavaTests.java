@@ -184,6 +184,25 @@ public final class SdlJavaTests {
       try {SdlCodec.packEnvelope(0,new byte[0]);throw new AssertionError("empty");} catch(SdlCodec.CodecException expected) {}
       try {SdlCodec.packEnvelope(0x100000000L,new byte[]{1});throw new AssertionError("id");} catch(SdlCodec.CodecException expected) {}
    }
+   private static void optionalScalars() {
+      final SdlCodec.Context ctx = SdlCodec.prepare(
+          SdlCodec.description(bench_cases.BenchOptionals.class), bench_cases.BenchOptionals.class);
+      for (int mask = 0; mask < 256; mask++) {
+         bench_cases.BenchOptionals m = new bench_cases.BenchOptionals();
+         m.a=(mask&1)!=0?1:null; m.b=(mask&2)!=0?2:null;
+         m.c=(mask&4)!=0?3:null; m.d=(mask&8)!=0?4:null;
+         m.e=(mask&16)!=0?5:null; m.f=(mask&32)!=0?6:null;
+         m.g=(mask&64)!=0?7:null; m.h=(mask&128)!=0?8:null;
+         final byte[] wire=SdlCodec.encode(ctx,m);
+         check(Arrays.equals(wire,SdlCodec.encode(ctx,SdlCodec.decode(ctx,wire))));
+         for(int cut=0;cut<wire.length;cut++) {
+            final byte[] truncated=Arrays.copyOf(wire,cut);
+            invalid(new Action(){public void run(){SdlCodec.decode(ctx,truncated);}});
+         }
+         wire[1]=2;
+         invalid(new Action(){public void run(){SdlCodec.decode(ctx,wire);}});
+      }
+   }
    public static void main(String[] args) throws Exception {
       envelopeProfile();
       for (String line : Files.readAllLines(Paths.get("tst/fixtures/compatibility/cases.tsv"), StandardCharsets.UTF_8)) {
@@ -370,6 +389,7 @@ public final class SdlJavaTests {
       invalid(new Action() {
          public void run() { SdlCodec.prepare(graph(66, false)); }
       });
+      optionalScalars();
       packedCodecs();
       System.out.println(
           "Java SDL2 fixtures, catalogues, evolution, arrays and malformed input passed.");
