@@ -4,11 +4,18 @@
 
 #include <stddef.h>
 #include "sdl_dynamic.h"
-/* These functions are the public message and buffer API. */
+/* Return the encoded frame size, or zero if the type is unknown or sizing fails. */
 size_t type_encode_size(const char *type, const void *decoded);
+/* Encode a registered message. On success, *size receives the frame size.
+ * The returned buffer is owned by the caller and released with type_free(). */
 void *type_encode(const char *type, const void *decoded, size_t *size);
+/* Return the memory size required for a decoded message, or zero if invalid. */
 size_t type_decode_size(const void *encoded, size_t size);
+/* Decode one complete frame from encoded; *size is the available input length
+ * and is not modified. The returned message and dynamic fields share one
+ * allocation released by type_free(). */
 void *type_decode(const void *encoded, size_t *size);
+/* Deep-clone a registered in-memory message into one allocation. */
 void *type_clone(const char *type, const void *decoded);
 /* Display a registered in-memory message. Indentation is spaces per level.
  * Returns NULL for an unknown type, invalid value, or allocation failure.

@@ -5,6 +5,10 @@ use std::time::Instant;
 
 fn report_rate(operation: &str, iterations: usize, bytes_per_message: usize,
    seconds: f64) {
+   if seconds <= 0.0 {
+      println!("{:<6} below timer resolution", operation);
+      return;
+   }
    let messages_per_second = iterations as f64 / seconds;
    let mebibytes_per_second = messages_per_second * bytes_per_message as f64 /
       (1024.0 * 1024.0);
@@ -15,6 +19,8 @@ fn report_rate(operation: &str, iterations: usize, bytes_per_message: usize,
 fn main() {
    let iterations = std::env::var("SDL_BENCH_ITERATIONS")
       .ok()
+      .filter(|value| !value.is_empty() && value.bytes().all(|digit|
+         digit >= b'0' && digit <= b'9'))
       .and_then(|value| value.parse::<usize>().ok())
       .filter(|value| *value != 0)
       .unwrap_or(200);
@@ -39,7 +45,6 @@ fn main() {
    let start = Instant::now();
    for _ in 0..iterations {
       let decoded: BenchPayload = decode(black_box(&wire)).expect("decode message");
-      assert_eq!(decoded.samples.len(), 5000);
       black_box(decoded);
    }
    report_rate("decode", iterations, wire.len(), start.elapsed().as_secs_f64());

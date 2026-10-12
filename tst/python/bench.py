@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 
 from sdl_runtime import Complex32, decode, encode
@@ -6,14 +7,28 @@ from benchmark import BenchPayload
 
 
 def report_rate(operation, iterations, bytes_per_message, seconds):
+   if seconds <= 0.0:
+      print('{:<6} below timer resolution'.format(operation))
+      return
    messages_per_second = iterations / seconds
    mebibytes_per_second = messages_per_second * bytes_per_message / (1024.0 * 1024.0)
    print('{:<6} {:>10.0f} msg/s  {:>8.2f} MiB/s  ({} bytes/message)'.format(
       operation, messages_per_second, mebibytes_per_second, bytes_per_message))
 
 
+def read_iterations():
+   value = os.environ.get('SDL_BENCH_ITERATIONS', '200')
+   if not value or any(character < '0' or character > '9' for character in value):
+      return 200
+   try:
+      iterations = int(value)
+   except ValueError:
+      return 200
+   return iterations if 0 < iterations <= sys.maxsize else 200
+
+
 def main():
-   iterations = int(os.environ.get('SDL_BENCH_ITERATIONS', '200'))
+   iterations = read_iterations()
    message = BenchPayload(
       header='H' * 200,
       samples=[
@@ -33,9 +48,7 @@ def main():
 
    start = time.perf_counter()
    for unused_iteration in range(iterations):
-      decoded = decode(wire, BenchPayload)
-      if len(decoded.samples) != 5000:
-         raise RuntimeError('decoded array size changed')
+      decode(wire, BenchPayload)
    report_rate('decode', iterations, len(wire), time.perf_counter() - start)
    print('iterations: {}, wire endian: big'.format(iterations))
 

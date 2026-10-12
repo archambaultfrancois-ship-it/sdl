@@ -1,6 +1,9 @@
 enum State {
    UNKNOWN = 0;
    READY = 1;
+   NEGATIVE = -7;
+   MINIMUM = -2147483648;
+   MAXIMUM = 2147483647;
 }
 
 message CodecCases {
@@ -23,4 +26,17 @@ message CodecCases {
    17: required bool required_enabled;
    18: optional bool optional_enabled;
    19: repeated bool bool_flags;
+   20: required State[3] fixed_states;
+   21: packed State packed_states;
+   22: packed bool packed_flags;
+   4294967295: optional int32 high_id_value;
+}
+
+message EnumRecord {
+   1: required State state;
+   2: required int32 code;
+}
+
+message EnumRecordBatch {
+   1: packed EnumRecord records;
 }

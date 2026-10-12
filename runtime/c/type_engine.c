@@ -17,7 +17,25 @@ const SdlTypeDesc SDL_COMPLEX64_DESC = { SDL_TYPE_COMPLEX64, sizeof(double compl
 const SdlTypeDesc SDL_ENUM_DESC = { SDL_TYPE_ENUM, sizeof(int32_t), sizeof(int32_t), "enum", 0, NULL, 0, { { 0, NULL } } };
 const SdlTypeDesc SDL_STRING_DESC = { SDL_TYPE_STRING, sizeof(char *), sizeof(char *), "string", 0, NULL, 0, { { 0, NULL } } };
 
-static size_t encoded_value_size(const SdlTypeDesc *type, const void *value);
+static size_t field_string_length(const SdlFieldDesc *field,
+   const void *object, size_t index) {
+   const uint8_t *base = (const uint8_t *)object;
+   uint32_t length;
+   if (field->string_length_offset == SDL_NO_OFFSET)
+      return SIZE_MAX;
+   if ((field->flags & SDL_FIELD_REPEATED) != 0) {
+      const uint32_t *lengths = *(const uint32_t * const *)
+         (base + field->string_length_offset);
+      if (lengths == NULL) return SIZE_MAX;
+      length = lengths[index];
+   } else {
+      length = *(const uint32_t *)(base + field->string_length_offset);
+   }
+   return length == 0 ? SIZE_MAX : (size_t)length;
+}
+
+static size_t encoded_value_size(const SdlTypeDesc *type, const void *value,
+   size_t string_length);
 
 static size_t encoded_struct_size(const SdlTypeDesc *type, const void *value) {
    size_t total = 0, i;
@@ -31,17 +49,17 @@ static size_t encoded_struct_size(const SdlTypeDesc *type, const void *value) {
       if ((field->flags & SDL_FIELD_REPEATED) != 0) {
          count = *(const uint32_t *)((const uint8_t *)value + field->count_offset);
          data = *(const void * const *)data;
-         if (count != 0 && data == NULL) return 0;
+         if (count != 0 && data == NULL) return SIZE_MAX;
          if ((field->flags & SDL_FIELD_PACKED) != 0) {
             size_t fixed_size = sdl_fixed_wire_size(field->type);
             size_t payload_size;
             if (count == 0) continue;
             if (fixed_size == 0 || count > SIZE_MAX / fixed_size)
-               return 0;
+               return SIZE_MAX;
             payload_size = (size_t)count * fixed_size;
             if (payload_size > UINT32_MAX || total > SIZE_MAX - 8 ||
                 payload_size > SIZE_MAX - total - 8)
-               return 0;
+               return SIZE_MAX;
             total += 8 + payload_size;
             continue;
          }
@@ -49,22 +67,36 @@ static size_t encoded_struct_size(const SdlTypeDesc *type, const void *value) {
       for (item = 0; item < count; ++item) {
          const void *element = (field->flags & SDL_FIELD_REPEATED) != 0 ?
             (const uint8_t *)data + item * field->type->size : data;
-         size_t payload = encoded_value_size(field->type, element);
-         if (payload == SIZE_MAX || payload > SIZE_MAX - total - 8)
-            return 0;
+         size_t string_length = field->type->kind == SDL_TYPE_STRING ?
+            field_string_length(field, value, item) : SIZE_MAX;
+         size_t payload = encoded_value_size(field->type, element,
+            string_length);
+         if (payload == SIZE_MAX || total > SIZE_MAX - 8 ||
+             payload > SIZE_MAX - total - 8)
+            return SIZE_MAX;
          total += 8 + payload;
       }
    }
    return total;
 }
 
-static size_t encoded_value_size(const SdlTypeDesc *type, const void *value) {
+static size_t encoded_value_size(const SdlTypeDesc *type, const void *value,
+   size_t string_length) {
    if (type->kind == SDL_TYPE_STRING) {
       const char *string = *(const char * const *)value;
-      size_t n = 0;
-      if (string == NULL) return 0;
-      while (string[n] != '\0') { if (n == SIZE_MAX - 1) return SIZE_MAX; ++n; }
-      return n;
+      size_t length = string_length;
+      if (string == NULL) return length == SIZE_MAX ? 0 : SIZE_MAX;
+      if (length == SIZE_MAX) {
+         length = 0;
+         while (string[length] != '\0') {
+            if (length == SIZE_MAX - 1) return SIZE_MAX;
+            ++length;
+         }
+      }
+      if (length > UINT32_MAX ||
+          !sdl_wire_valid_utf8((const uint8_t *)string, length))
+         return SIZE_MAX;
+      return length;
    }
    if (type->kind == SDL_TYPE_STRUCT) return encoded_struct_size(type, value);
    if (type->kind == SDL_TYPE_ARRAY) return sdl_fixed_wire_size(type);

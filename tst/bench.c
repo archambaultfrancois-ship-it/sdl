@@ -2,7 +2,6 @@
 #include "sdl_registry.h"
 #include "type_engine.h"
 
-#include <assert.h>
 #include <complex.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,10 +13,30 @@ static double elapsed_seconds(clock_t start, clock_t end) {
    return (double)(end - start) / (double)CLOCKS_PER_SEC;
 }
 
+static size_t read_iterations(const char *value, size_t fallback) {
+   size_t parsed = 0;
+   if (value == NULL || *value == '\0') return fallback;
+   while (*value != '\0') {
+      size_t digit;
+      if (*value < '0' || *value > '9') return fallback;
+      digit = (size_t)(*value - '0');
+      if (parsed > (SIZE_MAX - digit) / 10) return fallback;
+      parsed = parsed * 10 + digit;
+      ++value;
+   }
+   return parsed == 0 ? fallback : parsed;
+}
+
 static void report_rate(const char *operation, size_t iterations,
    size_t bytes_per_message, double seconds) {
-   double messages_per_second = (double)iterations / seconds;
-   double megabytes_per_second = messages_per_second * (double)bytes_per_message /
+   double messages_per_second;
+   double megabytes_per_second;
+   if (seconds <= 0.0) {
+      printf("%-6s below timer resolution\n", operation);
+      return;
+   }
+   messages_per_second = (double)iterations / seconds;
+   megabytes_per_second = messages_per_second * (double)bytes_per_message /
       (1024.0 * 1024.0);
    printf("%-6s %10.0f msg/s  %8.2f MiB/s  (%lu bytes/message)\n",
       operation, messages_per_second, megabytes_per_second,
@@ -45,11 +64,7 @@ int main(void) {
       memcpy(&samples[i], parts, sizeof(parts));
    }
 
-   if (iterations_env != NULL) {
-      unsigned long long parsed = strtoull(iterations_env, NULL, 10);
-      if (parsed != 0 && parsed <= SIZE_MAX)
-         iterations = (size_t)parsed;
-   }
+   iterations = read_iterations(iterations_env, iterations);
 
    message.header = header;
    message.samples_count = (uint32_t)(sizeof(samples) / sizeof(samples[0]));
@@ -57,14 +72,28 @@ int main(void) {
    register_all_types();
 
    wire = (uint8_t *)type_encode("BenchPayload", &message, &wire_size);
-   assert(wire != NULL && wire_size != 0);
-   assert(wire_size == 40224 + BENCHPAYLOAD_SCHEMA_DESCRIPTOR_SIZE);
+   if (wire == NULL || wire_size == 0) {
+      fprintf(stderr, "Could not encode benchmark message.\n");
+      type_free(wire);
+      return 1;
+   }
+   if (wire_size != 40224 + BENCHPAYLOAD_SCHEMA_DESCRIPTOR_SIZE) {
+      fprintf(stderr, "Unexpected benchmark frame size: %lu bytes.\n",
+         (unsigned long)wire_size);
+      type_free(wire);
+      return 1;
+   }
 
    start = clock();
    for (i = 0; i < iterations; ++i) {
       size_t encoded_size = 0;
       void *encoded = type_encode("BenchPayload", &message, &encoded_size);
-      assert(encoded != NULL && encoded_size == wire_size);
+      if (encoded == NULL || encoded_size != wire_size) {
+         fprintf(stderr, "Benchmark encoding failed or changed frame size.\n");
+         type_free(encoded);
+         type_free(wire);
+         return 1;
+      }
       type_free(encoded);
    }
    end = clock();
@@ -74,7 +103,11 @@ int main(void) {
    for (i = 0; i < iterations; ++i) {
       size_t decoded_size = wire_size;
       BenchPayload *decoded = (BenchPayload *)type_decode(wire, &decoded_size);
-      assert(decoded != NULL && decoded->samples_count == 5000);
+      if (decoded == NULL) {
+         fprintf(stderr, "Benchmark decoding failed.\n");
+         type_free(wire);
+         return 1;
+      }
       type_free(decoded);
    }
    end = clock();

@@ -86,10 +86,12 @@ static int append_indent(SdlDisplayBuffer *buffer, size_t depth,
    return 1;
 }
 
-static int append_quoted(SdlDisplayBuffer *buffer, const char *value) {
+static int append_quoted(SdlDisplayBuffer *buffer, const char *value,
+   size_t length) {
    const unsigned char *cursor = (const unsigned char *)value;
+   size_t index;
    if (!append_text(buffer, "\"")) return 0;
-   while (*cursor != 0) {
+   for (index = 0; index < length; ++index) {
       const char *escape = NULL;
       size_t escape_size = 0;
       char control_escape[7];
@@ -118,10 +120,11 @@ static int append_quoted(SdlDisplayBuffer *buffer, const char *value) {
 }
 
 static int render_sequence(SdlDisplayBuffer *buffer, const SdlTypeDesc *type,
-   const void *items, size_t count, size_t indent_width, size_t depth);
+   const void *items, size_t count, const uint32_t *string_lengths,
+   size_t indent_width, size_t depth);
 
 static int render_value(SdlDisplayBuffer *buffer, const SdlTypeDesc *type,
-   const void *value, size_t indent_width, size_t depth);
+   const void *value, size_t string_length, size_t indent_width, size_t depth);
 
 static int render_struct_fields(SdlDisplayBuffer *buffer,
    const SdlTypeDesc *type, const void *value, size_t indent_width,
@@ -144,11 +147,23 @@ static int render_struct_fields(SdlDisplayBuffer *buffer,
             sizeof(count));
          memcpy(&items, field_value, sizeof(items));
          if (count != 0 && items == NULL) return 0;
-         if (!render_sequence(buffer, field->type, items, count, indent_width,
-               fields_depth)) return 0;
-      } else if (!render_value(buffer, field->type, field_value,
-            indent_width, fields_depth)) {
-         return 0;
+         const uint32_t *string_lengths = NULL;
+         if (field->type->kind == SDL_TYPE_STRING &&
+             field->string_length_offset != SDL_NO_OFFSET)
+            string_lengths = *(const uint32_t * const *)
+               ((const uint8_t *)value + field->string_length_offset);
+         if (!render_sequence(buffer, field->type, items, count, string_lengths,
+               indent_width, fields_depth)) return 0;
+      } else {
+         size_t string_length = SIZE_MAX;
+         if (field->type->kind == SDL_TYPE_STRING &&
+             field->string_length_offset != SDL_NO_OFFSET) {
+            uint32_t length = *(const uint32_t *)((const uint8_t *)value +
+               field->string_length_offset);
+            if (length != 0) string_length = length;
+         }
+         if (!render_value(buffer, field->type, field_value, string_length,
+               indent_width, fields_depth)) return 0;
       }
       if (!append_text(buffer, "\n")) return 0;
    }
@@ -156,7 +171,8 @@ static int render_struct_fields(SdlDisplayBuffer *buffer,
 }
 
 static int render_sequence(SdlDisplayBuffer *buffer, const SdlTypeDesc *type,
-   const void *items, size_t count, size_t indent_width, size_t depth) {
+   const void *items, size_t count, const uint32_t *string_lengths,
+   size_t indent_width, size_t depth) {
    size_t index;
    if (type == NULL || (count != 0 && (items == NULL || type->size == 0 ||
          count > SIZE_MAX / type->size))) return 0;
@@ -164,8 +180,11 @@ static int render_sequence(SdlDisplayBuffer *buffer, const SdlTypeDesc *type,
    if (depth >= SDL_DISPLAY_MAX_DEPTH || !append_text(buffer, "[\n")) return 0;
    for (index = 0; index < count; ++index) {
       const void *item = (const uint8_t *)items + index * type->size;
+      size_t string_length = string_lengths == NULL ? SIZE_MAX :
+         (string_lengths[index] == 0 ? SIZE_MAX : string_lengths[index]);
       if (!append_indent(buffer, depth + 1, indent_width) ||
-          !render_value(buffer, type, item, indent_width, depth + 1)) return 0;
+          !render_value(buffer, type, item, string_length, indent_width,
+             depth + 1)) return 0;
       if (index + 1 < count && !append_text(buffer, ",")) return 0;
       if (!append_text(buffer, "\n")) return 0;
    }
@@ -197,7 +216,7 @@ static int render_enum(SdlDisplayBuffer *buffer, const SdlTypeDesc *type,
 }
 
 static int render_value(SdlDisplayBuffer *buffer, const SdlTypeDesc *type,
-   const void *value, size_t indent_width, size_t depth) {
+   const void *value, size_t string_length, size_t indent_width, size_t depth) {
    if (type == NULL || value == NULL || depth > SDL_DISPLAY_MAX_DEPTH) return 0;
    switch (type->kind) {
    case SDL_TYPE_BOOL: {
@@ -251,12 +270,13 @@ static int render_value(SdlDisplayBuffer *buffer, const SdlTypeDesc *type,
    case SDL_TYPE_STRING: {
       const char *part;
       memcpy(&part, value, sizeof(part));
-      return part == NULL ? append_text(buffer, "null") :
-         append_quoted(buffer, part);
+      if (part == NULL) return append_text(buffer, "null");
+      if (string_length == SIZE_MAX) string_length = strlen(part);
+      return append_quoted(buffer, part, string_length);
    }
    case SDL_TYPE_ARRAY:
       return render_sequence(buffer, type->detail.array.element, value,
-         type->detail.array.count, indent_width, depth);
+         type->detail.array.count, NULL, indent_width, depth);
    case SDL_TYPE_STRUCT:
       if (!append_format(buffer, "%s {\n", type->name) ||
           !render_struct_fields(buffer, type, value, indent_width, depth + 1) ||

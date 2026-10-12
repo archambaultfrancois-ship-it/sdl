@@ -18,8 +18,9 @@ uses big-endian integers, independent of the selected wire byte order.
 
 ## Descriptor encoding
 
-All strings are UTF-8 preceded by a big-endian `u16` byte length. Integers are
-unsigned unless specified otherwise.
+All strings are UTF-8 preceded by a big-endian `u16` byte length.
+Descriptor strings may not contain NUL bytes. Integers are unsigned unless
+specified otherwise.
 
 | Order | Value | Encoding |
 | --- | --- | --- |
@@ -44,19 +45,57 @@ Each enum contains its string type name, a big-endian `u16` item count, then
 each item in SDL declaration order as a string item name and big-endian signed
 `i32` value.
 
+Message and enum type names must be unique and must not use a built-in wire
+type name (`bool`, `int8` through `int64`, `fl32`, `fl64`, `c32`, `c64`, or
+`string`). Enums must declare at least one item. Dynamic decoders reject
+violations so primitive and named-type lookup stays unambiguous and enum
+declarations can map to each supported language.
+A message field using an enum accepts only values declared for that enum;
+encoders and decoders reject undeclared values.
+
 ## Body interpretation
 
 The body is a sequence of payload-endian `u32` field ID, payload-endian `u32`
 payload length, and payload bytes. Unknown IDs can be skipped by length.
 
-Primitive integers and enums use their declared fixed-width wire size. Floats
-use IEEE-754 binary32 or binary64. Complex values contain the real component
-followed by the imaginary component. Strings are UTF-8 bytes without a
-terminator. A nested message is another field sequence. A fixed array is a
-row-major sequence of its elements without count or per-element headers. A
+Primitive integers and enums use their declared fixed-width wire size.
+Boolean values use one byte: `0` is false and `1` is true; decoders reject all
+other byte values. Floats use IEEE-754 binary32 or binary64 and preserve
+subnormal values and signed zero. Complex values contain the real component
+followed by the imaginary component. Strings are
+valid UTF-8 bytes without a terminator; U+0000 is valid string data, and the
+field length distinguishes embedded or trailing NUL bytes from the terminator
+used by C storage. Encoders and decoders reject invalid UTF-8. A nested message
+is another field sequence. A fixed array is a row-major
+sequence of its elements without count or per-element headers. A
 packed field uses that same contiguous representation for its repeated values.
+
+A `required` field is singular, but current decoders do not require its ID to
+appear in the body; an absent field keeps its target-language default value.
+Optional fields can be absent explicitly. When a body contains a known singular
+field ID more than once, the last valid value wins; every occurrence must still
+be well-formed, even when a later value replaces it. Every repeated and packed
+occurrence must also have a valid payload before its values are appended in wire
+order. A zero-length packed occurrence is valid and contributes no elements. These rules apply to generated typed
+decoders and descriptor-driven decoders. Unknown field IDs are ignored by
+length, including zero-length fields, and regardless of repetition.
 
 Generated schemas reject fixed arrays and packed fields whose element wire
 size is variable. This keeps every fixed-array element independently
 decodable and permits a generic decoder to construct language-neutral values
-from the frame alone.
+from the frame alone. Recursive message type references are unsupported and
+are rejected by the generator and descriptor-driven decoders.
+
+## C string storage
+
+Generated C structs retain `const char *` string members. Each string member
+has a generated `uint32_t` byte-length companion; repeated string fields have a
+parallel length array. A zero scalar length, or a null repeated length array,
+lets the encoder derive lengths with `strlen`, preserving ordinary C string
+usage. A null string pointer encodes as an empty string when no nonzero
+explicit length is supplied; a null pointer paired with a nonzero explicit
+length is rejected. Set explicit lengths for strings containing embedded NUL
+bytes. Lengths count UTF-8 bytes, not Unicode characters. Decoding fills the
+companion length fields, and C encoding, cloning, and display preserve those
+bytes. Initialize generated structs to zero before assigning fields so unset
+length companions select the `strlen` behavior.

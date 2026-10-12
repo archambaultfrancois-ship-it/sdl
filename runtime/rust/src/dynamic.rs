@@ -87,9 +87,10 @@ impl<'a> Reader<'a> {
 
    fn text(&mut self) -> Result<String, CodecError> {
       let size = self.u16()? as usize;
-      std::str::from_utf8(self.take(size)?)
-         .map(str::to_owned)
-         .map_err(|_| CodecError::InvalidDescriptor)
+      let value = std::str::from_utf8(self.take(size)?)
+         .map_err(|_| CodecError::InvalidDescriptor)?;
+      if value.contains('\0') { return Err(CodecError::InvalidDescriptor); }
+      Ok(value.to_owned())
    }
 }
 
@@ -172,6 +173,7 @@ fn parse_descriptor(bytes: &[u8]) -> Result<SchemaDesc, CodecError> {
       }
       previous_enum_name = Some(name.clone());
       let item_count = reader.u16()? as usize;
+      if item_count == 0 { return Err(CodecError::InvalidDescriptor); }
       let mut values = Vec::with_capacity(item_count);
       let mut enum_names = HashSet::new();
       let mut enum_values = HashSet::new();
@@ -192,6 +194,10 @@ fn parse_descriptor(bytes: &[u8]) -> Result<SchemaDesc, CodecError> {
       return Err(CodecError::InvalidDescriptor);
    }
 
+   if messages.keys().any(|name| is_builtin_type(name)) ||
+      enums.keys().any(|name| is_builtin_type(name)) {
+      return Err(CodecError::InvalidDescriptor);
+   }
    let schema = SchemaDesc { root, messages, enums };
    for message in schema.messages.values() {
       for field in &message.fields {
@@ -215,7 +221,37 @@ fn parse_descriptor(bytes: &[u8]) -> Result<SchemaDesc, CodecError> {
          }
       }
    }
+   let mut visiting = HashSet::new();
+   let mut visited = HashSet::new();
+   for name in schema.messages.keys() {
+      validate_message_dependencies(name, &schema, &mut visiting, &mut visited, 0)?;
+   }
    Ok(schema)
+}
+
+fn validate_message_dependencies(name: &str, schema: &SchemaDesc,
+   visiting: &mut HashSet<String>, visited: &mut HashSet<String>, depth: usize)
+   -> Result<(), CodecError> {
+   if depth > MAX_NESTING { return Err(CodecError::InvalidDescriptor); }
+   if visited.contains(name) { return Ok(()); }
+   if !visiting.insert(name.to_owned()) {
+      return Err(CodecError::InvalidDescriptor);
+   }
+   let message = schema.messages.get(name).ok_or(CodecError::InvalidDescriptor)?;
+   for field in &message.fields {
+      if schema.messages.contains_key(&field.type_name) {
+         validate_message_dependencies(&field.type_name, schema, visiting,
+            visited, depth + 1)?;
+      }
+   }
+   visiting.remove(name);
+   visited.insert(name.to_owned());
+   Ok(())
+}
+
+fn is_builtin_type(name: &str) -> bool {
+   matches!(name, "bool" | "int8" | "int16" | "int32" | "int64" |
+      "fl32" | "fl64" | "c32" | "c64" | "string")
 }
 
 fn known_type(name: &str, schema: &SchemaDesc) -> bool {
@@ -402,8 +438,14 @@ fn decode_primitive(type_name: &str, data: &[u8]) -> Result<DynamicValue, CodecE
       "int16" => Ok(DynamicValue::Integer(read_wire_i16(data)? as i64)),
       "int32" => Ok(DynamicValue::Integer(read_wire_i32(data)? as i64)),
       "int64" => Ok(DynamicValue::Integer(read_wire_i64(data)?)),
-      "fl32" => Ok(DynamicValue::Float(f32::from_bits(read_wire_u32(data)?) as f64)),
-      "fl64" => Ok(DynamicValue::Float(f64::from_bits(read_wire_u64(data)?))),
+      "fl32" => {
+         if data.len() != 4 { return Err(CodecError::TypeMismatch); }
+         Ok(DynamicValue::Float(f32::from_bits(read_wire_u32(data)?) as f64))
+      },
+      "fl64" => {
+         if data.len() != 8 { return Err(CodecError::TypeMismatch); }
+         Ok(DynamicValue::Float(f64::from_bits(read_wire_u64(data)?)))
+      },
       "c32" => {
          if data.len() != 8 { return Err(CodecError::TypeMismatch); }
          Ok(DynamicValue::Complex32(Complex32 {

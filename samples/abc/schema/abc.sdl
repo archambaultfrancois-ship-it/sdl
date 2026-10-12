@@ -1,0 +1,21 @@
+enum EquationKind {
+   TWO_REAL = 1;
+   ONE_REAL = 2;
+   COMPLEX = 3;
+   INFINITE_SOLUTIONS = 4;
+   NO_SOLUTION = 5;
+}
+
+message EquationInput {
+   1: required fl64 a;
+   2: required fl64 b;
+   3: required fl64 c;
+}
+
+message EquationResult {
+   1: required EquationKind kind;
+   2: optional fl64 x1;
+   3: optional fl64 x2;
+   4: optional fl64 real_part;
+   5: optional fl64 imaginary_part;
+}
