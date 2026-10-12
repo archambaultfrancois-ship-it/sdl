@@ -55,7 +55,7 @@ def main():
    make = shlex.split(sys.argv[1]) if len(sys.argv)>1 else ['make']
    iterations = sys.argv[2] if len(sys.argv)>2 else '200'
    matlab = sys.argv[3] if len(sys.argv)>3 else ('Matlab' if shutil.which('matlab') else 'Octave')
-   rows=[];sizes={}
+   rows=[];sizes={};buffer_table=None
    for label, target in (('C','bench-c'), ('Rust','bench-rust'), ('Python','bench-python'),
          (matlab,'bench-matlab'), ('Java','bench-java')):
       print('Running {} benchmark...'.format(label), flush=True)
@@ -63,6 +63,9 @@ def main():
          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
       if process.returncode:
          print(process.stdout);return process.returncode
+      marker='Python Packed buffer API — MB/s, rounded to integers'
+      if label=='Python' and marker in process.stdout:
+         buffer_table=marker+process.stdout.split(marker,1)[1]
       rates={(case,op):(float(msg),float(mib),int(size)) for case,op,msg,mib,size in RATE.findall(process.stdout)}
       meta={case:(int(size),float(us)) for case,size,us in META.findall(process.stdout)}
       for case in CASES:
@@ -75,9 +78,13 @@ def main():
          rows.append(dict(backend=label,case=case,bytes=encode[2],description_bytes=meta[case][0],
             prepare_us=meta[case][1],encode_msg_s=encode[0],encode_mib_s=encode[1],decode_msg_s=decode[0],decode_mib_s=decode[1]))
    print_matrix(rows)
+   if buffer_table is not None:
+      print('\n'+buffer_table.rstrip())
    os.makedirs('build',exist_ok=True)
    with open('build/benchmarks.json','w') as output:json.dump(rows,output,indent=2);output.write('\n')
    print('Catalogue size and preparation times: build/benchmarks.json')
+   if buffer_table is not None:
+      print('Python buffer measurements: build/python-buffer-benchmarks.json')
    return 0
 
 

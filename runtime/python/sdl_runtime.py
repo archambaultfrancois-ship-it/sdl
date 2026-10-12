@@ -3,6 +3,17 @@
 import re
 import struct
 import json
+import os
+import math
+import operator
+import sys
+
+try:
+   import _sdl_native
+except ImportError:
+   _sdl_native = None
+if _sdl_native is not None and getattr(_sdl_native, 'API_VERSION', 0) != 2:
+   _sdl_native = None  # A stale binary must not break the ordinary Python API.
 from enum import IntEnum
 
 
@@ -599,7 +610,213 @@ class Context:
                plan = _fixed_codec(self, name, dimensions)
                if plan is not None:
                   self.packed_codecs[key] = plan
+      self.native_packed = {}
+      self.native_layouts = {}
+      self.native_enabled = _sdl_native is not None and not os.environ.get('SDL_PYTHON_NO_NATIVE')
+      if self.native_enabled:
+         for fields in self.messages.values():
+            for field in fields:
+               if field['modifier'] not in ('packed', 'repeated'):
+                  continue
+               key = (field['type'], tuple(field['dimensions']))
+               if key in self.native_packed:
+                  continue
+               spec = _native_fixed_spec(self, *key)
+               if spec is not None:
+                  self.native_packed[key] = _sdl_native.prepare(spec)
+                  self.native_layouts[key] = spec
+      self.native_messages = {}
+      self.native_message_ids = {}
+      if self.native_enabled:
+         for name in self.classes:
+            if name not in self.messages:
+               continue
+            plan = _native_message_plan(self, name)
+            if plan is not None:
+               self.native_messages[name] = plan
+               self.native_message_ids[self.ids[name]] = plan
       self.description = text
+
+
+def _native_message_plan(ctx, name):
+   remote = ctx.messages[name]
+   local = ctx.local_fields[name]
+   if not remote or len(local) != len(remote):
+      return None
+   fields = []
+   has_packed = False
+   for field in remote:
+      binding = local.get(field['id'])
+      if binding is None or binding[2] != field['modifier']:
+         return None
+      if field['modifier'] == 'required' and field['type'] == 'string' and not field['dimensions']:
+         fields.append((binding[1], None, None))
+      elif field['modifier'] == 'packed':
+         key = (field['type'], tuple(field['dimensions']))
+         if key not in ctx.native_packed:
+            return None
+         fields.append((binding[1], ctx.native_packed[key], ctx.native_layouts[key]))
+         has_packed = True
+      else:
+         return None
+   if not has_packed:
+      return None
+   return _sdl_native.prepare_message(ctx.ids[name], ctx.classes[name], PackedArray, tuple(fields))
+
+
+def _buffer_plan(ctx, name, dimensions=()):
+   if not isinstance(ctx, Context) or not ctx.native_enabled:
+      raise CodecError('Packed buffer API requires an enabled native extension')
+   if not isinstance(name, str):
+      raise CodecError('type name must be a string')
+   dimensions = tuple(dimensions)
+   if any(type(n) is not int or n <= 0 for n in dimensions):
+      raise CodecError('invalid fixed array dimensions')
+   key = (name, dimensions)
+   if key not in ctx.native_packed:
+      spec = _native_fixed_spec(ctx, name, dimensions)
+      if spec is None:
+         raise CodecError('type has no exact native fixed layout')
+      ctx.native_packed[key] = _sdl_native.prepare(spec)
+      ctx.native_layouts[key] = spec
+   return ctx.native_packed[key], ctx.native_layouts[key]
+
+
+class PackedArray:
+   """Immutable, validated fixed records; object creation is lazy.
+
+   `buffer` exposes readonly storage in `byteorder`; `wire_buffer` is big-endian. `tolist()` restores
+   the ordinary Python representation. Buffers supplied to `from_buffer` must
+   follow the SDL field order, without C struct padding.
+   """
+   __slots__ = ('_wire', '_count', '_plan', '_spec', '_little')
+
+   def __init__(self, *args, **kwargs):
+      raise TypeError('use PackedArray.from_values or PackedArray.from_buffer')
+
+   def __setattr__(self, name, value):
+      raise AttributeError('PackedArray is immutable')
+
+   @classmethod
+   def _make(cls, wire, count, plan, spec, little=False):
+      result = object.__new__(cls)
+      for name, value in (('_wire', memoryview(wire)), ('_count', count),
+                          ('_plan', plan), ('_spec', spec), ('_little', little)):
+         object.__setattr__(result, name, value)
+      return result
+
+   @classmethod
+   def from_values(cls, ctx, type_name, values, dimensions=()):
+      dimensions = tuple(dimensions)
+      plan, spec = _buffer_plan(ctx, type_name, dimensions)
+      try:
+         wire = _sdl_native.encode(plan, values)
+      except (ValueError, TypeError, AttributeError, OverflowError) as error:
+         raise CodecError('invalid Packed values') from error
+      size = ctx.fixed_sizes[type_name] * math.prod(dimensions)
+      return cls._make(wire, len(wire)//size, plan, spec)
+
+   @classmethod
+   def from_buffer(cls, ctx, type_name, buffer, *, byteorder='native', dimensions=(), defer=False):
+      dimensions = tuple(dimensions)
+      plan, spec = _buffer_plan(ctx, type_name, dimensions)
+      try:
+         # Mutable exporters must be frozen before validation and later reuse.
+         view = memoryview(buffer)
+         if not view.c_contiguous:
+            raise CodecError('Packed input buffer must be contiguous')
+         size = ctx.fixed_sizes[type_name] * math.prod(dimensions)
+         if byteorder not in ('big', 'little', 'native'):
+            raise CodecError('invalid byteorder')
+         little = byteorder == 'little' or (byteorder == 'native' and sys.byteorder == 'little')
+         if defer:
+            wire = buffer if isinstance(buffer, bytes) else view.tobytes()
+            _sdl_native.validate(plan, wire, len(wire)//size)
+         elif isinstance(buffer, bytes) and byteorder == 'big':
+            wire = buffer
+            _sdl_native.validate(plan, wire, len(wire)//size)
+         else:
+            # C holds the GIL while copying mutable exporters into immutable storage.
+            wire = _sdl_native.convert(plan, buffer if isinstance(buffer, bytes) else view, byteorder)
+         count = len(wire)//size
+      except (ValueError, TypeError, BufferError, OverflowError) as error:
+         raise CodecError('invalid Packed buffer') from error
+      return cls._make(wire, count, plan, spec, bool(defer and little))
+
+   @property
+   def buffer(self):
+      return memoryview(self._wire)
+
+   @property
+   def byteorder(self):
+      return 'little' if self._little else 'big'
+
+   @property
+   def wire_buffer(self):
+      if self._little:
+         return memoryview(_sdl_native.convert(self._plan, self._wire, 'little'))
+      return self.buffer
+
+   def __len__(self):
+      return self._count
+
+   def tolist(self):
+      return _sdl_native.decode(self._plan, self.wire_buffer, self._count)
+
+   def __getitem__(self, index):
+      size = len(self._wire)//self._count if self._count else 0
+      if isinstance(index, slice):
+         start, stop, step = index.indices(self._count)
+         if step != 1:
+            return self.tolist()[index]
+         count = max(stop-start, 0)
+         return self._make(self._wire[start*size:(start+count)*size], count, self._plan, self._spec, self._little)
+      index = operator.index(index)
+      if index < 0:
+         index += self._count
+      if not 0 <= index < self._count:
+         raise IndexError('Packed index out of range')
+      return self[index:index+1].tolist()[0]
+
+   def __eq__(self, other):
+      if isinstance(other, PackedArray):
+         return self._spec == other._spec and self.wire_buffer == other.wire_buffer
+      if isinstance(other, (list, tuple)):
+         return self.tolist() == list(other)
+      return NotImplemented
+
+   def __repr__(self):
+      return 'PackedArray(count={}, bytes={})'.format(self._count, len(self._wire))
+
+
+def _native_fixed_spec(ctx, name, dimensions=(), _depth=0):
+   # Only exact fixed local records bypass the ordinary evolution decoder.
+   if _depth > 64:
+      return None
+   if dimensions:
+      child = _native_fixed_spec(ctx, name, dimensions[1:], _depth + 1)
+      size = ctx.fixed_sizes.get(name)
+      if child is None or size is None or size * math.prod(dimensions) > 65536:
+         return None
+      return ('array', dimensions[0], child)
+   if name in ctx.messages:
+      if _fixed_codec(ctx, name) is None or not ctx.fixed_sizes[name] or ctx.fixed_sizes[name] > 65536:
+         return None
+      fields = []
+      for field in ctx.messages[name]:
+         local = ctx.local_fields[name][field['id']]
+         child = _native_fixed_spec(ctx, field['type'], tuple(field['dimensions']), _depth + 1)
+         if child is None:
+            return None
+         fields.append((local[1], child))
+      return ('record', ctx.classes[name], tuple(fields))
+   if name in ctx.enums:
+      return None  # Preserve enum membership and local-schema checks in Python.
+   if name in ('c32', 'c64'):
+      return (name, Complex32 if name == 'c32' else Complex64)
+   if name in _PRIMITIVE_WIRE_SIZES:
+      return (name,)
+   return None
 
 
 def _fixed_codec(ctx, name, dimensions=()):
@@ -725,7 +942,8 @@ def _write_count(output, value):
 
 
 class _Reader:
-   def __init__(self, data):
+   def __init__(self, data, packed='objects'):
+      self.packed = packed
       self.data = memoryview(data)
       self.offset = 0
 
@@ -789,7 +1007,20 @@ def _write_message(ctx, name, message, output):
       # One struct conversion per numeric array instead of one per element.
       fmt = {'int8':'b', 'int16':'h', 'int32':'i', 'int64':'q', 'fl32':'f', 'fl64':'d'}.get(f['type'])
       plan = ctx.packed_codecs.get((f['type'], tuple(f['dimensions']))) if modifier in ('packed', 'repeated') else None
-      if plan is not None:
+      native = ctx.native_packed.get((f['type'], tuple(f['dimensions']))) if modifier in ('packed', 'repeated') else None
+      if isinstance(value, PackedArray) and modifier in ('packed', 'repeated'):
+         spec = ctx.native_layouts.get((f['type'], tuple(f['dimensions'])))
+         if spec is None:
+            spec = _native_fixed_spec(ctx, f['type'], tuple(f['dimensions']))
+         if spec != value._spec:
+            raise CodecError('Packed buffer layout does not match the field')
+         output.extend(value.wire_buffer)
+      elif native is not None:
+         try:
+            output.extend(_sdl_native.encode(native, value))
+         except (ValueError, TypeError, AttributeError, OverflowError) as error:
+            raise CodecError('invalid native packed value') from error
+      elif plan is not None:
          record, emit, unused_read = plan
          try:
             components = []
@@ -824,6 +1055,14 @@ def _write_message(ctx, name, message, output):
 def encode(ctx, message):
    if not isinstance(ctx, Context) or not isinstance(message, SdlMessage):
       raise CodecError('encode expects a prepared context and an SDL message')
+   native = ctx.native_messages.get(message._SDL_NAME)
+   if native is not None:
+      try:
+         result = _sdl_native.encode_message(native, message)
+      except (ValueError, TypeError, BufferError, AttributeError, OverflowError) as error:
+         raise CodecError('invalid native Packed message') from error
+      if result is not NotImplemented:
+         return result
    output = bytearray()
    try:
       _write_count(output, ctx.ids[message._SDL_NAME])
@@ -831,6 +1070,53 @@ def encode(ctx, message):
       raise CodecError('message is not in the catalogue') from error
    _write_message(ctx, message._SDL_NAME, message, output)
    return bytes(output)
+
+
+class _BufferWriter:
+   def __init__(self, buffer, offset):
+      try:
+         self.view = memoryview(buffer).cast('B')
+      except (TypeError, ValueError) as error:
+         raise CodecError('output must be a contiguous writable buffer') from error
+      if self.view.readonly or type(offset) is not int or not 0 <= offset <= len(self.view):
+         raise CodecError('invalid output buffer or offset')
+      self.offset = offset
+
+   def append(self, byte):
+      if self.offset == len(self.view):
+         raise CodecError('output buffer too small')
+      self.view[self.offset] = byte
+      self.offset += 1
+
+   def extend(self, data):
+      length = len(data)
+      if length > len(self.view)-self.offset:
+         raise CodecError('output buffer too small')
+      self.view[self.offset:self.offset+length] = data
+      self.offset += length
+
+
+def encode_into(ctx, message, buffer, offset=0):
+   """Write into caller storage; return bytes written. Errors may leave a prefix."""
+   if not isinstance(ctx, Context) or not isinstance(message, SdlMessage):
+      raise CodecError('encode_into expects a prepared context and an SDL message')
+   if type(offset) is not int or offset < 0:
+      raise CodecError('invalid output offset')
+   native = ctx.native_messages.get(message._SDL_NAME)
+   if native is not None:
+      try:
+         result = _sdl_native.encode_message(native, message, buffer, offset)
+      except (ValueError, TypeError, BufferError, AttributeError, OverflowError) as error:
+         raise CodecError('invalid native Packed message or output buffer') from error
+      if result is not NotImplemented:
+         return result
+   output = _BufferWriter(buffer, offset)
+   try:
+      _write_count(output, ctx.ids[message._SDL_NAME])
+   except KeyError as error:
+      raise CodecError('message is not in the catalogue') from error
+   _write_message(ctx, message._SDL_NAME, message, output)
+   return output.offset-offset
 
 
 def _read_value(ctx, name, reader, dimensions=(), dynamic=False, skip=False):
@@ -889,7 +1175,23 @@ def _read_message(ctx, name, reader, dynamic=False, skip=False):
       values = []
       fmt = {'int8':'b', 'int16':'h', 'int32':'i', 'int64':'q', 'fl32':'f', 'fl64':'d'}.get(f['type'])
       plan = ctx.packed_codecs.get((f['type'], tuple(f['dimensions']))) if modifier in ('packed', 'repeated') and not dynamic else None
-      if plan is not None:
+      native = ctx.native_packed.get((f['type'], tuple(f['dimensions']))) if modifier in ('packed', 'repeated') and not dynamic else None
+      if native is not None and reader.packed == 'view' and modifier == 'packed' and not discard:
+         payload = reader.take(count * size)
+         try:
+            _sdl_native.validate(native, payload, count)
+         except (ValueError, TypeError, OverflowError) as error:
+            raise CodecError('invalid native Packed payload') from error
+         values = PackedArray._make(payload, count, native,
+            ctx.native_layouts[(f['type'], tuple(f['dimensions']))])
+      elif native is not None:
+         payload = reader.take(count * size)
+         # Discarded leaves still need boolean validation.
+         try:
+            values = _sdl_native.decode(native, payload, count)
+         except (ValueError, TypeError, OverflowError) as error:
+            raise CodecError('invalid native packed payload') from error
+      elif plan is not None:
          record, unused_emit, read = plan
          payload = reader.take(count * record.size)
          if not discard:
@@ -919,8 +1221,21 @@ def _read_message(ctx, name, reader, dynamic=False, skip=False):
    return SdlDynamicMessage(name, result) if dynamic and not skip else result
 
 
-def _decode(ctx, data, dynamic):
-   reader = _Reader(data)
+def _decode(ctx, data, dynamic, packed='objects'):
+   if packed not in ('objects', 'view'):
+      raise CodecError('packed must be objects or view')
+   if packed == 'view':
+      if not isinstance(ctx, Context) or not ctx.native_enabled:
+         raise CodecError('Packed views require an enabled native extension')
+      if not isinstance(data, bytes):
+         data = memoryview(data).tobytes()
+      native = ctx.native_message_ids.get(data[0]) if data and data[0] < 128 else None
+      if native is not None:
+         try:
+            return _sdl_native.decode_message(native, data)
+         except (ValueError, TypeError, BufferError, OverflowError) as error:
+            raise CodecError('invalid native Packed message') from error
+   reader = _Reader(data, packed)
    type_id = reader.count()
    if not 1 <= type_id <= len(ctx.names):
       raise CodecError('unknown message type ID')
@@ -930,8 +1245,8 @@ def _decode(ctx, data, dynamic):
    return result
 
 
-def decode(ctx, data):
-   return _decode(ctx, data, False)
+def decode(ctx, data, *, packed='objects'):
+   return _decode(ctx, data, False, packed)
 
 
 def decode_dynamic(ctx, data):

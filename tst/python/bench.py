@@ -40,3 +40,9 @@ if __name__ == '__main__':
       BenchRecord(id=i, pose=BenchPose(position=BenchVector(values=[i*.25, -i*.5, i%97]),
          rotation=[0, 0, 0, 1]), measures=[i*.125, -(i%31)*.5])
       for i in range(1000)]), 40000)
+
+   # Keep the object API matrix and expose the alternate representation separately.
+   from sdl_runtime import _sdl_native
+   if _sdl_native is not None and not os.environ.get('SDL_PYTHON_NO_NATIVE'):
+      from bench_buffers import main as buffer_bench
+      buffer_bench()
