@@ -35,8 +35,9 @@ Keywords and names are case-sensitive.
 
 Files are read as UTF-8 without a BOM. Source is tokenized independently of
 line breaks. Whitespace, including newlines, can separate any tokens; it does
-not delimit declarations. `//` starts a comment ending at the next newline.
-There are no `/* ... */` comments. Identifiers and numeric literals cannot be
+not delimit declarations. `//` starts an ignored comment ending at the next newline.
+`/* ... */` is an ignored block, and `/** ... */` is retained documentation.
+Blocks may span lines, do not nest and end at the first `*/`. Identifiers and numeric literals cannot be
 split by whitespace or comments, including a sign or exponent in a number.
 
 Braces delimit bodies; semicolons end fields, enum items, constants and the
@@ -45,6 +46,17 @@ Several declarations can share one line, and fields or `wire(...)` clauses can
 span several lines. Syntax errors include the unexpected token's line and column.
 Whitespace and comments between tokens are implicit in the source grammar below;
 they are forbidden in the compact runtime catalogue.
+
+Documentation is allowed at declaration boundaries. A block before a declaration
+documents that declaration; a block opening on the same line after a completed
+declaration instead documents the preceding one. These completions are `;` for
+fields, enum items, constants and packages, and `}` for named messages/enums.
+Anonymous fields complete at their final semicolon. Documentation before a closing
+brace or at EOF without a declaration, or inside a declaration's tokens, is rejected.
+Package documentation describes the generated schema/module, and anonymous field
+documentation is also attached to its generated message type. Continuation-line
+`*` decorations are optional. See
+[comments and generated documentation](schema.md#comments-and-generated-documentation).
 
 ```ebnf
 DIGIT     = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;

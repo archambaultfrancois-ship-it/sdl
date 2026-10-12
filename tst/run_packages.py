@@ -31,6 +31,9 @@ def python_check():
    nav = importlib.import_module('navigation.geometry.shapes')
    radio = importlib.import_module('radio.shapes')
    glob = importlib.import_module('shapes')
+   assert 'Point coordinates.' in nav.Point.__doc__
+   assert 'Local point.' in nav.Sample.__doc__
+   assert nav.State.ONE.__doc__ == 'Active.'
    value = nav.Sample(local=nav.Point(11, nav.State.ONE), global_state=glob.State.ONE,
       remote=radio.Point(33), state=nav.State.ONE, remote_state=radio.State.ONE,
       points=[nav.Point(44), nav.Point(55)], remote_points=[radio.Point(66)],
@@ -138,6 +141,7 @@ fn main(){
 '''
 MATLAB = r'''
 function package_check()
+assert(~isempty(strfind(help('navigation.geometry.Point'),'Point coordinates.')));
 types={'navigation.geometry.Sample','radio.Point','Point'};
 text=sdl_matlab_runtime('description',types);ctx=sdl_matlab_runtime('prepare',text,types);
 x=navigation.geometry.Sample();x.local.x=int32(11);x.local.state=int32(1);x.global_point.x=int32(22);x.remote.x=int32(33);

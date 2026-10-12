@@ -7,6 +7,7 @@ import os
 import sys
 import math
 import warnings
+import inspect
 from decimal import Decimal
 from collections import deque, namedtuple
 
@@ -188,25 +189,69 @@ class Field:
       self.name = name
       self.array_dimensions = array_dimensions or []
       self.wire = wire or {}
+      self.doc = ''
 
 
 class Message:
    def __init__(self, name):
       self.name = name
       self.fields = []
+      self.doc = ''
 
 
 class Enum:
    def __init__(self, name):
       self.name = name
       self.pairs = []
+      self.doc = ''
+      self.value_docs = {}
 
 
-_SourceToken = namedtuple('_SourceToken', 'text line column')
+_SourceToken = namedtuple('_SourceToken', 'text line column kind end_line', defaults=('symbol', None))
 _SOURCE_TOKENS = re.compile(
    r'(?P<space>\s+)|(?P<comment>//[^\r\n]*)|'
+   r'(?P<block>/\*[\s\S]*?\*/)|(?P<unclosed>/\*)|'
    r'(?P<number>[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?!\w))|'
    r'(?P<name>\w+)|(?P<symbol>\S)')
+
+
+def normalize_documentation(block):
+   lines = block[3:-2].splitlines()
+   for index in range(1, len(lines)):
+      lines[index] = re.sub(r'^[ \t]*\*(?:[ \t]|$)', '', lines[index], count=1)
+   return inspect.cleandoc('\n'.join(lines)).strip()
+
+
+def documentation_comment(text, language, indent='', module=False):
+   if not text:
+      return ''
+   if language in ('c', 'java'):
+      # Java interprets Unicode escapes even inside comments.
+      if language == 'java':
+         text = text.replace('\\', '&#92;')
+      text = text.replace('*/', '*&#47;')
+      return indent + '/**\n' + ''.join(indent + ' * ' + line + '\n'
+         for line in text.splitlines()) + indent + ' */\n'
+   prefix = {'python': '#:', 'rust': '//!' if module else '///', 'matlab': '%', 'ada': '--'}[language]
+   return ''.join(indent + prefix + ' ' + line + '\n' for line in text.splitlines())
+
+
+def schema_documentation(schema):
+   parts = [schema.doc] if schema.doc else []
+   constants = [name + ' = ' + str(schema.constants[name]) + '\n' + text
+      for name, text in schema.constant_docs.items() if text]
+   if constants:
+      parts.append('Dimension constants:\n\n' + '\n\n'.join(constants))
+   return '\n\n'.join(parts)
+
+
+def message_documentation(message):
+   parts = [message.doc] if message.doc else []
+   fields = [field.name + ':\n' + field.doc for field in sorted(message.fields,
+      key=lambda field: field.index) if field.doc]
+   if fields:
+      parts.append('Fields:\n\n' + '\n\n'.join(fields))
+   return '\n\n'.join(parts)
 
 
 class _SourceParser:
@@ -218,13 +263,19 @@ class _SourceParser:
       self.pending = deque()
       self.eof = _SourceToken('', 1, 1)
       self.anonymous_counters = {}
+      self.last_token = self.eof
 
    def _tokens(self, text):
       line, column = 1, 1
       for match in _SOURCE_TOKENS.finditer(text):
          value = match[0]
-         if match.lastgroup not in ('space', 'comment'):
-            yield _SourceToken(value, line, column)
+         if match.lastgroup == 'unclosed':
+            raise ValueError('unterminated block comment at line %d, column %d' % (line, column))
+         if match.lastgroup == 'block':
+            if value.startswith('/**'):
+               yield _SourceToken(normalize_documentation(value), line, column, 'doc', line + value.count('\n'))
+         elif match.lastgroup not in ('space', 'comment'):
+            yield _SourceToken(value, line, column, 'symbol', line + value.count('\n'))
          newlines = value.count('\n')
          if newlines:
             line += newlines
@@ -233,7 +284,7 @@ class _SourceParser:
             column += len(value)
       self.eof = _SourceToken('', line, column)
 
-   def peek(self, index=0):
+   def raw_peek(self, index=0):
       while len(self.pending) <= index:
          token = next(self.tokens, None)
          if token is None:
@@ -241,11 +292,40 @@ class _SourceParser:
          self.pending.append(token)
       return self.pending[index]
 
+   def peek(self, index=0):
+      position = 0
+      while True:
+         token = self.raw_peek(position)
+         if token.kind != 'doc':
+            if index == 0 or token == self.eof:
+               return token
+            index -= 1
+         position += 1
+
    def take(self):
-      token = self.peek()
+      token = self.raw_peek()
+      if token.kind == 'doc':
+         self.fail('documentation comment must precede a declaration or follow its terminator', token)
       if self.pending:
          self.pending.popleft()
+      self.last_token = token
       return token.text
+
+   def leading_documentation(self):
+      docs = []
+      while self.raw_peek().kind == 'doc':
+         docs.append(self.pending.popleft())
+      return docs
+
+   def finish_documentation(self, leading):
+      docs = list(leading)
+      while self.raw_peek().kind == 'doc' and self.raw_peek().line == self.last_token.end_line:
+         docs.append(self.pending.popleft())
+      return '\n\n'.join(token.text for token in docs if token.text)
+
+   def reject_orphan_documentation(self, docs):
+      if docs:
+         self.fail('documentation comment has no following declaration', docs[0])
 
    def fail(self, message, token=None):
       token = token or self.peek()
@@ -303,8 +383,13 @@ class _SourceParser:
          self.expect(',', 'invalid wire option')
 
    def fields(self, message, root_name, depth=0):
-      while self.peek().text != '}':
+      while True:
+         docs = self.leading_documentation()
+         if self.peek().text == '}':
+            self.reject_orphan_documentation(docs)
+            break
          if not self.peek().text:
+            self.reject_orphan_documentation(docs)
             self.fail(('unterminated anonymous struct in ' + root_name) if depth else
                ('unterminated message declaration: ' + message.name))
          self.reject_nested_declaration()
@@ -345,8 +430,12 @@ class _SourceParser:
          field_name = self.name('anonymous struct must close with its field name' if anonymous else label)
          options = self.wire()
          self.expect(';', label)
-         message.fields.append(Field(self.schema._field_index(message, explicit_index),
-            modifier, type_name, field_name, dimensions, options))
+         field = Field(self.schema._field_index(message, explicit_index),
+            modifier, type_name, field_name, dimensions, options)
+         field.doc = self.finish_documentation(docs)
+         if anonymous:
+            child.doc = field.doc
+         message.fields.append(field)
       self.take()
 
    def constant(self):
@@ -365,11 +454,16 @@ class _SourceParser:
          self.fail('dimension constant must be a positive uint32: ' + name)
       self.expect(';', label)
       self.schema.constants[name] = int(value)
+      return name
 
    def parse(self):
       package_seen = False
-      while self.peek().text:
+      while True:
+         docs = self.leading_documentation()
          keyword = self.peek().text
+         if not keyword:
+            self.reject_orphan_documentation(docs)
+            return
          if keyword == 'package':
             label = 'invalid, duplicate or misplaced package declaration'
             if package_seen or self.schema.messages or self.schema.enums or self.schema.constants:
@@ -380,9 +474,11 @@ class _SourceParser:
                self.fail(label)
             self.expect(';', label)
             self.schema.package = package
+            self.schema.doc = self.finish_documentation(docs)
             package_seen = True
          elif keyword == 'const':
-            self.constant()
+            name = self.constant()
+            self.schema.constant_docs[name] = self.finish_documentation(docs)
          elif keyword in ('enum', 'message', 'structure', 'struct'):
             self.take()
             name = self.name('unexpected SDL statement: ' + keyword)
@@ -394,8 +490,13 @@ class _SourceParser:
             if keyword == 'enum':
                enumeration = Enum(name)
                self.schema.enums[name] = enumeration
-               while self.peek().text != '}':
+               while True:
+                  item_docs = self.leading_documentation()
+                  if self.peek().text == '}':
+                     self.reject_orphan_documentation(item_docs)
+                     break
                   if not self.peek().text:
+                     self.reject_orphan_documentation(item_docs)
                      self.fail('unterminated enum declaration: ' + name)
                   self.reject_nested_declaration()
                   item = self.name('invalid enum entry')
@@ -405,12 +506,15 @@ class _SourceParser:
                      self.fail('invalid enum entry')
                   self.expect(';', 'invalid enum entry')
                   enumeration.pairs.append((item, str(int(value, 10))))
+                  enumeration.value_docs[item] = self.finish_documentation(item_docs)
                self.take()
+               enumeration.doc = self.finish_documentation(docs)
             else:
                message = Message(name)
                self.schema.messages[name] = message
                self.schema.message_order.append(name)
                self.fields(message, name)
+               message.doc = self.finish_documentation(docs)
          elif keyword == '}':
             self.fail('unexpected closing brace')
          else:
@@ -425,6 +529,8 @@ class MsgParser:
       self.enums = TypeTable()
       self.messages = TypeTable()
       self.constants = TypeTable()
+      self.constant_docs = {}
+      self.doc = ''
       self.message_order = []
       self.package = ''
       self.type_owners = {}
@@ -455,6 +561,7 @@ class MsgParser:
       constants = list(self.constants.items())
       self.constants.clear()
       self.constants.update((qualify(name), value) for name, value in constants)
+      self.constant_docs = {qualify(name): doc for name, doc in self.constant_docs.items()}
       for message in self.messages.values():
          for field in message.fields:
             field.type_name = qualify(field.type_name)

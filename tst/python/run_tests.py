@@ -11,6 +11,7 @@ import test_buffers
 import test_representation
 import test_packages
 import test_source_syntax
+import test_documentation_comments
 
 
 PHASES = (
@@ -21,6 +22,7 @@ PHASES = (
       (test_representation.RepresentationTests, ("test_01_codec_",)),
    )),
    ("SDL schema parser and backend validation", (
+      (test_documentation_comments.DocumentationCommentTests, ("test_",)),
       (test_source_syntax.SourceSyntaxTests, ("test_",)),
       (test_packages.PackageTests, ("test_",)),
       (test_generator.GeneratorValidationTests,

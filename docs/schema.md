@@ -33,7 +33,8 @@ end with semicolons. Several declarations may share a line, and a field or
 `wire(...)` clause may span several lines. Whitespace is also allowed around
 punctuation, for example `1 : fl32 [ 3 ] coords;` and `wire ( bits = 12 )`.
 Identifiers and numeric literals must remain intact. `//` starts a comment ending
-at the next newline. For example, this is a complete schema:
+at the next newline; `/* ... */` is an ignored block comment. `/** ... */` is
+documentation retained in generated code. For example, this is a complete schema:
 
 ```sdl
 message Point { fl64 x; fl64 y; }
@@ -47,6 +48,63 @@ Message dependencies must be acyclic and contain at most 64 nested message
 references along any path. The generator checks this limit before emitting
 bindings, including paths through shared subtypes. Syntax errors include a source
 line and column.
+
+## Comments and generated documentation
+
+`//` and `/* ... */` are ordinary comments ignored by the generator. Block
+comments may span multiple lines and may appear anywhere whitespace is allowed.
+Comment delimiters inside a line comment are ordinary text. Blocks do not nest
+and end at the first `*/`; an unterminated block reports its opening line and
+column. Comments separate tokens rather than joining the text on either side.
+
+`/** ... */` is retained documentation:
+
+```sdl
+/** Position expressed in metres. */
+message Point {
+   /* Internal schema note, absent from generated code. */
+   fl64 x; /** Horizontal position. */
+
+   /**
+    * Vertical position.
+    * Positive upwards.
+    */
+   fl64 y;
+}
+```
+
+A documentation block before a declaration documents the next declaration. A
+block opening on the same line after a completed declaration documents that
+preceding declaration, even if the block spans additional lines. On a shared
+line this trailing rule takes precedence: `int32 x; /** X */ int32 y;` documents
+`x`. For a leading comment on `y`, put the block on a new line. Field, enum item,
+constant and package declarations complete at `;`; named message and enum
+declarations complete at `}`. An anonymous message field completes at its field
+name and semicolon, for example `} metadata; /** Metadata */`.
+
+Documentation can describe packages, constants, messages, fields, enums and enum
+values. An anonymous field's documentation also describes its generated message
+type. Leading `*` decorations on continuation lines are optional; indentation is
+normalized while preserving paragraphs. Multiple associated blocks are combined
+in source order. A block without a following declaration, or placed inside a
+declaration such as between its type and field name, is rejected with its source
+position. Empty documentation blocks are accepted.
+
+| Backend | Generated documentation |
+| --- | --- |
+| Python | Module/class/member docstrings and field comments; class docstrings list documented fields |
+| C | Documentation blocks in public headers |
+| Rust | Module, type, variant and field documentation comments |
+| Java | Javadoc on wrappers, types, enum values and fields |
+| Ada | Comments in package specifications |
+| Matlab/Octave | Function help text containing type, field and enum-value documentation |
+
+Constants remain substituted rather than emitted as native values. Their
+documentation appears in the generated schema/module documentation. A
+documentation-only Matlab schema produces an empty `sdl_schema_doc_<file>`
+function for `help`; its name is disambiguated if another generated type uses it.
+Ordinary comments produce no generated text. Neither kind of comment appears in
+the wire catalogue, affects its hash or changes binary encoding.
 
 ## Packages and type references
 

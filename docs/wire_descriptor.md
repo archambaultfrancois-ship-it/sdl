@@ -39,6 +39,8 @@ Source whitespace and line breaks do not affect the catalogue. Dimension constan
 are resolved to decimal integers before rendering; the constants themselves are
 absent from the catalogue. A named dimension and the same literal dimension
 produce identical bytes and hashes.
+Ordinary block comments and retained `/** ... */` documentation are source-only;
+they are absent from the catalogue and cannot change its hash or binary layout.
 
 The canonical catalogue is one UTF-8 string with **no whitespace or trailing
 newline**. It starts with `SDL2|`; `|` separates declarations. Messages are sorted

@@ -4,7 +4,8 @@ import os
 import re
 import copy
 from generator import (canonical_type_descriptor, clear_generated_outputs, parse_schemas,
-   TypeTable, validate_package_paths, validate_file_dependencies)
+   TypeTable, validate_package_paths, validate_file_dependencies,
+   documentation_comment, schema_documentation)
 
 _ADA_KEYWORDS = set(('abort abs abstract accept access aliased all and array at begin body case '
    'constant declare delay delta digits do else elsif end entry exception exit for function '
@@ -108,14 +109,17 @@ class AdaBackend:
          'with Interfaces; use Interfaces;\n']
       for package, base in self.schema.dependencies():
          out.append('with ' + ada_package(package, base) + ';\n')
+      out.append(documentation_comment(schema_documentation(self.schema), 'ada'))
       out.append('package ' + self.package + ' is\n')
       desc = canonical_type_descriptor(self.schema).decode('utf-8')
       out.append('   Description : constant String :=\n      ' + ' &\n      '.join(quote(desc[i:i+200]) for i in range(0, len(desc), 200)) + ';\n')
       out.append('   function Prepare (Catalogue : String := Description; Use_Direct : Boolean := True) return Context;\n')
       for enum in self.schema.enums.values():
          owner = self.external_package(enum.name)
+         out.append(documentation_comment(enum.doc, 'ada', '   '))
          out.append('   subtype ' + typ(enum.name) + ' is ' + (owner + '.' + typ(enum.name) if owner else 'Int32') + ';\n')
          for item, n in enum.pairs:
+            out.append(documentation_comment(enum.value_docs.get(item, ''), 'ada', '   '))
             out.append('   E_' + stem(enum.name) + '_' + stem(item) + ' : constant ' + typ(enum.name) + ' := ' + str(n) + ';\n')
          out.append('   function Valid_' + stem(enum.name) + ' (V : ' + typ(enum.name) + ') return Boolean;\n')
       for name in self.schema.message_order:
@@ -131,6 +135,7 @@ class AdaBackend:
             if f.modifier in ('packed', 'repeated'):
                declaration = ('renames ' + owner + '.V_' + stem(name) + '_' + stem(f.name)) if owner else ('is new Ada.Containers.Vectors (Positive, ' + self.field_type(name, f) + ')')
                out.append('   package V_' + stem(name) + '_' + stem(f.name) + ' ' + declaration + ';\n')
+         out.append(documentation_comment(message.doc, 'ada', '   '))
          if owner:
             out.append('   subtype ' + typ(name) + ' is ' + owner + '.' + typ(name) + ';\n')
             out.append('   use type ' + typ(name) + ';\n')
@@ -146,6 +151,7 @@ class AdaBackend:
             if f.modifier in ('packed', 'repeated'):
                t = 'V_' + stem(name) + '_' + stem(f.name) + '.Vector'
                default = None
+            out.append(documentation_comment(f.doc, 'ada', '      '))
             out.append('      F_' + stem(f.name) + ' : ' + t + ((' := ' + default) if default else '') + ';\n')
          if message.fields and not owner:
             out.append('   end record;\n')

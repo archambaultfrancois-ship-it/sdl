@@ -6,7 +6,8 @@ import json
 import re
 
 from generator import (c_identifier, canonical_type_descriptor,
-   clear_generated_outputs, parse_schemas, local_type_name, package_output, validate_package_paths)
+   clear_generated_outputs, parse_schemas, local_type_name, package_output, validate_package_paths,
+   documentation_comment, schema_documentation)
 
 
 _JAVA_KEYWORDS = set(('abstract assert boolean break byte case catch char class '
@@ -216,14 +217,17 @@ class JavaBackend:
          'package ' + (self.schema.package or 'sdl.globaltypes') + ';\n',
          'import sdl.runtime.SdlCodec;\n',
          '// Compatible with Java 7.\n',
+         documentation_comment(schema_documentation(self.schema), 'java'),
          'public final class ' + self.outer_name + ' {\n private ' +
          self.outer_name + '() {}\n']
       for enum in self.schema.enums.values():
          name = java_type_name(enum.name)
+         out.append(documentation_comment(enum.doc, 'java', ' '))
          out.append(' public enum ' + name + ' implements SdlCodec.EnumValue {\n')
          items = []
          for item, number in enum.pairs:
-            items.append('  ' + java_identifier(item) + '(' + number + ')')
+            items.append(documentation_comment(enum.value_docs.get(item, ''), 'java', '  ') +
+               '  ' + java_identifier(item) + '(' + number + ')')
          out.append(',\n'.join(items) + ';\n  private final int wireValue;\n')
          out.append('  ' + name + '(int value) { this.wireValue=value; }\n')
          out.append('  public int wireValue() { return wireValue; }\n')
@@ -234,8 +238,10 @@ class JavaBackend:
          message = self.schema.messages[message_name]
          cls = java_type_name(message_name)
          fields = sorted(message.fields, key=lambda item:item.index)
+         out.append(documentation_comment(message.doc, 'java', ' '))
          out.append(' public static final class ' + cls + ' implements SdlCodec.Message {\n')
          for field in fields:
+            out.append(documentation_comment(field.doc, 'java', '  '))
             out.append('  public ' + self._field_type(field) + ' ' +
                java_identifier(field.name) + ';\n')
          out.append('  public static final SdlCodec.Field[] SDL_FIELDS = new SdlCodec.Field[]{\n')
