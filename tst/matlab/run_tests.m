@@ -1,5 +1,10 @@
 function run_tests()
 cases = CodecCases('new');
+% Enum defaults must work in MATLAB R2017a, including fixed arrays.
+defaults = State();
+assert(isequal(cases.fixed_states, repmat(defaults.UNKNOWN, [3,1])));
+record = EnumRecord('new');
+assert(record.state == defaults.UNKNOWN);
 cases.tiny = int8(-12); cases.small = int16(1234); cases.signed_value = int32(-987654);
 cases.wide = int64(1234567890123); cases.ratio = single(1.25); cases.precise = 1/7;
 cases.point = complex(single(1.5), single(-2.25)); cases.position = complex(3.5,-4.75);
