@@ -69,10 +69,17 @@ test-python: $(GENERATED_DIR)/.stamp
 # Optional recording tools do not add dependencies to the core runtime tests.
 RECORDING_DEPS ?= build/recording-deps
 recording-deps:
-	$(PYTHON) -m pip install --target "$(RECORDING_DEPS)" --no-deps -r tools/recording/requirements.txt
+	$(PYTHON) -m pip --disable-pip-version-check install --upgrade --target "$(RECORDING_DEPS)" --no-deps -r tools/recording/requirements.txt
 
 test-recording:
 	PYTHONPATH=$(RECORDING_DEPS):runtime/python $(PYTHON) -m unittest discover -s tst/recording -v
+
+test-wireshark-adapter:
+	PYTHONPATH=$(RECORDING_DEPS):runtime/python CC="$(CC)" $(PYTHON) -m unittest discover -s tst/recording -p test_dissector.py -v
+
+.PHONY: test-wireshark-tshark
+test-wireshark-tshark:
+	PYTHONPATH=$(RECORDING_DEPS):runtime/python SDL_TEST_TSHARK=1 $(PYTHON) -m unittest discover -s tst/recording -p test_tshark.py -v
 
 recording-native:
 	CARGO="$(CARGO)" CC="$(CC)" $(PYTHON) tools/recording/build_native.py
@@ -86,6 +93,7 @@ recording-mex:
 test-recording-native: recording-native
 	$(CARGO) test --locked --manifest-path runtime/recording/Cargo.toml --target-dir build/recording
 	PYTHONPATH=$(RECORDING_DEPS):runtime/python CC="$(CC)" $(PYTHON) -m unittest discover -s tst/recording -p test_native.py -v
+	PYTHONPATH=$(RECORDING_DEPS):runtime/python $(PYTHON) -m unittest discover -s tst/recording -p test_pcapng.py -v
 
 test-recording-jni: recording-jni
 	PYTHONPATH=$(RECORDING_DEPS):runtime/python JAVAC="$(JAVAC)" JAVA="$(JAVA)" $(PYTHON) tst/recording/run_gateways.py --jni
@@ -102,7 +110,7 @@ test-recording-ada: recording-native
 	$(RECORDING_GNATMAKE) $(RECORDING_ADA_FLAGS) -Iruntime/recording/ada -D build/recording/ada -o build/recording/ada/test tst/recording/native/recording_ada_tests.adb -largs -L$(CURDIR)/build/recording/release -lsdl_recording -Wl,-rpath,$(CURDIR)/build/recording/release
 	$(PYTHON) tst/recording/run_ada.py
 
-.PHONY: recording-deps test-recording recording-native recording-jni recording-mex test-recording-native test-recording-jni test-recording-mex test-recording-ada
+.PHONY: recording-deps test-recording test-wireshark-adapter recording-native recording-jni recording-mex test-recording-native test-recording-jni test-recording-mex test-recording-ada
 
 bench: $(GENERATED_DIR)/.stamp
 	@$(PYTHON) tst/run_benchmarks.py make "$(BENCH_ITERATIONS)" "$(matlab_bench_label)"

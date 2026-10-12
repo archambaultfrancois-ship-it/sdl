@@ -141,6 +141,14 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
         SdlRecordingBytes path; uint8_t overwrite; uint64_t chunk;
         arity(nrhs, 4, nlhs, 1); path = bytes(prhs[1]); overwrite = boolean(prhs[2]); chunk = number(prhs[3], mxUINT64_CLASS);
         plhs[0] = add(sdl_recording_writer_open(path, overwrite, chunk), 1);
+    } else if (!strcmp(command, "open_writer_format")) {
+        SdlRecordingBytes path, format; uint8_t overwrite, code; uint64_t chunk;
+        arity(nrhs, 5, nlhs, 1); path = bytes(prhs[1]); overwrite = boolean(prhs[2]); chunk = number(prhs[3], mxUINT64_CLASS);
+        format = bytes(prhs[4]);
+        if (format.size == 4 && !memcmp(format.data, "mcap", 4)) code = SDL_RECORDING_FORMAT_MCAP;
+        else if (format.size == 6 && !memcmp(format.data, "pcapng", 6)) code = SDL_RECORDING_FORMAT_PCAPNG;
+        else { fail("format must be mcap or pcapng"); return; }
+        plhs[0] = add(sdl_recording_writer_open_format(path, overwrite, chunk, code), 1);
     } else if (!strcmp(command, "open_reader")) {
         arity(nrhs, 2, nlhs, 1); plhs[0] = add(sdl_recording_reader_open(bytes(prhs[1])), 0);
     } else if (!strcmp(command, "channel")) {

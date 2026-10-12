@@ -124,10 +124,19 @@ static void free_meta(JNIEnv *e, Meta *m) {
     }
     free(m->inputs); free(m->entries);
 }
+static jlong store(JNIEnv *e, void *pointer, int writer) {
+    Handle *h = calloc(1, sizeof(*h));
+    if (!h || next_id == 0) {
+        free(h); error(e, "recording handle allocation failed");
+        if (writer) sdl_recording_writer_close(pointer); else sdl_recording_reader_close(pointer);
+        return 0;
+    }
+    h->id = next_id++; h->writer = writer != 0; h->pointer = pointer; h->next = handles; handles = h;
+    return (jlong)h->id;
+}
 #define JNI(name) JNIEXPORT JNICALL Java_SdlRecording_##name
 jlong JNI(nOpen)(JNIEnv *e, jclass cls, jbyteArray path, jboolean writer, jboolean overwrite, jlong chunk) {
     Input p = input(e, path);
-    Handle *h = NULL;
     void *pointer = NULL;
     (void)cls;
     if (!(*e)->ExceptionCheck(e)) {
@@ -137,14 +146,18 @@ jlong JNI(nOpen)(JNIEnv *e, jclass cls, jbyteArray path, jboolean writer, jboole
     }
     release(e, &p);
     if (!pointer) return 0;
-    h = calloc(1, sizeof(*h));
-    if (!h || next_id == 0) {
-        free(h); error(e, "recording handle allocation failed");
-        if (writer) sdl_recording_writer_close(pointer); else sdl_recording_reader_close(pointer);
-        return 0;
+    return store(e, pointer, writer != 0);
+}
+jlong JNI(nOpenFormat)(JNIEnv *e, jclass cls, jbyteArray path, jboolean overwrite, jlong chunk, jint format) {
+    Input p = input(e, path); void *pointer = NULL; (void)cls;
+    if (!(*e)->ExceptionCheck(e)) {
+        if (format < 0 || format > 1) error(e, "unknown recording format");
+        else {
+            pointer = sdl_recording_writer_open_format(p.bytes, overwrite ? 1 : 0, (uint64_t)chunk, (uint8_t)format);
+            if (!pointer) error(e, sdl_recording_error());
+        }
     }
-    h->id = next_id++; h->writer = writer != 0; h->pointer = pointer; h->next = handles; handles = h;
-    return (jlong)h->id;
+    release(e, &p); return pointer ? store(e, pointer, 1) : 0;
 }
 jint JNI(nChannel)(JNIEnv *e, jclass cls, jlong id, jbyteArray topic, jbyteArray catalogue, jbyteArray root, jobjectArray metadata) {
     Handle *h = find(e, id, 1);

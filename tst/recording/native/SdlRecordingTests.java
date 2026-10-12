@@ -9,7 +9,9 @@ public class SdlRecordingTests {
         String path = args[0], topic = "radio/é📻\u0000iq";
         Map<String, String> metadata = new LinkedHashMap<String, String>();
         metadata.put("origin", "é📻\u0000");
-        try (SdlRecording.Writer writer = new SdlRecording.Writer(path)) {
+        SdlRecording.Format format = args.length > 2 && args[2].equals("pcapng")
+            ? SdlRecording.Format.PCAPNG : SdlRecording.Format.MCAP;
+        try (SdlRecording.Writer writer = new SdlRecording.Writer(path, format)) {
             int channel = writer.channel(topic, "SDL2|Packet{}", "Packet", metadata);
             writer.metadata("run", metadata);
             writer.write(channel, new byte[] {1}, -1L, -2L, 0xffffffffL);

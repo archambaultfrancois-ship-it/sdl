@@ -1,5 +1,5 @@
 function varargout = sdl_recording(command, varargin)
-% Optional MCAP services. Payloads are complete encoded SDL2 uint8 arrays.
+% Optional MCAP/PCAPNG services. Payloads are complete encoded SDL2 uint8 arrays.
 % Handles/timestamps: uint64; channels: uint16; sequence: uint32.
 % close is explicit; next returns an owning struct, or [] at complete EOF.
 switch command
@@ -8,7 +8,9 @@ switch command
         overwrite = false; chunk = uint64(1024 * 1024);
         if numel(varargin) > 1, overwrite = varargin{2}; end
         if numel(varargin) > 2, chunk = varargin{3}; end
-        varargout{1} = sdl_recording_mex(command, path, overwrite, chunk);
+        format = 'mcap';
+        if numel(varargin) > 3, format = varargin{4}; end
+        varargout{1} = sdl_recording_mex('open_writer_format', path, overwrite, chunk, utf8(format));
     case 'open_reader'
         varargout{1} = sdl_recording_mex(command, utf8(varargin{1}));
     case 'channel'

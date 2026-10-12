@@ -1,7 +1,8 @@
-function run_recording_mex_tests(output_path, python_path)
+function run_recording_mex_tests(output_path, python_path, format)
+if nargin < 3, format = 'mcap'; end
 topic = native2unicode(uint8([114 97 100 105 111 47 195 169 240 159 147 187 0 105 113]), 'UTF-8');
 metadata = {'origin', topic};
-w = sdl_recording('open_writer', output_path);
+w = sdl_recording('open_writer', output_path, false, uint64(1048576), format);
 try
     c = sdl_recording('channel', w, topic, 'SDL2|Packet{}', 'Packet', metadata);
     sdl_recording('metadata', w, 'run', metadata);

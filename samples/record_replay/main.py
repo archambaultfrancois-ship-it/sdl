@@ -32,12 +32,13 @@ def main():
    parser.add_argument('output')
    parser.add_argument('--count', type=int, default=10)
    parser.add_argument('--overwrite', action='store_true')
+   parser.add_argument('--format', choices=('mcap', 'pcapng'), default='mcap')
    args = parser.parse_args()
    if args.count < 1:
       parser.error('--count must be positive')
    catalogue = description(RadioCapture)
    context = prepare(catalogue, [RadioCapture])
-   with RecordingWriter(args.output, overwrite=args.overwrite,
+   with RecordingWriter(args.output, overwrite=args.overwrite, format=args.format,
          metadata={'producer': 'SDL record/replay demo', 'receiver_id': 'demo-rx-01'}) as writer:
       channel = writer.register_channel(topic='radio/iq', catalogue=catalogue, root_type='RadioCapture')
       for capture in acquire_captures(args.count):

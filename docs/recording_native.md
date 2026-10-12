@@ -1,9 +1,11 @@
 # Native recording services
 
 The optional `runtime/recording` crate implements the
-[SDL2 recording profile](recording.md) with the Rust MCAP SDK. It builds an `rlib`,
+[SDL2 MCAP profile](recording.md) with the Rust MCAP SDK and the
+[SDL PCAPNG profile](recording_pcapng.md) with a separate transport module.
+It builds an `rlib`,
 a shared library and a static library. Applications written in C, Rust, Java,
-Ada and MATLAB/Octave use the same engine; Python retains its independent MCAP
+Ada and MATLAB/Octave use the same engine; Python retains its independent
 implementation. Both implementations exchange the same catalogues and payloads.
 
 No generator change or generated Rust binding is required. An application passes
@@ -58,16 +60,32 @@ environment: this binding and its test are supplied but have not been compiled h
 
 ## Shared behavior
 
-Writers create files exclusively unless overwrite is explicit. They record indexed,
+Writers create files exclusively unless overwrite is explicit. MCAP writers record indexed,
 uncompressed chunks and compute chunk, data and summary CRCs. The default chunk
 target is 1 MiB. Chunk targets must be positive and at most 32 MiB minus 1024 bytes.
 An individual record larger than the target gets its own chunk. Declaration writes
 also respect the target, even before any message is written.
 
+PCAPNG is selected explicitly on writer creation; readers detect the file magic:
+
+| API | PCAPNG selection |
+| --- | --- |
+| C | `sdl_recording_writer_open_format(path, 0, 1048576, SDL_RECORDING_FORMAT_PCAPNG)` |
+| Rust | `RecordingWriter::create_format(path, false, 1048576, RecordingFormat::Pcapng)` |
+| Java JNI | `new SdlRecording.Writer("capture.pcapng", SdlRecording.Format.PCAPNG)` |
+| Ada | `Create ("capture.pcapng", Format => PCAPNG)` |
+| MATLAB/Octave | `sdl_recording('open_writer', 'capture.pcapng', false, uint64(1048576), 'pcapng')` |
+
+Existing writer entry points default to MCAP, regardless of filename. PCAPNG has
+one EPB per declaration/message, nanosecond timestamps, packet CRCs and a final
+END packet with counts and stream CRC. It has no chunks or message index;
+the chunk argument remains validated but does not affect PCAPNG output.
+See [the binary profile](recording_pcapng.md) for exact framing and resource limits.
+
 Native inputs are bounded: payloads at 32 MiB, catalogue/text arguments at 1 MiB,
-and channel/application metadata at 1 MiB. The reader limits an outer MCAP record
+and channel/application metadata at 1 MiB. The reader limits an outer MCAP record or PCAPNG block
 to 64 MiB and an SDL2 payload to 32 MiB. It rejects compressed chunks and checks
-available CRCs and the final magic. These are implementation resource limits,
+available CRCs and the final magic/END. These are implementation resource limits,
 not a 255-byte limit: a payload is an array of octets, each with a value from 0 to 255.
 
 Each channel contains immutable topic, catalogue, root type and metadata. Registering
@@ -91,9 +109,9 @@ Callback errors stop replay and propagate. Replay starts at the reader's current
 position, performs no automatic preflight, and does not reopen or rewind a file.
 Call `validate(path)` before application effects when a full preflight is required.
 
-`flush(sync=false)` finishes the current chunk and flushes buffered output;
+`flush(sync=false)` finishes the current MCAP chunk and flushes buffered output;
 `flush(sync=true)` additionally syncs the file. Close finishes indexes and reports
-IO errors. Rust drop only releases an unclosed writer, leaving an incomplete file.
+IO errors; PCAPNG close writes END. Rust drop only releases an unclosed writer, leaving an incomplete file.
 Java requires explicit close or try-with-resources. Ada finalization and MEX cleanup
 try to close, but cannot report errors reliably: applications must close explicitly.
 
@@ -104,6 +122,9 @@ try to close, but cannot report errors reliably: applications must close explici
 may contain embedded zero bytes; a path must still satisfy OS pathname rules.
 Input pointers are borrowed during each call. A null pointer is valid only for an
 empty slice. Caller-provided pointers must be valid for their declared size.
+`writer_open_format` is an additive ABI v1 entry point: format 0 selects MCAP,
+format 1 selects PCAPNG. The original `writer_open` entry point retains its signature
+and MCAP behavior. New gateways require a library exporting the new entry point.
 
 Handles are opaque, owned by the library and used by one thread at a time. Never
 use a handle after close. Functions return `0` on success and `-1` on failure;
@@ -218,8 +239,9 @@ record text back to characters. Native record structs own their payload/text dat
 `next` returns `[]` at complete EOF. Runtime errors use `SDL:Recording`; callback
 exceptions retain their original identifier/message, including under Octave.
 
-`open_writer(path,overwrite,chunkSize)` accepts optional logical overwrite and
-`uint64` chunk size. `write_encoded` defaults omitted log time to `now`, publish
+`open_writer(path,overwrite,chunkSize,format)` accepts optional logical overwrite,
+`uint64` chunk size and format `'mcap'` (default) or `'pcapng'`.
+`write_encoded` defaults omitted log time to `now`, publish
 time to log time and sequence to zero. `flush(writer,sync)` defaults sync to false.
 `metadata(writer,name,pairs)` and `validate_payload(writer,enabled)` match C services.
 Filters use optional absolute start/end timestamps; `[]` means an omitted bound.

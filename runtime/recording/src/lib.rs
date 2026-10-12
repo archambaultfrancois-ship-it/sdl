@@ -1,4 +1,4 @@
-//! Optional SDL2 MCAP recording engine. Generated bindings remain independent.
+//! Optional SDL2 MCAP/PCAPNG recording engine. Generated bindings remain independent.
 
 use mcap::{
     records::{self, MessageHeader, Record as McapRecord},
@@ -9,13 +9,14 @@ use sdl_runtime::{decode_dynamic, prepare, Context, DynamicMessage};
 use std::{
     collections::BTreeMap,
     fs::{File, OpenOptions},
-    io::{BufReader, BufWriter, Read, Write},
+    io::{BufRead, BufReader, BufWriter, Read, Write},
     path::Path,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 pub mod ffi;
+mod pcapng;
 
 pub const PROFILE: &str = "sdl2-recording-v1";
 pub const ENCODING: &str = "sdl2";
@@ -99,9 +100,93 @@ impl Record {
     }
 }
 
+/// Explicit writer format; readers detect the container magic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordingFormat {
+    Mcap,
+    Pcapng,
+}
+impl TryFrom<u8> for RecordingFormat {
+    type Error = Error;
+    fn try_from(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(Self::Mcap),
+            1 => Ok(Self::Pcapng),
+            _ => fail("unknown recording format"),
+        }
+    }
+}
+enum Sink {
+    Mcap(mcap::Writer<BufWriter<File>>),
+    Pcapng(pcapng::Writer),
+}
+impl Sink {
+    fn add_schema_with_id(
+        &mut self,
+        id: u16,
+        name: &str,
+        encoding: &str,
+        data: &[u8],
+    ) -> Result<()> {
+        match self {
+            Self::Mcap(w) => w
+                .add_schema_with_id(id, name, encoding, data)
+                .map(|_| ())
+                .map_err(Error::from),
+            Self::Pcapng(w) => w.schema(id, name, encoding, data),
+        }
+    }
+    fn add_channel_with_id(
+        &mut self,
+        id: u16,
+        schema: u16,
+        topic: &str,
+        encoding: &str,
+        metadata: &BTreeMap<String, String>,
+    ) -> Result<()> {
+        match self {
+            Self::Mcap(w) => w
+                .add_channel_with_id(id, schema, topic, encoding, metadata)
+                .map(|_| ())
+                .map_err(Error::from),
+            Self::Pcapng(w) => w.channel(id, schema, topic, encoding, metadata),
+        }
+    }
+    fn write_to_known_channel(&mut self, header: &MessageHeader, data: &[u8]) -> Result<()> {
+        match self {
+            Self::Mcap(w) => w.write_to_known_channel(header, data).map_err(Error::from),
+            Self::Pcapng(w) => w.message(header, data),
+        }
+    }
+    fn write_metadata(&mut self, metadata: &records::Metadata) -> Result<()> {
+        match self {
+            Self::Mcap(w) => w.write_metadata(metadata).map_err(Error::from),
+            Self::Pcapng(w) => w.metadata(metadata),
+        }
+    }
+    fn flush(&mut self) -> Result<()> {
+        match self {
+            Self::Mcap(w) => w.flush().map_err(Error::from),
+            Self::Pcapng(w) => w.flush(),
+        }
+    }
+    fn finish(&mut self) -> Result<()> {
+        match self {
+            Self::Mcap(w) => w.finish().map(|_| ()).map_err(Error::from),
+            Self::Pcapng(w) => w.finish(),
+        }
+    }
+    fn into_inner(self) -> BufWriter<File> {
+        match self {
+            Self::Mcap(w) => w.into_inner(),
+            Self::Pcapng(w) => w.into_inner(),
+        }
+    }
+}
+
 /// Exclusive file creation by default; applications must call close to report IO errors.
 pub struct RecordingWriter {
-    writer: Option<mcap::Writer<BufWriter<File>>>,
+    writer: Option<Sink>,
     sync_file: File,
     schemas: BTreeMap<String, (u16, Arc<Context>)>,
     channels: BTreeMap<u16, Arc<Channel>>,
@@ -111,6 +196,14 @@ pub struct RecordingWriter {
 }
 impl RecordingWriter {
     pub fn create(path: impl AsRef<Path>, overwrite: bool, chunk_size: u64) -> Result<Self> {
+        Self::create_format(path, overwrite, chunk_size, RecordingFormat::Mcap)
+    }
+    pub fn create_format(
+        path: impl AsRef<Path>,
+        overwrite: bool,
+        chunk_size: u64,
+        format: RecordingFormat,
+    ) -> Result<Self> {
         if chunk_size == 0 || chunk_size > (MAX_RECORD_SIZE - MAX_PAYLOAD_SIZE - 1024) as u64 {
             return fail("invalid chunk size (maximum 32 MiB minus 1024 bytes)");
         }
@@ -123,16 +216,21 @@ impl RecordingWriter {
         }
         let file = options.open(path)?;
         let sync_file = file.try_clone()?;
-        let writer = WriteOptions::new()
-            .profile(PROFILE)
-            .library("sdl-recording/rust-v1")
-            .compression(None)
-            .chunk_size(None)
-            .disable_seeking(true)
-            .calculate_data_section_crc(true)
-            .calculate_chunk_crcs(true)
-            .calculate_summary_section_crc(true)
-            .create(BufWriter::new(file))?;
+        let writer = match format {
+            RecordingFormat::Pcapng => Sink::Pcapng(pcapng::Writer::new(BufWriter::new(file))?),
+            RecordingFormat::Mcap => Sink::Mcap(
+                WriteOptions::new()
+                    .profile(PROFILE)
+                    .library("sdl-recording/rust-v1")
+                    .compression(None)
+                    .chunk_size(None)
+                    .disable_seeking(true)
+                    .calculate_data_section_crc(true)
+                    .calculate_chunk_crcs(true)
+                    .calculate_summary_section_crc(true)
+                    .create(BufWriter::new(file))?,
+            ),
+        };
         Ok(Self {
             writer: Some(writer),
             sync_file,
@@ -143,7 +241,7 @@ impl RecordingWriter {
             pending_bytes: 0,
         })
     }
-    fn inner(&mut self) -> Result<&mut mcap::Writer<BufWriter<File>>> {
+    fn inner(&mut self) -> Result<&mut Sink> {
         self.writer
             .as_mut()
             .ok_or_else(|| Error("recording writer is closed".into()))
@@ -151,7 +249,10 @@ impl RecordingWriter {
     fn budget(&mut self, size: usize) -> Result<()> {
         // The SDK's target only checks before messages, not declarations.
         // Bound chunks even when many channels are registered before any message.
-        if self.pending_bytes > 0 && self.pending_bytes + size as u64 > self.chunk_size {
+        if matches!(self.writer, Some(Sink::Mcap(_)))
+            && self.pending_bytes > 0
+            && self.pending_bytes + size as u64 > self.chunk_size
+        {
             self.flush(false)?;
         }
         self.pending_bytes += size as u64;
@@ -243,6 +344,7 @@ impl RecordingWriter {
     }
     pub fn write_metadata(&mut self, name: &str, metadata: BTreeMap<String, String>) -> Result<()> {
         if name.len() > MAX_TEXT_SIZE
+            || metadata.len() > 65535
             || metadata
                 .iter()
                 .try_fold(name.len(), |n, (k, v)| {
@@ -345,6 +447,7 @@ impl Filter {
 pub struct RecordingReader {
     file: BufReader<File>,
     linear: LinearReader,
+    pcapng: Option<pcapng::Reader>,
     schemas: BTreeMap<u16, (records::SchemaHeader, Vec<u8>, Arc<Context>)>,
     declarations: BTreeMap<u16, records::Channel>,
     channels: BTreeMap<u16, Arc<Channel>>,
@@ -363,8 +466,15 @@ impl RecordingReader {
             .with_validate_data_section_crc(true)
             .with_validate_summary_section_crc(true)
             .with_check_finishes_after_end_magic(true);
+        let mut file = BufReader::new(File::open(path)?);
+        let pcapng = if file.fill_buf()?.starts_with(pcapng::MAGIC) {
+            Some(pcapng::Reader::new())
+        } else {
+            None
+        };
         Ok(Self {
-            file: BufReader::new(File::open(path)?),
+            file,
+            pcapng,
             linear: LinearReader::new_with_options(options),
             schemas: BTreeMap::new(),
             declarations: BTreeMap::new(),
@@ -389,48 +499,60 @@ impl RecordingReader {
     }
     fn next_inner(&mut self) -> Result<Option<Record>> {
         loop {
-            let record = match self.linear.next_event() {
-                Some(event) => match event? {
-                    LinearReadEvent::ReadRequest(need) => {
-                        let count = self.file.read(self.linear.insert(need.min(64 * 1024)))?;
-                        self.linear.notify_read(count);
-                        continue;
-                    }
-                    LinearReadEvent::Record { opcode, data } => {
-                        if opcode == 0
-                            || opcode == 2 && data.len() != 20
-                            || opcode == 15 && data.len() != 4
-                        {
-                            return fail("invalid MCAP control record");
+            let record = if let Some(pcapng) = &mut self.pcapng {
+                match pcapng.next(&mut self.file)? {
+                    Some(record) => record,
+                    None => {
+                        if !self.header || !self.data_end || !self.footer {
+                            return fail("incomplete PCAPNG recording");
                         }
-                        mcap::parse_record(opcode, data)?.into_owned()
+                        return Ok(None);
                     }
-                },
-                None => {
-                    if !self.header || !self.data_end || !self.footer {
-                        return fail("incomplete MCAP recording");
+                }
+            } else {
+                match self.linear.next_event() {
+                    Some(event) => match event? {
+                        LinearReadEvent::ReadRequest(need) => {
+                            let count = self.file.read(self.linear.insert(need.min(64 * 1024)))?;
+                            self.linear.notify_read(count);
+                            continue;
+                        }
+                        LinearReadEvent::Record { opcode, data } => {
+                            if opcode == 0
+                                || opcode == 2 && data.len() != 20
+                                || opcode == 15 && data.len() != 4
+                            {
+                                return fail("invalid MCAP control record");
+                            }
+                            mcap::parse_record(opcode, data)?.into_owned()
+                        }
+                    },
+                    None => {
+                        if !self.header || !self.data_end || !self.footer {
+                            return fail("incomplete MCAP recording");
+                        }
+                        return Ok(None);
                     }
-                    return Ok(None);
                 }
             };
             if !self.header && !matches!(&record, McapRecord::Header(_)) {
-                return fail("MCAP header must come first");
+                return fail("recording header must come first");
             }
             match record {
                 McapRecord::Header(header) => {
                     if self.header || header.profile != PROFILE {
-                        return fail("unsupported or duplicate MCAP header");
+                        return fail("unsupported or duplicate recording header");
                     }
                     self.header = true;
                 }
                 McapRecord::Schema { header, data } => {
                     if let Some((old_header, old_data, _)) = self.schemas.get(&header.id) {
                         if old_header != &header || old_data.as_slice() != data.as_ref() {
-                            return fail("conflicting MCAP schema ID");
+                            return fail("conflicting recording schema ID");
                         }
                     } else {
                         if header.id == 0 || header.encoding != ENCODING {
-                            return fail("invalid SDL2 MCAP schema");
+                            return fail("invalid SDL2 recording schema");
                         }
                         let text = std::str::from_utf8(&data)
                             .map_err(|_| Error("catalogue is not UTF-8".into()))?;
@@ -442,12 +564,12 @@ impl RecordingReader {
                 McapRecord::Channel(declaration) => {
                     if let Some(old) = self.declarations.get(&declaration.id) {
                         if old != &declaration {
-                            return fail("conflicting MCAP channel ID");
+                            return fail("conflicting recording channel ID");
                         }
                     } else {
                         if declaration.message_encoding != ENCODING || declaration.topic.is_empty()
                         {
-                            return fail("invalid SDL2 MCAP channel");
+                            return fail("invalid SDL2 recording channel");
                         }
                         let (_, data, ctx) = self
                             .schemas

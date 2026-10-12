@@ -7,6 +7,8 @@ extern "C" {
 #endif
 
 #define SDL_RECORDING_ABI_VERSION 1u
+#define SDL_RECORDING_FORMAT_MCAP 0u
+#define SDL_RECORDING_FORMAT_PCAPNG 1u
 #define SDL_RECORDING_FILTER_START 1u
 #define SDL_RECORDING_FILTER_END 2u
 
@@ -35,6 +37,10 @@ const char *sdl_recording_error(void);
 int sdl_recording_now(uint64_t *time_ns);
 SdlRecordingWriter *sdl_recording_writer_open(SdlRecordingBytes path,
     uint8_t overwrite, uint64_t chunk_size);
+/* Additive ABI v1 entry point; existing writer_open retains MCAP behavior.
+ * Readers automatically detect MCAP or SDL PCAPNG by file magic. */
+SdlRecordingWriter *sdl_recording_writer_open_format(SdlRecordingBytes path,
+    uint8_t overwrite, uint64_t chunk_size, uint8_t format);
 int sdl_recording_writer_channel(SdlRecordingWriter *, SdlRecordingBytes topic,
     SdlRecordingBytes catalogue, SdlRecordingBytes root_type,
     const SdlRecordingMetadata *metadata, size_t count, uint16_t *channel_id);

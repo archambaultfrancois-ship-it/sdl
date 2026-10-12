@@ -4,7 +4,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Optional MCAP services; inputs are catalogues and complete SDL2 byte payloads. */
+/** Optional MCAP/PCAPNG services; inputs are catalogues and complete SDL2 byte payloads. */
 public final class SdlRecording {
     private static final Charset UTF8 = Charset.forName("UTF-8");
     static { System.loadLibrary("sdl_recording_jni"); }
@@ -34,6 +34,11 @@ public final class SdlRecording {
     /** Timestamps use the unsigned uint64 bit pattern in a Java long. */
     public static long now() throws IOException { return nNow(); }
     public static long validate(String path) throws IOException { return nValidate(text(path)); }
+    public enum Format {
+        MCAP(0), PCAPNG(1);
+        private final int code;
+        Format(int code) { this.code = code; }
+    }
     public interface Consumer { void accept(Record record) throws IOException; }
     public static final class Record {
         public final int channelId, schemaId;
@@ -59,6 +64,11 @@ public final class SdlRecording {
         public Writer(String path) throws IOException { this(path, false, 1024 * 1024); }
         public Writer(String path, boolean overwrite, long chunkSize) throws IOException {
             handle = nOpen(text(path), true, overwrite, chunkSize);
+        }
+        public Writer(String path, Format format) throws IOException { this(path, false, 1024 * 1024, format); }
+        public Writer(String path, boolean overwrite, long chunkSize, Format format) throws IOException {
+            if (format == null) throw new NullPointerException("format");
+            handle = nOpenFormat(text(path), overwrite, chunkSize, format.code);
         }
         private long handle() { if (handle == 0) throw new IllegalStateException("closed writer"); return handle; }
         public int channel(String topic, String catalogue, String root) throws IOException {
@@ -110,6 +120,7 @@ public final class SdlRecording {
     }
     // Serialization protects the gateway's token registry. Core C handles remain single-threaded.
     private static synchronized native long nOpen(byte[] path, boolean writer, boolean overwrite, long chunk) throws IOException;
+    private static synchronized native long nOpenFormat(byte[] path, boolean overwrite, long chunk, int format) throws IOException;
     private static synchronized native int nChannel(long handle, byte[] topic, byte[] catalogue, byte[] root, byte[][] metadata) throws IOException;
     private static synchronized native void nMetadata(long handle, byte[] name, byte[][] metadata) throws IOException;
     private static synchronized native void nValidatePayload(long handle, boolean validate) throws IOException;

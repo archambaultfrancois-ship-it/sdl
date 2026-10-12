@@ -1,4 +1,4 @@
-"""Optional SDL2 recording profile for MCAP (requires the Python mcap package)."""
+"""Optional SDL2 MCAP/PCAPNG recording profiles (require the Python mcap package)."""
 
 import io
 import math
@@ -14,6 +14,8 @@ from mcap.data_stream import ReadDataStream
 from mcap.records import Channel, Chunk, DataEnd, Footer, Header, Message, Metadata, Schema
 from mcap.stream_reader import CRCValidationError, StreamReader
 from mcap.writer import CompressionType, Writer
+
+from sdl_pcapng import Writer as PcapngWriter, records as pcapng_records, PROFILE as PCAPNG_PROFILE
 
 from sdl_runtime import (CodecError, catalogue_id, compare_catalogues, decode,
                          decode_dynamic, description, encode, prepare)
@@ -99,14 +101,17 @@ class RecordingRecord:
 
 
 class RecordingWriter:
-   """Write indexed, uncompressed MCAP. Paths are created exclusively by default.
+   """Write indexed MCAP or sequential PCAPNG. Create paths exclusively by default.
 
    Caller-owned binary streams remain open. write_encoded preserves exact SDL2
    bytes; validate_payload=False skips body decoding, but still checks the root.
    """
    def __init__(self, output, *, metadata=None, chunk_size=1024 * 1024,
                 max_payload_size=32 * 1024 * 1024, validate_payload=True,
-                overwrite=False):
+                overwrite=False, format="mcap"):
+      if format not in ('mcap', 'pcapng'):
+         raise RecordingError('format must be mcap or pcapng')
+      self.format = format
       self._closed = False
       self._channels = {}
       self._schemas = {}
@@ -120,7 +125,7 @@ class RecordingWriter:
       metadata = _metadata(metadata)
       self._stream = open(output, 'wb' if overwrite else 'xb') if self._owns_stream else output
       try:
-         self._writer = Writer(self._stream, chunk_size=chunk_size,
+         self._writer = PcapngWriter(self._stream) if format == 'pcapng' else Writer(self._stream, chunk_size=chunk_size,
             compression=CompressionType.NONE, enable_crcs=True, enable_data_crcs=True)
          self._writer.start(profile=PROFILE, library='sdl-recording/python-v1')
          if metadata:
@@ -145,10 +150,10 @@ class RecordingWriter:
       if 'root_type' in meta and meta['root_type'] != root_type:
          raise RecordingError('conflicting root_type metadata')
       meta['root_type'] = root_type
-      # MCAP local IDs, rather than truncated SDL hashes, identify catalogues.
+      # Local IDs, rather than truncated SDL hashes, identify catalogues.
       existing = self._schemas.get(catalogue)
       if len(self._channels) >= 65535 or existing is None and len(self._schemas) >= 65535:
-         raise RecordingError('MCAP schema or channel ID space exhausted')
+         raise RecordingError('recording schema or channel ID space exhausted')
       if existing is None:
          existing = self._writer.register_schema(name='SDL2 catalogue',
             encoding=ENCODING, data=catalogue.encode('utf-8'))
@@ -159,6 +164,12 @@ class RecordingWriter:
          MappingProxyType(meta), context)
       self._channels[channel_id] = channel
       return channel
+
+   def write_metadata(self, name, metadata):
+      self._open()
+      if not isinstance(name, str):
+         raise RecordingError('metadata name must be a string')
+      self._writer.add_metadata(name, _metadata(metadata))
 
    def _channel(self, channel):
       self._open()
@@ -196,7 +207,7 @@ class RecordingWriter:
       self.write_encoded(channel, encode(context, message), **timestamps)
 
    def flush(self, *, sync=False):
-      """Finish the current chunk; sync=True additionally calls os.fsync."""
+      """Flush buffered output (finishing MCAP chunks); sync=True calls os.fsync."""
       self._open()
       self._writer.flush()
       if sync:
@@ -288,10 +299,11 @@ class RecordingReader:
    """Reopen a path for each sequential scan; preserve file order and timestamp ties.
 
    Iteration validates framing, catalogues, channel roots and available CRCs.
-   validate() also decodes every payload and scans through the final magic.
+   validate() also decodes every payload and scans through final magic/END and EOF.
    """
    def __init__(self, path, *, local_types=(), max_record_size=MAX_RECORD_SIZE):
       self.path = os.fspath(path)
+      self.format = None
       self.local_types = tuple(local_types) if isinstance(local_types, (list, tuple)) else (local_types,)
       self.max_record_size = _uint(max_record_size, 32, 'max_record_size')
       if not self.max_record_size:
@@ -304,29 +316,36 @@ class RecordingReader:
       consumer = description(self.local_types) if self.local_types else None
       try:
          with open(self.path, 'rb') as stream:
-            reader = _BoundedStreamReader(stream, emit_chunks=True,
-               validate_crcs=True, record_size_limit=self.max_record_size)
-            for outer in reader.records:
+            magic = stream.read(8)
+            stream.seek(0)
+            self.format = 'pcapng' if magic[:4] == b'\x0a\x0d\x0d\x0a' else 'mcap'
+            if self.format == 'pcapng':
+               events = pcapng_records(stream, self.max_record_size)
+            else:
+               reader = _BoundedStreamReader(stream, emit_chunks=True,
+                  validate_crcs=True, record_size_limit=self.max_record_size)
+               events = reader.records
+            for outer in events:
                if not header_seen and not isinstance(outer, Header):
-                  raise RecordingError('MCAP header must come first')
+                  raise RecordingError('recording header must come first')
                records = _chunk_records(outer, self.max_record_size) if isinstance(outer, Chunk) else (outer,)
                if data_end and isinstance(outer, Chunk):
                   raise RecordingError('chunk after data section end')
                for record in records:
                   if not header_seen and not isinstance(record, Header):
-                     raise RecordingError('MCAP header must come first')
+                     raise RecordingError('recording header must come first')
                   if isinstance(record, Header):
                      if header_seen or record.profile != PROFILE:
-                        raise RecordingError('unsupported or duplicate MCAP recording header')
+                        raise RecordingError('unsupported or duplicate recording header')
                      header_seen = True
                   elif isinstance(record, Schema):
                      old = schemas.get(record.id)
                      if old is not None:
                         if old[0] != record:
-                           raise RecordingError('conflicting MCAP schema ID')
+                           raise RecordingError('conflicting recording schema ID')
                      else:
                         if record.id == 0 or record.encoding != ENCODING:
-                           raise RecordingError('invalid SDL2 MCAP schema')
+                           raise RecordingError('invalid SDL2 recording schema')
                         text = record.data.decode('utf-8')
                         context = _catalogue(text)
                         schemas[record.id] = (record, text, context)
@@ -335,10 +354,10 @@ class RecordingReader:
                      old = channels.get(record.id)
                      if old is not None:
                         if old[0] != record:
-                           raise RecordingError('conflicting MCAP channel ID')
+                           raise RecordingError('conflicting recording channel ID')
                      else:
                         if record.schema_id not in schemas or record.message_encoding != ENCODING or not record.topic:
-                           raise RecordingError('invalid SDL2 MCAP channel')
+                           raise RecordingError('invalid SDL2 recording channel')
                         _, text, context = schemas[record.schema_id]
                         root = record.metadata.get('root_type')
                         if root not in context.messages:
@@ -374,11 +393,11 @@ class RecordingReader:
       except RecordingError:
          raise
       except (ValueError, EOFError, struct.error, UnicodeError) as error:
-         raise RecordingError('invalid MCAP recording: ' + str(error)) from error
+         raise RecordingError('invalid recording: ' + str(error)) from error
       except Exception as error:
          # The SDK uses its own exceptions for EOF, CRC and size limits.
          if type(error).__module__.startswith('mcap.'):
-            raise RecordingError('invalid MCAP recording: ' + str(error)) from error
+            raise RecordingError('invalid recording: ' + str(error)) from error
          raise
 
    def iter_records(self, *, topics=None, start_time_ns=None, end_time_ns=None):
@@ -419,7 +438,7 @@ class RecordingReader:
             last = record.log_time_ns if last is None else max(last, record.log_time_ns)
          elif isinstance(record, Metadata):
             metadata.append({'name': record.name, 'data': record.metadata})
-      return {'profile': PROFILE, 'message_count': count, 'start_time_ns': first,
+      return {'profile': PCAPNG_PROFILE if self.format == 'pcapng' else PROFILE, 'format': self.format, 'message_count': count, 'start_time_ns': first,
          'end_time_ns': last, 'schemas': list(schemas.values()),
          'channels': list(channels.values()), 'metadata': metadata}
 
@@ -461,4 +480,41 @@ def replay(records, consumer, *, speed=1.0, clock=time.monotonic_ns, sleep=time.
          previous = record.log_time_ns
       consumer(record)
       count += 1
+   return count
+
+
+def convert_recording(source, output, *, format='pcapng', overwrite=False):
+   """Validate before exclusive output creation, then preserve raw records and metadata.
+
+   Source/destination must differ. Schema/channel IDs are local and may be remapped.
+   The source must remain unchanged between validation and conversion.
+   """
+   if os.path.realpath(os.fspath(source)) == os.path.realpath(os.fspath(output)):
+      raise RecordingError('source and output must differ')
+   if os.path.exists(output) and os.path.samefile(source, output):
+      raise RecordingError('source and output refer to the same file')
+   reader = RecordingReader(source)
+   reader.validate()
+   schemas, channels = {}, {}
+   count = 0
+   with RecordingWriter(output, format=format, overwrite=overwrite) as writer:
+      for record in reader._scan():
+         if isinstance(record, Schema):
+            if record.id not in schemas:
+               text = record.data.decode('utf-8')
+               sid = writer._schemas.get(text)
+               if sid is None:
+                  sid = writer._writer.register_schema(name='SDL2 catalogue', encoding=ENCODING, data=record.data)
+                  writer._schemas[text] = sid
+               schemas[record.id] = sid
+         elif isinstance(record, RecordingChannel):
+            if record.id not in channels:
+               channels[record.id] = writer.register_channel(topic=record.topic,
+                  catalogue=record.catalogue, root_type=record.root_type, metadata=record.metadata)
+         elif isinstance(record, Metadata):
+            writer.write_metadata(record.name, record.metadata)
+         elif isinstance(record, RecordingRecord):
+            writer.write_encoded(channels[record.channel.id], record.payload,
+               log_time_ns=record.log_time_ns, publish_time_ns=record.publish_time_ns, sequence=record.sequence)
+            count += 1
    return count

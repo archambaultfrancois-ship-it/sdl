@@ -28,8 +28,10 @@ package SDL_Recording is
    end record;
    type Writer is new Ada.Finalization.Limited_Controlled with private;
    type Reader is new Ada.Finalization.Limited_Controlled with private;
+   type Recording_Format is (MCAP, PCAPNG);
    function Create (Path : String; Overwrite : Boolean := False;
-                    Chunk_Size : UInt64 := 1_048_576) return Writer;
+                    Chunk_Size : UInt64 := 1_048_576;
+                    Format : Recording_Format := MCAP) return Writer;
    function Open (Path : String) return Reader;
    function Now return UInt64;
    function Validate (Path : String) return UInt64;

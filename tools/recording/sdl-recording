@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect, validate and replay SDL2 MCAP recordings."""
+"""Inspect, validate, convert and replay SDL2 MCAP/PCAPNG recordings."""
 
 import argparse
 from decimal import Decimal, DecimalException, localcontext
@@ -14,7 +14,7 @@ import textwrap
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'runtime/python'))
 
 try:
-   from sdl_recording import RecordingError, RecordingReader, replay
+   from sdl_recording import RecordingError, RecordingReader, convert_recording, replay
 except ModuleNotFoundError as error:
    if error.name == 'mcap':
       sys.exit('Recording requires mcap: python3 -m pip install --no-deps -r tools/recording/requirements.txt')
@@ -195,10 +195,18 @@ def main(argv=None):
       if name == 'replay':
          command.add_argument('--speed', type=float, default=1.0, help='0: no wait; 1: recorded pace')
          command.add_argument('--consumer', required=True, help='Python module:function receiving a RecordingRecord')
+   convert = sub.add_parser('convert', help='preserve SDL records in another container')
+   convert.add_argument('file')
+   convert.add_argument('output')
+   convert.add_argument('--format', choices=('mcap', 'pcapng'), required=True, help='output container')
+   convert.add_argument('--overwrite', action='store_true')
    args = parser.parse_args(argv)
    try:
       reader = RecordingReader(args.file)
-      if args.command == 'info':
+      if args.command == 'convert':
+         count = convert_recording(args.file, args.output, format=args.format, overwrite=args.overwrite)
+         _emit({'format': args.format, 'message_count': count, 'output': args.output})
+      elif args.command == 'info':
          _emit(reader.info())
       elif args.command == 'validate':
          _emit({'valid': True, 'message_count': reader.validate()})

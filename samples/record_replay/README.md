@@ -8,9 +8,15 @@ contains an interference burst. The live path and replay call the same
 From the repository root:
 
 ```sh
-make recording-deps
 make -C samples/record_replay demo
+# Or record, inspect and replay a USER0 PCAPNG file:
+make -C samples/record_replay demo RECORDING_FORMAT=pcapng
 ```
+
+The demo checks for the pinned optional `mcap` dependency and installs it in
+`build/recording-deps` when missing. The first run requires pip and network access
+or a cached wheel; subsequent runs reuse the installation. Override `RECORDING_DEPS`
+to choose another dependency directory, or run `make recording-deps` beforehand.
 
 The demo creates `build/radio.mcap`, prints file information and a bounded
 structured display of the burst at 300 ms, validates the entire file, and replays without
@@ -28,6 +34,8 @@ CaptureAnalysis {
 ```
 
 The recording contains its catalogue; decoding it does not need generated classes.
+With `RECORDING_FORMAT=pcapng`, the same workflow creates `build/radio.pcapng`.
+The application writer accepts `--format mcap|pcapng`; readers detect the container.
 
 For a structured display of one recorded capture:
 

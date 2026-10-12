@@ -339,6 +339,7 @@ static void graph_limits(void) {
 }
 static void deep_messages(void) {
    typedef struct { char *data; uint32_t length; } StringValue;
+   typedef struct { char prefix; StringValue value; } StringValueAlign;
    static SdlTypeDesc types[2][65];
    static SdlFieldDesc fields[2][65];
    static char names[2][65][32];
@@ -356,7 +357,7 @@ static void deep_messages(void) {
          t->kind = SDL_TYPE_STRUCT;
          t->name = names[variable][i];
          t->size = variable ? sizeof(StringValue) : sizeof(bool);
-         t->alignment = variable ? offsetof(struct { char prefix; char *value; }, value) : 1;
+         t->alignment = variable ? offsetof(StringValueAlign, value) : 1;
          t->detail.structure.field_count = 1;
          t->detail.structure.fields = f;
          f->id = 1;
@@ -647,6 +648,7 @@ static void packed_records(void) {
    static const char text[] =
       "SDL2|#State{READY=1;NEGATIVE=-7;}|PackedTestBatch{1+:PackedTestRecord:records;}|PackedTestRecord{1:bool:enabled;2:int16:code;3:fl64:precise;4:State:state;5:c32:point;}";
    PackedTestRecord records[2] = {{0}};
+   const float points[2][2] = {{1.f, -2.f}, {-3.f, 4.f}};
    PackedTestBatch batch = {2, records}, *copy;
    unsigned char expected[48] = {1, 2};
    void *wire;
@@ -660,11 +662,11 @@ static void packed_records(void) {
    records[0].code = INT16_MIN;
    records[0].precise = -0.0;
    records[0].state = STATE_NEGATIVE;
-   records[0].point = 1.f - 2.f * I;
+   memcpy(&records[0].point, points[0], sizeof(records[0].point));
    records[1].code = INT16_MAX;
    records[1].precise = INFINITY;
    records[1].state = STATE_READY;
-   records[1].point = -3.f + 4.f * I;
+   memcpy(&records[1].point, points[1], sizeof(records[1].point));
    for (i = 0; i < 2; ++i)
       assert(sdl_value_encode_fixed(&packed_test_record_desc, &records[i], expected + 2 + i * 23, 23));
    wire = type_encode(ctx, "PackedTestBatch", &batch, &size);

@@ -94,13 +94,14 @@ On the Termux development environment, source `~/.bashrc` before using the JDK.
 - [Radio capture](samples/radio_capture/README.md) checks all six C/Rust/Python
   encoder/decoder pairings using separate catalogue files.
 - [Record and replay](samples/record_replay/README.md) records autonomous SDL2
-  MCAP files and compares live radio analysis with replay. The optional Python
+  MCAP or PCAPNG files and compares live radio analysis with replay. The optional Python
   module and CLI support inspection, validation and timed replay; see the
   [recording reference](docs/recording.md) and the optional
   [native services](docs/recording_native.md) for C, Rust, Java JNI, Ada and C MEX.
+  The [PCAPNG profile](docs/recording_pcapng.md) adds USER0 captures and MCAP conversion.
   Run `make recording-deps test-recording` to install the optional dependency and test it.
 - [Wireshark](tools/wireshark/README.md) decodes catalogue announcements and
-  subsequent UDP messages.
+  subsequent UDP messages, and inspects SDL USER0 recordings.
 
 ```sh
 make -C samples/abc-c run

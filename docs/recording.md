@@ -5,6 +5,9 @@ This reference defines `sdl2-recording-v1`, an SDL project profile of the
 names are project conventions, not entries in MCAP's official registry.
 Recordings use `.mcap` and contain both catalogues and SDL2 payloads. No schema
 sidecar, generated class or registry service is required for dynamic decoding.
+The same services also support the [SDL PCAPNG profile](recording_pcapng.md)
+for USER0 captures and conversion in both directions. Reader APIs and CLI commands
+detect the container automatically; `info` reports both `format` and `profile`.
 
 ## Container mapping
 
@@ -94,7 +97,9 @@ make test-recording
 Alternatively install `tools/recording/requirements.txt` in your Python environment
 with `python3 -m pip install --no-deps -r tools/recording/requirements.txt`. The
 [MCAP Python writer](https://mcap.dev/docs/python/mcap-apidoc/mcap.writer) supplies
-the container implementation. SDL does not introduce a second container format.
+the MCAP container implementation. PCAPNG uses a separate transport module
+and reuses MCAP primitive record body layouts. The optional SDK is required for
+both formats; the core runtime remains independent.
 
 ```python
 from sdl_runtime import description, encode, prepare

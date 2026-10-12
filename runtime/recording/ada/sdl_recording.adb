@@ -40,8 +40,8 @@ package body SDL_Recording is
    pragma Import (C, C_Now, "sdl_recording_now");
    function C_Validate (Path : C_Bytes; Result : access UInt64) return C_Int;
    pragma Import (C, C_Validate, "sdl_recording_validate");
-   function W_Open (Path : C_Bytes; Overwrite : C_Flag; Chunk : UInt64) return System.Address;
-   pragma Import (C, W_Open, "sdl_recording_writer_open");
+   function W_Open (Path : C_Bytes; Overwrite : C_Flag; Chunk : UInt64; Format : C_Flag) return System.Address;
+   pragma Import (C, W_Open, "sdl_recording_writer_open_format");
    function W_Channel (Handle : System.Address; Topic, Catalogue, Root : C_Bytes;
                        Metadata : System.Address; Count : C_Size; Result : access UInt16) return C_Int;
    pragma Import (C, W_Channel, "sdl_recording_writer_channel");
@@ -99,10 +99,11 @@ package body SDL_Recording is
       Check (C_Validate (View (Path), Result'Access)); return Result;
    end Validate;
    function Create (Path : String; Overwrite : Boolean := False;
-                    Chunk_Size : UInt64 := 1_048_576) return Writer is
+                    Chunk_Size : UInt64 := 1_048_576;
+                    Format : Recording_Format := MCAP) return Writer is
    begin
       return Result : Writer do
-         Result.Handle := W_Open (View (Path), Flag (Overwrite), Chunk_Size);
+         Result.Handle := W_Open (View (Path), Flag (Overwrite), Chunk_Size, C_Flag (Recording_Format'Pos (Format)));
          if Result.Handle = System.Null_Address then Check (-1); end if;
       end return;
    end Create;
@@ -232,8 +233,9 @@ package body SDL_Recording is
       if Status = 0 then return False; end if;
       Item := Copy_Record (Pointer); return True;
    end Next;
-   type Replay_State is limited record
-      Consumer : access procedure (Item : Recording_Record);
+   --  The synchronous replay borrows the callback for the lifetime of State.
+   --  An access discriminant preserves the caller's accessibility level.
+   type Replay_State (Consumer : not null access procedure (Item : Recording_Record)) is limited record
       Failed : Boolean := False;
       Failure : Ada.Exceptions.Exception_Occurrence;
    end record;
@@ -249,12 +251,12 @@ package body SDL_Recording is
    end Consume;
    function Replay (R : in out Reader; Speed : Long_Float;
                     Consumer : not null access procedure (Item : Recording_Record)) return UInt64 is
-      State : aliased Replay_State;
+      State : aliased Replay_State (Consumer);
       Count : aliased UInt64 := 0;
       Status : C_Int;
       Entered : Boolean := False;
    begin
-      Ready (R); State.Consumer := Consumer; R.Busy := True; Entered := True;
+      Ready (R); R.Busy := True; Entered := True;
       Status := R_Replay (R.Handle, Interfaces.C.double (Speed), Consume'Access, State'Address, Count'Access);
       R.Busy := False;
       if State.Failed then Ada.Exceptions.Reraise_Occurrence (State.Failure); end if;

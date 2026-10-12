@@ -1,24 +1,20 @@
 CC ?= cc
 PKG_CONFIG ?= pkg-config
-CFLAGS ?= -O3 -Wall -Wextra
+CFLAGS ?= -std=c11 -O3 -Wall -Wextra
 WIRESHARK_CFLAGS := $(shell $(PKG_CONFIG) --cflags wireshark 2>/dev/null)
 WIRESHARK_LIBS := $(shell $(PKG_CONFIG) --libs wireshark 2>/dev/null)
-WIRESHARK_VERSION := $(shell $(PKG_CONFIG) --modversion wireshark 2>/dev/null)
-WIRESHARK_VERSION_PARTS := $(subst ., ,$(WIRESHARK_VERSION))
-ifneq ($(WIRESHARK_VERSION),)
-WIRESHARK_CFLAGS += -DWIRESHARK_VERSION_MAJOR=$(word 1,$(WIRESHARK_VERSION_PARTS)) \
-	-DWIRESHARK_VERSION_MINOR=$(word 2,$(WIRESHARK_VERSION_PARTS))
-endif
 PLUGIN_SUFFIX ?= .so
 TARGET := sdl$(PLUGIN_SUFFIX)
 
 ROOT := ../..
 RUNTIME := $(wildcard $(ROOT)/runtime/c/*.c)
+ADAPTER := sdl-recording.c sdl-recording.h
 
 all: $(TARGET)
 
-$(TARGET): packet-sdl.c $(RUNTIME) $(wildcard $(ROOT)/runtime/c/*.h)
-	$(CC) $(CFLAGS) $(WIRESHARK_CFLAGS) -I$(ROOT)/runtime/c -fPIC -shared -o $@ packet-sdl.c $(RUNTIME) $(WIRESHARK_LIBS) -lm
+$(TARGET): packet-sdl.c $(ADAPTER) $(RUNTIME) $(wildcard $(ROOT)/runtime/c/*.h)
+	@$(PKG_CONFIG) --exists wireshark || { echo "Wireshark development headers/libraries are required (pkg-config wireshark)." >&2; exit 1; }
+	$(CC) $(CFLAGS) $(WIRESHARK_CFLAGS) -I$(ROOT)/runtime/c -fPIC -shared $(LDFLAGS) -o $@ packet-sdl.c sdl-recording.c $(RUNTIME) $(WIRESHARK_LIBS) -lm
 
 clean:
 	rm -f $(TARGET)

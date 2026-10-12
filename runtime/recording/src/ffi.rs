@@ -2,8 +2,8 @@
 //! Handles belong to this library and must not be shared concurrently or used after close.
 
 use crate::{
-    Error, Filter, Record, RecordingReader, RecordingWriter, Result, MAX_PAYLOAD_SIZE,
-    MAX_TEXT_SIZE,
+    Error, Filter, Record, RecordingFormat, RecordingReader, RecordingWriter, Result,
+    MAX_PAYLOAD_SIZE, MAX_TEXT_SIZE,
 };
 use std::{
     cell::RefCell,
@@ -204,6 +204,25 @@ pub unsafe extern "C" fn sdl_recording_writer_open(
     protect(ptr::null_mut(), || {
         Ok(Box::into_raw(Box::new(CWriter {
             writer: RecordingWriter::create(path.text()?, boolean(overwrite)?, chunk_size)?,
+        })))
+    })
+}
+/// Same lifetime rules as writer_open; format=0 MCAP, format=1 PCAPNG.
+#[no_mangle]
+pub unsafe extern "C" fn sdl_recording_writer_open_format(
+    path: Bytes,
+    overwrite: u8,
+    chunk_size: u64,
+    format: u8,
+) -> *mut CWriter {
+    protect(ptr::null_mut(), || {
+        Ok(Box::into_raw(Box::new(CWriter {
+            writer: RecordingWriter::create_format(
+                path.text()?,
+                boolean(overwrite)?,
+                chunk_size,
+                RecordingFormat::try_from(format)?,
+            )?,
         })))
     })
 }
