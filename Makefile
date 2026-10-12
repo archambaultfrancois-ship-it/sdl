@@ -22,8 +22,8 @@ RUN_TEST := $(if $(CHECK_SILENT),$(PYTHON) tst/run_quiet.py --,)
 matlab_available := $(shell command -v $(matlab) >/dev/null 2>&1 && echo yes)
 ifeq ($(matlab_available),yes)
 matlab_bench_label := Matlab
-matlab_run = $(matlab) -batch "addpath('$(matlab_generated_dir)'); addpath('tst/matlab'); run_tests"
-matlab_bench_run = $(matlab) -batch "addpath('$(matlab_generated_dir)'); addpath('tst/matlab'); bench"
+matlab_run = $(matlab) -nodisplay -nosplash -nodesktop -r "try, addpath('$(matlab_generated_dir)'); addpath('tst/matlab'); run_tests; catch err, disp(getReport(err, 'extended')); exit(1); end; exit(0)"
+matlab_bench_run = $(matlab) -nodisplay -nosplash -nodesktop -r "try, addpath('$(matlab_generated_dir)'); addpath('tst/matlab'); bench; catch err, disp(getReport(err, 'extended')); exit(1); end; exit(0)"
 else
 matlab_bench_label := Octave
 matlab_run = $(OCTAVE) --quiet --no-gui --eval "addpath('$(matlab_generated_dir)'); addpath('tst/matlab'); run_tests"
@@ -78,7 +78,7 @@ test-matlab: $(GENERATED_DIR)/.stamp
 
 test-java: $(GENERATED_DIR)/.stamp
 	mkdir -p $(JAVA_TEST_CLASSES)
-	$(JAVAC) -source $(JAVA_SOURCE) -target $(JAVA_SOURCE) -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
+	$(JAVAC) -encoding UTF-8 -source $(JAVA_SOURCE) -target $(JAVA_SOURCE) -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
 	$(RUN_TEST) env SDL_WIRE_ENDIAN=big $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaTests
 	$(RUN_TEST) env SDL_WIRE_ENDIAN=little $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaTests
 
@@ -87,7 +87,7 @@ bench-matlab: $(GENERATED_DIR)/.stamp
 
 bench-java: $(GENERATED_DIR)/.stamp
 	mkdir -p $(JAVA_TEST_CLASSES)
-	$(JAVAC) -source $(JAVA_SOURCE) -target $(JAVA_SOURCE) -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
+	$(JAVAC) -encoding UTF-8 -source $(JAVA_SOURCE) -target $(JAVA_SOURCE) -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
 	SDL_WIRE_ENDIAN=big SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaBench
 
 $(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py runtime/java/SdlCodec.java Makefile
