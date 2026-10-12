@@ -105,3 +105,6 @@ make -C samples/radio_capture interop
 Read the [schema syntax](docs/schema.md), [runtime APIs](docs/runtime.md), and
 [complete wire layout](docs/wire_descriptor.md), including a byte-by-byte
 catalogue and data example. SDL2 replaces the previous format completely.
+The [formal syntax reference](docs/formal_syntax.md) gives EBNF grammars for
+source files and the single-line SDL2 catalogue, with validation rules and
+matching examples.

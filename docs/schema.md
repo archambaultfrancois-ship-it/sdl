@@ -4,6 +4,8 @@ This page describes the SDL syntax accepted by the current generator and the
 constraints shared by its C, Rust, Python 3, Matlab/Octave, and Java backends. SDL schemas describe
 logical messages; target-language memory layout is generated separately. The
 wire representation is described in [wire_descriptor.md](wire_descriptor.md).
+For EBNF grammars and matching source/catalogue examples, see the
+[formal syntax reference](formal_syntax.md).
 
 ## Declarations
 
@@ -60,8 +62,10 @@ requires portable ASCII identifiers that do not conflict with C or runtime
 names for emitted types, fields, and enum items. Rust validates identifiers
 after its name conversion. Python rejects names that collide with runtime
 methods or metadata, invalid normalized identifiers, and reserved `Enum` names.
-Matlab/Octave and Java apply their target-language identifier and reserved-name
-rules during generation.
+Java renames keywords and rejects collisions with generated metadata or other
+converted field names. Ada checks names without regard to case after
+conversion. Matlab/Octave converts field names but does not explicitly reject
+all collisions after conversion.
 Backends reject schema filenames that collide with generated package or registry
 files, or that produce invalid module names. Type names must be unique across
 the input schema set and cannot reuse built-in type names. Enum item names and
@@ -72,6 +76,36 @@ emit normalized decimal literals. Field IDs are positive unsigned 32-bit integer
 decimal digits and must be unique within their message. The generator and runtimes limit declaration counts and UTF-8 identifier
 lengths to 65535; a field can have at most 255
 fixed-array dimensions. The complete textual catalogue is limited to 1 MiB.
+
+### Portable naming recommendation
+
+For schemas intended for multiple backends, start identifiers with an ASCII
+letter and use only ASCII letters, digits and underscores. In particular,
+the C backend rejects type and field names beginning with `_`, even though
+the general SDL source grammar accepts them.
+
+For field names, prefer lowercase snake_case or camelCase:
+
+| Convention | Pattern | Examples |
+| --- | --- | --- |
+| snake_case | `[a-z][a-z0-9]*(?:_[a-z0-9]+)*` | `device_id`, `temperature_c`, `sample_count` |
+| camelCase | `[a-z][A-Za-z0-9]*` | `deviceId`, `temperatureC`, `sampleCount` |
+
+- With snake_case, use single underscores between nonempty segments; avoid
+  leading, trailing or consecutive underscores.
+- Avoid keywords of every selected target language, C macros such as `I`,
+  `NULL` and `complex`, and generated/runtime member names such as `display`,
+  `_SDL_FIELDS` and `SDL_FIELDS`.
+- Keep names distinct after case folding and backend conversion. For example,
+  `item` and `Item`, or `deviceId` and `deviceID`, collide in Ada;
+  `a__b` and `a_b` also collide there.
+- Check generation for every selected backend, and compile the resulting
+  bindings. Some conversion collisions are not rejected by the generator:
+  array fields `items` and `Items` collide in generated C descriptors, while
+  `__x` and `sdl__x` both become `sdl__x` in Matlab/Octave.
+
+These conventions are portability recommendations. The source grammar and
+backend validation rules determine which other names are accepted.
 
 ## Automatic field numbers
 

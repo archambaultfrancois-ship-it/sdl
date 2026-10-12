@@ -29,6 +29,9 @@ no alignment or padding; explicit `wire(...)` clauses may insert zero padding.
 
 ## Catalogue text
 
+The [formal syntax reference](formal_syntax.md) defines the EBNF grammars for
+both source schemas and the single-line catalogue.
+
 Source schemas may omit field IDs and the `required` modifier. The generator
 resolves these defaults before rendering the compact catalogue. Equivalent
 explicit and implicit source schemas produce identical catalogue bytes and hashes.
