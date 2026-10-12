@@ -13,14 +13,17 @@ all: $(BUILD_DIR)/sdl_demo
 
 test: test-c test-rust test-python
 
-test-c: $(BUILD_DIR)/sdl_demo
+test-c: $(BUILD_DIR)/sdl_demo $(BUILD_DIR)/sdl_demo_le
 	./$(BUILD_DIR)/sdl_demo
+	./$(BUILD_DIR)/sdl_demo_le
 
 test-rust: $(GENERATED_DIR)/.stamp
 	$(CARGO) test --manifest-path tst/rust/Cargo.toml
+	$(CARGO) test --manifest-path tst/rust/Cargo.toml --features wire-little-endian
 
 test-python: $(GENERATED_DIR)/.stamp
 	PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) -m unittest discover -s tst/python -v
+	SDL_WIRE_ENDIAN=little PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) -m unittest discover -s tst/python -v
 
 $(GENERATED_DIR)/.stamp: $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py Makefile
 	mkdir -p $(GENERATED_DIR)
@@ -32,6 +35,10 @@ $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/
 $(BUILD_DIR)/sdl_demo: runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c tst/main.c $(GENERATED_DIR)/.stamp $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/sdl_registry.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -Iruntime/c -I$(C_GENERATED_DIR) runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c $(C_GENERATED_DIR)/*.c tst/main.c -lm -o $@
+
+$(BUILD_DIR)/sdl_demo_le: runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c tst/main.c $(GENERATED_DIR)/.stamp $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/sdl_registry.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DSDL_WIRE_LITTLE_ENDIAN -Iruntime/c -I$(C_GENERATED_DIR) runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c $(C_GENERATED_DIR)/*.c tst/main.c -lm -o $@
 
 clean:
 	rm -rf $(BUILD_DIR)

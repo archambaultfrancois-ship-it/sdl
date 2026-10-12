@@ -1,5 +1,21 @@
 use std::convert::TryInto;
 
+fn wire_u32(value: u32) -> [u8; 4] {
+   if cfg!(feature = "wire-little-endian") {
+      value.to_le_bytes()
+   } else {
+      value.to_be_bytes()
+   }
+}
+
+fn wire_u64(value: u64) -> [u8; 8] {
+   if cfg!(feature = "wire-little-endian") {
+      value.to_le_bytes()
+   } else {
+      value.to_be_bytes()
+   }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CodecError {
    Truncated,
@@ -62,7 +78,7 @@ pub trait SdlMessage: WireValue + Default {
 pub fn encode<T: SdlMessage>(value: &T) -> Result<Vec<u8>, CodecError> {
    let body = value.encode_body()?;
    let mut output = Vec::with_capacity(4 + body.len());
-   output.extend_from_slice(&T::HASH.to_le_bytes());
+   output.extend_from_slice(&wire_u32(T::HASH));
    output.extend_from_slice(&body);
    Ok(output)
 }
@@ -85,27 +101,49 @@ pub fn write_field<T: WireValue>(
 ) -> Result<(), CodecError> {
    let payload = value.encode_payload()?;
    let length: u32 = payload.len().try_into().map_err(|_| CodecError::LengthOverflow)?;
-   output.extend_from_slice(&id.to_le_bytes());
-   output.extend_from_slice(&length.to_le_bytes());
+   output.extend_from_slice(&wire_u32(id));
+   output.extend_from_slice(&wire_u32(length));
    output.extend_from_slice(&payload);
    Ok(())
 }
 
 fn read_u32(bytes: &[u8]) -> Result<u32, CodecError> {
    let bytes: [u8; 4] = bytes.try_into().map_err(|_| CodecError::Truncated)?;
-   Ok(u32::from_le_bytes(bytes))
+   Ok(if cfg!(feature = "wire-little-endian") {
+      u32::from_le_bytes(bytes)
+   } else {
+      u32::from_be_bytes(bytes)
+   })
+}
+
+fn read_u64(bytes: &[u8]) -> Result<u64, CodecError> {
+   let bytes: [u8; 8] = bytes.try_into().map_err(|_| CodecError::Truncated)?;
+   Ok(if cfg!(feature = "wire-little-endian") {
+      u64::from_le_bytes(bytes)
+   } else {
+      u64::from_be_bytes(bytes)
+   })
 }
 
 macro_rules! fixed_integer {
    ($type:ty, $size:expr) => {
       impl WireValue for $type {
          fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
-            Ok(self.to_le_bytes().to_vec())
+            let bytes = if cfg!(feature = "wire-little-endian") {
+               self.to_le_bytes()
+            } else {
+               self.to_be_bytes()
+            };
+            Ok(bytes.to_vec())
          }
 
          fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
             let bytes: [u8; $size] = payload.try_into().map_err(|_| CodecError::TypeMismatch)?;
-            Ok(<$type>::from_le_bytes(bytes))
+            Ok(if cfg!(feature = "wire-little-endian") {
+               <$type>::from_le_bytes(bytes)
+            } else {
+               <$type>::from_be_bytes(bytes)
+            })
          }
       }
    };
@@ -133,23 +171,26 @@ impl WireValue for bool {
 
 impl WireValue for f32 {
    fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
-      Ok(self.to_bits().to_le_bytes().to_vec())
+      Ok(wire_u32(self.to_bits()).to_vec())
    }
 
    fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
       let bytes: [u8; 4] = payload.try_into().map_err(|_| CodecError::TypeMismatch)?;
-      let bits = u32::from_le_bytes(bytes);
+      let bits = read_u32(&bytes)?;
       Ok(Self::from_bits(bits))
    }
 }
 
 impl WireValue for f64 {
    fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
-      Ok(self.to_bits().to_le_bytes().to_vec())
+      Ok(wire_u64(self.to_bits()).to_vec())
    }
 
    fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
-      let bits = u64::from_le_bytes(payload.try_into().map_err(|_| CodecError::TypeMismatch)?);
+      if payload.len() != 8 {
+         return Err(CodecError::TypeMismatch);
+      }
+      let bits = read_u64(payload)?;
       Ok(Self::from_bits(bits))
    }
 }
@@ -157,8 +198,8 @@ impl WireValue for f64 {
 impl WireValue for Complex32 {
    fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
       let mut output = Vec::with_capacity(8);
-      output.extend_from_slice(&self.real.to_bits().to_le_bytes());
-      output.extend_from_slice(&self.imag.to_bits().to_le_bytes());
+      output.extend_from_slice(&wire_u32(self.real.to_bits()));
+      output.extend_from_slice(&wire_u32(self.imag.to_bits()));
       Ok(output)
    }
 
@@ -176,8 +217,8 @@ impl WireValue for Complex32 {
 impl WireValue for Complex64 {
    fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
       let mut output = Vec::with_capacity(16);
-      output.extend_from_slice(&self.real.to_bits().to_le_bytes());
-      output.extend_from_slice(&self.imag.to_bits().to_le_bytes());
+      output.extend_from_slice(&wire_u64(self.real.to_bits()));
+      output.extend_from_slice(&wire_u64(self.imag.to_bits()));
       Ok(output)
    }
 
@@ -185,8 +226,8 @@ impl WireValue for Complex64 {
       if payload.len() != 16 {
          return Err(CodecError::TypeMismatch);
       }
-      let real = u64::from_le_bytes(payload[..8].try_into().map_err(|_| CodecError::Truncated)?);
-      let imag = u64::from_le_bytes(payload[8..].try_into().map_err(|_| CodecError::Truncated)?);
+      let real = read_u64(&payload[..8])?;
+      let imag = read_u64(&payload[8..])?;
       Ok(Self {
          real: f64::from_bits(real),
          imag: f64::from_bits(imag),

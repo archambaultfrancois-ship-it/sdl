@@ -6,6 +6,7 @@
 #include "schema.h"
 #include "codec_cases.h"
 #include "sdl_registry.h"
+#include "sdl_wire.h"
 #include <assert.h>
 #include <inttypes.h>
 #include <math.h>
@@ -31,10 +32,16 @@ static void test_codec_cases(void) {
    double measurements[2] = { 0.125, -1024.5 };
    const char *labels[3] = { "", "alpha", "omega" };
    float complex point_values[2];
-   uint8_t unknown_field[8] = { 0xE7, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00 };
+   uint8_t unknown_field[8];
    const uint8_t unknown_payload[3] = { 0xA1, 0xB2, 0xC3 };
-   uint8_t invalid_bool_field[9] = { 17, 0, 0, 0, 1, 0, 0, 0, 2 };
+   uint8_t invalid_bool_field[9];
    bool bool_flags[3] = { true, false, true };
+
+   sdl_wire_write_u32(unknown_field, 999);
+   sdl_wire_write_u32(unknown_field + 4, 3);
+   sdl_wire_write_u32(invalid_bool_field, 17);
+   sdl_wire_write_u32(invalid_bool_field + 4, 1);
+   invalid_bool_field[8] = 2;
 
    memset(&input, 0, sizeof(input));
    input.has_tiny = true;
@@ -159,13 +166,28 @@ static void test_codec_cases(void) {
 static void assert_root_wire_fixture(const void *wire, size_t wire_size) {
    uint8_t expected[512];
    size_t expected_size;
+#ifdef SDL_WIRE_LITTLE_ENDIAN
    FILE *fixture = fopen("tst/fixtures/root_payload.bin", "rb");
+#else
+   FILE *fixture = fopen("tst/fixtures/root_payload_be.bin", "rb");
+#endif
    assert(fixture != NULL);
    expected_size = fread(expected, 1, sizeof(expected), fixture);
    assert(!ferror(fixture));
    assert(feof(fixture));
    fclose(fixture);
    assert(expected_size == wire_size);
+   if (memcmp(wire, expected, wire_size) != 0) {
+      const uint8_t *actual = (const uint8_t *)wire;
+      size_t i;
+      for (i = 0; i < wire_size; ++i) {
+         if (actual[i] != expected[i]) {
+            fprintf(stderr, "wire mismatch at %lu: %02X != %02X\n",
+               (unsigned long)i, actual[i], expected[i]);
+            break;
+         }
+      }
+   }
    assert(memcmp(wire, expected, wire_size) == 0);
 }
 
@@ -228,9 +250,7 @@ int main(void) {
 
    /* 6. Verify data integrity */
    const uint8_t* wire_bytes = (const uint8_t*)bin_stream;
-   uint32_t stream_hash = (uint32_t)wire_bytes[0] |
-      ((uint32_t)wire_bytes[1] << 8) | ((uint32_t)wire_bytes[2] << 16) |
-      ((uint32_t)wire_bytes[3] << 24);
+   uint32_t stream_hash = sdl_wire_read_u32(wire_bytes);
    assert(stream_hash == ROOTPAYLOAD_HASH);
    {
       RootPayload* res = (RootPayload*)generic_output;

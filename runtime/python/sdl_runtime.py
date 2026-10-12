@@ -1,6 +1,13 @@
 """Small dependency-free runtime for SDL generated Python messages."""
 
+import os
 import struct
+
+
+_WIRE_ENDIAN = os.environ.get('SDL_WIRE_ENDIAN', 'big').lower()
+if _WIRE_ENDIAN not in ('big', 'little'):
+   raise RuntimeError('SDL_WIRE_ENDIAN must be "big" or "little"')
+_WIRE_PREFIX = '<' if _WIRE_ENDIAN == 'little' else '>'
 
 
 class CodecError(ValueError):
@@ -59,8 +66,9 @@ def default_value(type_name, namespace):
 
 def _pack_value(type_name, value):
    formats = {
-      'int8': '<b', 'int16': '<h', 'int32': '<i', 'int64': '<q',
-      'fl32': '<f', 'fl64': '<d',
+      'int8': _WIRE_PREFIX + 'b', 'int16': _WIRE_PREFIX + 'h',
+      'int32': _WIRE_PREFIX + 'i', 'int64': _WIRE_PREFIX + 'q',
+      'fl32': _WIRE_PREFIX + 'f', 'fl64': _WIRE_PREFIX + 'd',
    }
    if type_name == 'bool':
       return b'\x01' if value else b'\x00'
@@ -70,7 +78,7 @@ def _pack_value(type_name, value):
       except (struct.error, TypeError) as error:
          raise CodecError('invalid value for ' + type_name) from error
    if type_name in ('c32', 'c64'):
-      fmt = '<ff' if type_name == 'c32' else '<dd'
+      fmt = _WIRE_PREFIX + ('ff' if type_name == 'c32' else 'dd')
       try:
          return struct.pack(fmt, value.real, value.imag)
       except (struct.error, AttributeError, TypeError) as error:
@@ -82,14 +90,15 @@ def _pack_value(type_name, value):
    if hasattr(value, '_SDL_FIELDS'):
       return value.encode_payload()
    if hasattr(value, '__int__'):
-      return struct.pack('<i', int(value))
+      return struct.pack(_WIRE_PREFIX + 'i', int(value))
    raise CodecError('unsupported SDL type: ' + type_name)
 
 
 def _unpack_value(type_name, payload, namespace):
    formats = {
-      'int8': '<b', 'int16': '<h', 'int32': '<i', 'int64': '<q',
-      'fl32': '<f', 'fl64': '<d',
+      'int8': _WIRE_PREFIX + 'b', 'int16': _WIRE_PREFIX + 'h',
+      'int32': _WIRE_PREFIX + 'i', 'int64': _WIRE_PREFIX + 'q',
+      'fl32': _WIRE_PREFIX + 'f', 'fl64': _WIRE_PREFIX + 'd',
    }
    if type_name == 'bool':
       if len(payload) != 1:
@@ -102,7 +111,7 @@ def _unpack_value(type_name, payload, namespace):
          raise CodecError('invalid scalar length for ' + type_name)
       return struct.unpack(formats[type_name], payload)[0]
    if type_name in ('c32', 'c64'):
-      fmt = '<ff' if type_name == 'c32' else '<dd'
+      fmt = _WIRE_PREFIX + ('ff' if type_name == 'c32' else 'dd')
       if len(payload) != struct.calcsize(fmt):
          raise CodecError('invalid complex length')
       value = struct.unpack(fmt, payload)
@@ -119,7 +128,7 @@ def _unpack_value(type_name, payload, namespace):
       if len(payload) != 4:
          raise CodecError('invalid enum length')
       try:
-         return value_type(struct.unpack('<i', payload)[0])
+         return value_type(struct.unpack(_WIRE_PREFIX + 'i', payload)[0])
       except ValueError as error:
          raise CodecError('invalid enum value') from error
    raise CodecError('unknown SDL type: ' + type_name)
@@ -179,7 +188,7 @@ class SdlMessage:
             payload = _pack_value(type_name, item)
             if len(payload) > 0xFFFFFFFF:
                raise CodecError('field payload exceeds uint32 length')
-            output.extend(struct.pack('<II', field_id, len(payload)))
+            output.extend(struct.pack(_WIRE_PREFIX + 'II', field_id, len(payload)))
             output.extend(payload)
       return bytes(output)
 
@@ -191,7 +200,7 @@ class SdlMessage:
       while offset < len(payload):
          if len(payload) - offset < 8:
             raise CodecError('truncated field header')
-         field_id, length = struct.unpack_from('<II', payload, offset)
+         field_id, length = struct.unpack_from(_WIRE_PREFIX + 'II', payload, offset)
          offset += 8
          if length > len(payload) - offset:
             raise CodecError('truncated field payload')
@@ -211,13 +220,13 @@ class SdlMessage:
 def encode(message):
    if not isinstance(message, SdlMessage):
       raise CodecError('encode expects an SDL message')
-   return struct.pack('<I', message._SDL_HASH) + message.encode_payload()
+   return struct.pack(_WIRE_PREFIX + 'I', message._SDL_HASH) + message.encode_payload()
 
 
 def decode(wire, message_type):
    if len(wire) < 4:
       raise CodecError('truncated message hash')
-   type_hash = struct.unpack_from('<I', wire)[0]
+   type_hash = struct.unpack_from(_WIRE_PREFIX + 'I', wire)[0]
    if type_hash != message_type._SDL_HASH:
       raise CodecError('message type hash mismatch')
    return message_type.decode_payload(wire[4:])
