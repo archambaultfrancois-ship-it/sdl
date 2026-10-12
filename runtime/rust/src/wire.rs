@@ -1,4 +1,5 @@
 use std::convert::TryInto;
+use std::fmt::Write as FmtWrite;
 
 fn wire_u32(value: u32) -> [u8; 4] {
    if cfg!(feature = "wire-little-endian") {
@@ -50,6 +51,124 @@ pub trait FixedWire: Sized {
 
    fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError>;
    fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError>;
+}
+
+/// Formats generated SDL values as an indented, structured string.
+pub trait SdlDisplay {
+   fn fmt_sdl(&self, output: &mut String, indent_width: usize, depth: usize);
+}
+
+/// Render an SDL value using `indent_width` spaces per nesting level.
+pub fn display<T: SdlDisplay + ?Sized>(value: &T, indent_width: usize) -> String {
+   let mut output = String::new();
+   value.fmt_sdl(&mut output, indent_width, 0);
+   output.push('\n');
+   output
+}
+
+pub fn display_struct_start(output: &mut String, name: &str, _: usize,
+   _: usize) {
+   let _ = writeln!(output, "{} {{", name);
+}
+
+pub fn display_struct_field<T: SdlDisplay + ?Sized>(output: &mut String,
+   name: &str, value: &T, depth: usize, indent_width: usize) {
+   display_indent(output, depth.saturating_add(1), indent_width);
+   let _ = write!(output, "{}: ", name);
+   value.fmt_sdl(output, indent_width, depth.saturating_add(1));
+   output.push('\n');
+}
+
+pub fn display_struct_end(output: &mut String, depth: usize, indent_width: usize) {
+   display_indent(output, depth, indent_width);
+   output.push('}');
+}
+
+fn display_indent(output: &mut String, depth: usize, indent_width: usize) {
+   for _ in 0..depth.saturating_mul(indent_width) {
+      output.push(' ');
+   }
+}
+
+macro_rules! display_scalar {
+   ($($type:ty),*) => {$(
+      impl SdlDisplay for $type {
+         fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {
+            let _ = write!(output, "{}", self);
+         }
+      }
+   )*};
+}
+
+display_scalar!(bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);
+
+impl SdlDisplay for String {
+   fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {
+      let _ = write!(output, "{:?}", self);
+   }
+}
+
+impl SdlDisplay for str {
+   fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {
+      let _ = write!(output, "{:?}", self);
+   }
+}
+
+impl SdlDisplay for Complex32 {
+   fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {
+      let _ = write!(output, "({}, {})", self.real, self.imag);
+   }
+}
+
+impl SdlDisplay for Complex64 {
+   fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {
+      let _ = write!(output, "({}, {})", self.real, self.imag);
+   }
+}
+
+impl<T: SdlDisplay> SdlDisplay for Option<T> {
+   fn fmt_sdl(&self, output: &mut String, indent_width: usize, depth: usize) {
+      match self {
+         Some(value) => value.fmt_sdl(output, indent_width, depth),
+         None => output.push_str("null"),
+      }
+   }
+}
+
+impl<T: SdlDisplay> SdlDisplay for Vec<T> {
+   fn fmt_sdl(&self, output: &mut String, indent_width: usize, depth: usize) {
+      if self.is_empty() {
+         output.push_str("[]");
+         return;
+      }
+      output.push_str("[\n");
+      for (index, value) in self.iter().enumerate() {
+         display_indent(output, depth.saturating_add(1), indent_width);
+         value.fmt_sdl(output, indent_width, depth.saturating_add(1));
+         if index + 1 < self.len() { output.push(','); }
+         output.push('\n');
+      }
+      display_indent(output, depth, indent_width);
+      output.push(']');
+   }
+}
+
+impl<T: SdlDisplay, const N: usize> SdlDisplay for [T; N] {
+   fn fmt_sdl(&self, output: &mut String, indent_width: usize, depth: usize) {
+      if self.is_empty() {
+         output.push_str("[]");
+         return;
+      }
+      output.push_str("[\n");
+      for (index, value) in self.iter().enumerate() {
+         display_indent(output, depth.saturating_add(1), indent_width);
+         value.fmt_sdl(output, indent_width, depth.saturating_add(1));
+         if index + 1 < N { output.push(','); }
+         output.push('\n');
+      }
+      display_indent(output, depth, indent_width);
+      output.push(']');
+   }
 }
 
 pub trait SdlMessage: WireValue + Default {

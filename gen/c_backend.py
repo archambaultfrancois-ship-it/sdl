@@ -49,12 +49,23 @@ class CBackend:
             header.append('   ' + enum.name.upper() + '_' + name + ' = ' + value + ',\n')
          header.append('} ' + enum.name + ';\n')
          header.append('extern const SdlTypeDesc SDL_ENUM_' + enum.name.upper() + '_DESC;\n\n')
+         enum_values_name = 'sdl_enum_' + enum.name.lower() + '_values'
+         source.append('static const SdlEnumValueDesc ' + enum_values_name +
+            '[] = {\n')
+         if enum.pairs:
+            for item_name, value in enum.pairs:
+               source.append('   { ' + value + ', "' + item_name + '" },\n')
+         else:
+            source.append('   { 0, NULL },\n')
+         source.append('};\n')
          source.append('typedef struct { char prefix; ' + enum.name +
             ' value; } SDL_ALIGN_' + enum.name.upper() + ';\n')
          source.append('const SdlTypeDesc SDL_ENUM_' + enum.name.upper() + '_DESC = {\n')
-         source.append('   SDL_TYPE_ENUM, sizeof(' + enum.name + '), offsetof(SDL_ALIGN_' +
-            enum.name.upper() + ', value),\n')
-         source.append('   "' + enum.name + '", 0, NULL, 0, { { 0, NULL } }\n};\n\n')
+         source.append('   .kind = SDL_TYPE_ENUM, .size = sizeof(' + enum.name +
+            '), .alignment = offsetof(SDL_ALIGN_' + enum.name.upper() + ', value),\n')
+         source.append('   .name = "' + enum.name + '", .hash = 0,\n')
+         source.append('   .detail.enumeration = { ' + str(len(enum.pairs)) +
+            ', ' + enum_values_name + ' }\n};\n\n')
 
       for name in self.schema.message_order:
          message = self.schema.messages[name]

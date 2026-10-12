@@ -1,0 +1,21 @@
+enum CaptureMode {
+   LIVE = 1;
+   CALIBRATION = 2;
+}
+
+message CaptureMetadata {
+   1: required string receiver_id;
+   2: required int64 sequence;
+   3: required int64 captured_at_ns;
+   4: required fl64 center_frequency_hz;
+   5: required fl32 sample_rate_hz;
+   6: required CaptureMode mode;
+   7: required fl32[2] dc_offset;
+}
+
+message RadioCapture {
+   1: required CaptureMetadata metadata;
+   2: optional string operator_note;
+   3: packed c32 iq_samples;
+   4: repeated int32 trigger_offsets;
+}

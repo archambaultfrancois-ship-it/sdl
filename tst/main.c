@@ -185,6 +185,7 @@ static void test_codec_cases(void) {
    uint8_t invalid_bool_field[9];
    uint8_t invalid_packed_field[9];
    bool bool_flags[3] = { true, false, true };
+   char *displayed;
 
    sdl_wire_write_u32(unknown_field, 999);
    sdl_wire_write_u32(unknown_field + 4, 3);
@@ -235,6 +236,12 @@ static void test_codec_cases(void) {
 
    encoded = (uint8_t *)type_encode("CodecCases", &input, &encoded_size);
    assert(encoded != NULL);
+   displayed = type_display("CodecCases", &input, 2);
+   assert(displayed != NULL);
+   assert(strstr(displayed, "  tiny: -128\n") != NULL);
+   assert(strstr(displayed, "  state: READY\n") != NULL);
+   assert(strstr(displayed, "  samples: [\n    -32768,\n") != NULL);
+   type_free(displayed);
    assert(encoded_size > 4);
    assert(type_decode_size(encoded, encoded_size - 1) == 0);
    {

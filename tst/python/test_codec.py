@@ -9,7 +9,7 @@ from schema import (AnonymousEnvelope, AnonymousEnvelope_1, AnonymousEnvelope_2,
    AnonymousEnvelope_3, FixedBoard, FixedItem, FixedRow, FixedVector,
    RootPayload, VarItem)
 from sdl_runtime import (CodecError, Complex32, Complex64, decode,
-   decode_dynamic, encode)
+   decode_dynamic, display, encode)
 
 
 WIRE_ENDIAN = os.environ.get('SDL_WIRE_ENDIAN', 'big').lower()
@@ -70,6 +70,20 @@ def codec_cases():
 
 
 class CodecTests(unittest.TestCase):
+   def test_display_formats_typed_objects_with_configurable_indentation(self):
+      original = codec_cases()
+      rendered = display(original, indent_width=2)
+      self.assertTrue(rendered.startswith('CodecCases {\n'))
+      self.assertIn('  tiny: -128\n', rendered)
+      self.assertIn('  state: READY\n', rendered)
+      self.assertIn('  samples: [\n    -32768,\n', rendered)
+      self.assertEqual(original.display(indent_width=2), rendered)
+
+      absent = display(CodecCases(), indent_width=4)
+      self.assertIn('    tiny: null\n', absent)
+      with self.assertRaises(ValueError):
+         display(original, indent_width=-1)
+
    def test_s01_field_order_is_independent_of_schema_order(self):
       original = codec_cases()
       wire = reverse_body_fields(encode(original))

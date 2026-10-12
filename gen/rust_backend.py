@@ -47,7 +47,7 @@ class RustBackend:
    def generate(self):
       used_types = {field.type_name for message in self.schema.messages.values()
          for field in message.fields}
-      imports = ['CodecError', 'SdlMessage', 'WireValue', 'write_field']
+      imports = ['CodecError', 'SdlDisplay', 'SdlMessage', 'WireValue', 'write_field']
       has_packed_fields = any(field.modifier == 'packed'
          for message in self.schema.messages.values() for field in message.fields)
       has_fixed_messages = any(self.schema.fixed_wire_size(name) is not None
@@ -96,6 +96,14 @@ class RustBackend:
          output.append('      (*self as i32).encode_fixed(output)\n   }\n')
          output.append('   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {\n')
          output.append('      <Self as WireValue>::decode_payload(payload)\n   }\n}\n\n')
+         output.append('impl SdlDisplay for ' + c_identifier(enum.name) + ' {\n')
+         output.append('   fn fmt_sdl(&self, output: &mut String, _: usize, _: usize) {\n')
+         output.append('      output.push_str(match self {\n')
+         for variant, value in variants:
+            enum_name = next(item_name for item_name, item_value in enum.pairs
+               if item_value == value)
+            output.append('         Self::' + variant + ' => "' + enum_name + '",\n')
+         output.append('      });\n   }\n}\n\n')
 
       for message_name in self.schema.message_order:
          message = self.schema.messages[message_name]
@@ -112,6 +120,17 @@ class RustBackend:
                value_type = 'Vec<' + value_type + '>'
             output.append('   pub ' + rust_field + ': ' + value_type + ',\n')
          output.append('}\n')
+
+         output.append('impl SdlDisplay for ' + rust_name + ' {\n')
+         output.append('   fn fmt_sdl(&self, output: &mut String, indent_width: usize, depth: usize) {\n')
+         output.append('      sdl_runtime::display_struct_start(output, "' + message_name +
+            '", depth, indent_width);\n')
+         for field in fields:
+            output.append('      sdl_runtime::display_struct_field(output, "' +
+               c_identifier(field.name) + '", &self.' + c_identifier(field.name) +
+               ', depth, indent_width);\n')
+         output.append('      sdl_runtime::display_struct_end(output, depth, indent_width);\n')
+         output.append('   }\n}\n')
 
          output.append('impl WireValue for ' + rust_name + ' {\n')
          output.append('   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {\n')

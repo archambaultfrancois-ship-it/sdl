@@ -2,6 +2,8 @@
 
 import os
 import struct
+import json
+from enum import IntEnum
 
 
 _WIRE_ENDIAN = os.environ.get('SDL_WIRE_ENDIAN', 'big').lower()
@@ -312,6 +314,10 @@ class SdlMessage:
       values = ', '.join(field[1] + '=' + repr(getattr(self, field[1]))
          for field in self._SDL_FIELDS)
       return self.__class__.__name__ + '(' + values + ')'
+
+   def display(self, indent_width=3):
+      """Return this SDL object as a readable structure with fixed-width indentation."""
+      return display(self, indent_width)
 
    def encode_payload(self):
       output = bytearray()
@@ -781,3 +787,55 @@ def decode_dynamic(wire):
    """Decode a message into neutral values using only its wire descriptor."""
    root, messages, enums, payload = _read_descriptor_frame(wire)
    return _dynamic_decode_message(root, payload, messages, enums)
+
+
+def _display_indent(depth, indent_width):
+   return ' ' * (depth * indent_width)
+
+
+def _display_sequence(values, indent_width, depth):
+   if not values:
+      return '[]'
+   lines = ['[']
+   for index, value in enumerate(values):
+      comma = ',' if index + 1 < len(values) else ''
+      lines.append(_display_indent(depth + 1, indent_width) +
+         _display_value(value, indent_width, depth + 1) + comma)
+   lines.append(_display_indent(depth, indent_width) + ']')
+   return '\n'.join(lines)
+
+
+def _display_message(message, indent_width, depth):
+   lines = [message.__class__.__name__ + ' {']
+   for unused_id, name, unused_modifier, unused_type, unused_dimensions in message._SDL_FIELDS:
+      lines.append(_display_indent(depth + 1, indent_width) + name + ': ' +
+         _display_value(getattr(message, name), indent_width, depth + 1))
+   lines.append(_display_indent(depth, indent_width) + '}')
+   return '\n'.join(lines)
+
+
+def _display_value(value, indent_width, depth):
+   if isinstance(value, SdlMessage):
+      return _display_message(value, indent_width, depth)
+   if isinstance(value, IntEnum):
+      return value.name
+   if isinstance(value, (Complex32, Complex64)):
+      return '({}, {})'.format(value.real, value.imag)
+   if isinstance(value, (list, tuple)):
+      return _display_sequence(value, indent_width, depth)
+   if value is None:
+      return 'null'
+   if isinstance(value, str):
+      return json.dumps(value, ensure_ascii=False)
+   if isinstance(value, bool):
+      return 'true' if value else 'false'
+   return repr(value)
+
+
+def display(message, indent_width=3):
+   """Format a generated SDL message in memory using `indent_width` spaces per level."""
+   if not isinstance(message, SdlMessage):
+      raise CodecError('display expects an SDL message')
+   if isinstance(indent_width, bool) or not isinstance(indent_width, int) or indent_width < 0:
+      raise ValueError('indent_width must be a nonnegative integer')
+   return _display_message(message, indent_width, 0) + '\n'

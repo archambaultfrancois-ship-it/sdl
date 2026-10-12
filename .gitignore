@@ -1,3 +1,5 @@
 /build/
 /tst/rust/target/
+samples/**/build/
+samples/**/target/
 __pycache__/
