@@ -16,7 +16,7 @@ generate:
 
 $(CLASSES_DIR)/.stamp: generate java/Main.java $(ROOT)/runtime/java/SdlCodec.java
 	mkdir -p $(CLASSES_DIR)
-	$(JAVAC) -source $(JAVA_SOURCE) -target $(JAVA_SOURCE) -Xlint:-options -d $(CLASSES_DIR) $(GENERATED_DIR)/java/*.java java/Main.java
+	$(JAVAC) -source $(JAVA_SOURCE) -target $(JAVA_SOURCE) -Xlint:-options -d $(CLASSES_DIR) $$(find $(GENERATED_DIR)/java -name '*.java') java/Main.java
 	cp $(ROOT)/runtime/java/SdlCodec.java $(CLASSES_DIR)/
 	touch $@
 

@@ -86,14 +86,15 @@ def canonical_type_descriptor(schema, root_name=None):
       raise ValueError('unknown root message: ' + root_name)
    declarations = []
    markers = {'required':'', 'optional':'?', 'repeated':'*', 'packed':'+'}
-   for name in sorted(schema.messages, key=lambda value: value.encode('utf-8')):
+   messages, enums = schema.catalogue_types()
+   for name in sorted(messages, key=lambda value: value.encode('utf-8')):
       fields = []
-      for field in sorted(schema.messages[name].fields, key=lambda item: item.index):
+      for field in sorted(messages[name].fields, key=lambda item: item.index):
          dimensions = ''.join('[' + str(n) + ']' for n in field.array_dimensions)
          fields.append('%d%s:%s%s:%s%s;' % (field.index, markers[field.modifier], field.type_name, dimensions, field.name, wire_suffix(field.wire)))
       declarations.append(name + '{' + ''.join(fields) + '}')
-   for name in sorted(schema.enums, key=lambda value: value.encode('utf-8')):
-      declarations.append('#' + name + '{' + ''.join(item + '=' + str(int(value)) + ';' for item, value in schema.enums[name].pairs) + '}')
+   for name in sorted(enums, key=lambda value: value.encode('utf-8')):
+      declarations.append('#' + name + '{' + ''.join(item + '=' + str(int(value)) + ';' for item, value in enums[name].pairs) + '}')
    result = ('SDL2|' + '|'.join(declarations)).encode('utf-8')
    if len(result) > MAX_SCHEMA_DESCRIPTOR_SIZE:
       raise ValueError('wire descriptor exceeds 1 MiB')
@@ -101,10 +102,81 @@ def canonical_type_descriptor(schema, root_name=None):
 
 
 def c_identifier(value):
+   if '.' in value:
+      # Length-delimited UTF-8 segments: a.b_c cannot collide with a_b.c.
+      return 'sdlq_' + '_'.join(str(len(part.encode('utf-8'))) + '_' +
+         part.encode('utf-8').hex() for part in value.split('.'))
    identifier = re.sub(r'\W', '_', value)
    if not identifier or identifier[0].isdigit():
       identifier = '_' + identifier
    return identifier
+
+
+def local_type_name(name):
+   return name.rsplit('.', 1)[-1]
+
+
+def package_output(output_dir, package, matlab=False):
+   path = os.path.join(output_dir, *[(('+' if matlab else '') + part)
+      for part in package.split('.') if part])
+   os.makedirs(path, exist_ok=True)
+   return path
+
+
+def validate_package_paths(schemas, language, segment_validator, module_name=None):
+   packages = set()
+   for base, _, schema in schemas:
+      parts = schema.package.split('.') if schema.package else []
+      for part in parts:
+         if not segment_validator(part):
+            raise ValueError('invalid ' + language + ' package segment: ' + part)
+      packages.update('.'.join(parts[:i]) for i in range(1, len(parts) + 1))
+   if module_name is not None:
+      for base, _, schema in schemas:
+         module = '.'.join(filter(None, (schema.package, module_name(base))))
+         if module in packages:
+            raise ValueError(language + ' package conflicts with schema module: ' + module)
+
+
+def validate_file_dependencies(schemas, language):
+   """C includes and Ada with clauses cannot express circular unit dependencies."""
+   dependencies = {(schema.package, base): schema.dependencies() for base, _, schema in schemas}
+   visited, active = set(), set()
+
+   def visit(unit):
+      if unit in active:
+         raise ValueError(language + ' circular schema file dependency: ' + '.'.join(filter(None, unit)))
+      if unit in visited:
+         return
+      active.add(unit)
+      for dependency in dependencies[unit]:
+         visit(dependency)
+      active.remove(unit)
+      visited.add(unit)
+
+   for unit in dependencies:
+      visit(unit)
+
+
+class TypeTable(dict):
+   """Iterate file declarations, but resolve references across the input set."""
+   external = None
+
+   def __contains__(self, key):
+      return super().__contains__(key) or (self.external is not None and key in self.external)
+
+   def __getitem__(self, key):
+      if super().__contains__(key):
+         return super().__getitem__(key)
+      if self.external is not None:
+         return self.external[key]
+      raise KeyError(key)
+
+   def get(self, key, default=None):
+      try:
+         return self[key]
+      except KeyError:
+         return default
 
 
 class Field:
@@ -134,18 +206,29 @@ class MsgParser:
       'c32', 'c64', 'string'}
 
    def __init__(self):
-      self.enums = {}
-      self.messages = {}
+      self.enums = TypeTable()
+      self.messages = TypeTable()
       self.message_order = []
+      self.package = ''
+      self.type_owners = {}
+      self.base_name = ''
 
-   def parse_text(self, text):
+   def parse_text(self, text, validate=True):
       current_enum = None
       current_msg = None
       anonymous_stack = []
       anonymous_counters = {}
+      package_seen = False
       for raw_line in text.splitlines():
          line = re.sub(r'//.*', '', raw_line).strip()
          if not line:
+            continue
+         if line.startswith('package') and re.match(r'package\b', line):
+            match = re.fullmatch(r'package\s+([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)\s*;', line)
+            if not match or package_seen or self.messages or self.enums or current_msg or current_enum:
+               raise ValueError('invalid, duplicate or misplaced package declaration: ' + line)
+            self.package = match[1]
+            package_seen = True
             continue
          match = re.match(r'enum\s+(\w+)\s*\{$', line)
          if match:
@@ -211,11 +294,11 @@ class MsgParser:
             current_enum.pairs.append((match.group(1), str(int(match.group(2), 10))))
             continue
          if current_msg is not None:
-            match = re.match(r'(?:([0-9]+):\s+)?(?:(optional|required|repeated|packed)\s+)?(\w+(?:\[[0-9]+\])*)\s+(\w+)(?:\s+wire\(([^()]*)\))?\s*;$', line)
+            match = re.match(r'(?:([0-9]+):\s+)?(?:(optional|required|repeated|packed)\s+)?((?:\.?\w+(?:\.\w+)*)(?:\[[0-9]+\])*)\s+(\w+)(?:\s+wire\(([^()]*)\))?\s*;$', line)
             if not match:
                raise ValueError('invalid field declaration: ' + line)
             declared_type = match.group(3)
-            type_name = re.match(r'\w+', declared_type).group(0)
+            type_name = declared_type.split('[', 1)[0]
             dimensions = [int(value) for value in re.findall(r'\[([0-9]+)\]', declared_type)]
             current_msg.fields.append(Field(self._field_index(current_msg, match.group(1)), match.group(2) or 'required',
                type_name, match.group(4), dimensions, parse_wire_options(match.group(5))))
@@ -227,7 +310,47 @@ class MsgParser:
          raise ValueError('unterminated enum declaration: ' + current_enum.name)
       if current_msg is not None:
          raise ValueError('unterminated message declaration: ' + current_msg.name)
-      self.validate()
+      self._qualify_types()
+      if validate:
+         self.validate()
+
+   def _qualify_types(self):
+      def qualify(name):
+         if name.startswith('.'):
+            return name[1:]
+         if name in self.BUILTINS or '.' in name or not self.package:
+            return name
+         return self.package + '.' + name
+      for table in (self.messages, self.enums):
+         declarations = list(table.values())
+         table.clear()
+         for declaration in declarations:
+            if declaration.name in self.BUILTINS:
+               raise ValueError('type name conflicts with built-in type: ' + declaration.name)
+            declaration.name = qualify(declaration.name)
+            table[declaration.name] = declaration
+      self.message_order = [qualify(name) for name in self.message_order]
+      for message in self.messages.values():
+         for field in message.fields:
+            field.type_name = qualify(field.type_name)
+
+   def catalogue_types(self):
+      messages, enums = dict(self.messages), dict(self.enums)
+      pending = list(messages.values())
+      while pending:
+         for field in pending.pop().fields:
+            name = field.type_name
+            if name in self.messages and name not in messages:
+               messages[name] = self.messages[name]
+               pending.append(messages[name])
+            elif name in self.enums and name not in enums:
+               enums[name] = self.enums[name]
+      return messages, enums
+
+   def dependencies(self):
+      messages, enums = self.catalogue_types()
+      return sorted({self.type_owners[name] for name in list(messages) + list(enums)
+         if name in self.type_owners and self.type_owners[name] != (self.package, self.base_name)})
 
    @staticmethod
    def _field_index(message, explicit_index):
@@ -257,7 +380,8 @@ class MsgParser:
                height = max(height, 1 + visit(field.type_name, depth + 1))
          visiting.remove(name)
          visited[name] = height
-         ordered.append(name)
+         if dict.__contains__(self.messages, name):
+            ordered.append(name)
          return height
 
       for name in self.message_order:
@@ -405,8 +529,8 @@ class MsgParser:
 
 def parse_schemas(input_path):
    if os.path.isdir(input_path):
-      schema_paths = [os.path.join(input_path, item) for item in sorted(os.listdir(input_path))
-         if item.endswith('.sdl') and os.path.isfile(os.path.join(input_path, item))]
+      schema_paths = sorted(os.path.join(root, item) for root, dirs, files in os.walk(input_path)
+         for item in files if item.endswith('.sdl'))
    else:
       schema_paths = [input_path]
    if not schema_paths:
@@ -418,13 +542,14 @@ def parse_schemas(input_path):
    seen_bases = set()
    for schema_path in schema_paths:
       base_name = os.path.splitext(os.path.basename(schema_path))[0]
-      identifier = c_identifier(base_name)
+      parser = MsgParser()
+      with open(schema_path, 'r', encoding='utf-8') as input_file:
+         parser.parse_text(input_file.read(), validate=False)
+      parser.base_name = base_name
+      identifier = c_identifier(parser.package + '.' + base_name if parser.package else base_name)
       if identifier in seen_bases:
          raise ValueError('SDL filenames map to the same identifier: ' + identifier)
       seen_bases.add(identifier)
-      parser = MsgParser()
-      with open(schema_path, 'r', encoding='utf-8') as input_file:
-         parser.parse_text(input_file.read())
       for name in list(parser.enums) + list(parser.messages):
          symbol = c_identifier(name).upper()
          if name in seen_type_names or symbol in seen_symbols:
@@ -432,6 +557,15 @@ def parse_schemas(input_path):
          seen_type_names.add(name)
          seen_symbols.add(symbol)
       parsed.append((base_name, identifier, parser))
+   messages = {name: message for _, _, schema in parsed for name, message in schema.messages.items()}
+   enums = {name: enum for _, _, schema in parsed for name, enum in schema.enums.items()}
+   owners = {name: (schema.package, base) for base, _, schema in parsed
+      for name in list(schema.messages) + list(schema.enums)}
+   for base, _, schema in parsed:
+      schema.messages.external = messages
+      schema.enums.external = enums
+      schema.type_owners = owners
+      schema.validate()
    return parsed
 
 
@@ -441,18 +575,18 @@ def clear_generated_outputs(output_dir, extensions, markers):
    if not os.path.isdir(output_dir):
       os.makedirs(output_dir, exist_ok=True)
       return
-   for name in os.listdir(output_dir):
-      path = os.path.join(output_dir, name)
-      if not os.path.isfile(path) or not any(name.endswith(extension)
-            for extension in extensions):
-         continue
-      try:
-         with open(path, 'r', encoding='utf-8') as generated_file:
-            marker = generated_file.readline().rstrip('\r\n')
-      except (UnicodeDecodeError, OSError):
-         continue
-      if marker in markers:
-         os.remove(path)
+   for root, dirs, files in os.walk(output_dir):
+      for name in files:
+         path = os.path.join(root, name)
+         if not any(name.endswith(extension) for extension in extensions):
+            continue
+         try:
+            with open(path, 'r', encoding='utf-8') as generated_file:
+               marker = generated_file.readline().rstrip('\r\n')
+         except (UnicodeDecodeError, OSError):
+            continue
+         if marker in markers:
+            os.remove(path)
 
 
 def main():

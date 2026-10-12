@@ -1,3 +1,5 @@
+import sdl.runtime.SdlCodec;
+import sdl.globaltypes.*;
 import java.util.Arrays;
 public final class SdlJavaBench {
    static volatile Object sink;

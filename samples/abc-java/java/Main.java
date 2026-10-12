@@ -1,3 +1,5 @@
+import sdl.runtime.SdlCodec;
+import sdl.globaltypes.*;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;

@@ -81,7 +81,10 @@ but not with `+`.
 ### 2.2. Declaration grammar
 
 ```ebnf
-schema          = { declaration } ;
+schema          = [ package ], { declaration } ;
+package         = "package", SPACE, package_name, WS, ";", END ;
+package_name    = package_segment, { ".", package_segment } ;
+package_segment = ? ASCII letter followed by ASCII letters, digits or underscore ? ;
 declaration     = message | enumeration ;
 message_keyword = "message" | "structure" | "struct" ;
 
@@ -97,7 +100,7 @@ enum_value      = [ "-" ], INTEGER ;
 
 prefix          = [ INTEGER, ":", SPACE ], [ cardinality, SPACE ] ;
 cardinality     = "required" | "optional" | "repeated" | "packed" ;
-type            = NAME ;
+type            = [ "." ], NAME, { ".", NAME } ;
 dimension       = "[", INTEGER, "]" ;
 
 field           = prefix, type, { dimension }, SPACE, NAME,
@@ -117,9 +120,12 @@ fields: `message Packet{`, `enum State{` and `struct{` are accepted, as are
 their spellings with whitespace before the brace. Whitespace between a named
 declaration's keyword and its name remains required.
 
-A field type is a built-in type or the name of a message or enum declared in
-the same file. Forward references are allowed. There are no import directives,
-inheritance or default values written in the schema.
+A field type is a built-in type or a message/enum from the input schema set.
+Unqualified references select the current package without global fallback;
+qualified references are absolute, and a leading dot selects the global package.
+Forward references and references between files are allowed. There are no import
+directives, inheritance or default values written in the schema. See
+[packages and type references](schema.md#packages-and-type-references).
 
 | Family | Built-in types |
 | --- | --- |
@@ -240,9 +246,10 @@ message has its own alignment origin. Details appear in
   array field must fit in an unsigned 32-bit integer.
 - The generated catalogue occupies at most 1048576 bytes. Preparing a
   catalogue requires at least one message declaration.
-- When generating from a directory, each `.sdl` file is self-contained.
-  Type names must also remain unique across files after C identifier
-  normalization, ignoring case. Filenames and identifiers must meet the
+- When generating from a directory, each `.sdl` file is a generation unit;
+  references can resolve to declarations in other input files.
+  Complete logical type names must be unique across files; emitted identifiers
+  must also remain distinct after backend conversion. Filenames and identifiers must meet the
   requirements of the selected backends.
 
 ## 3. Single-line compact catalogue
@@ -259,12 +266,13 @@ catalogue       = "SDL2|", compact_message,
                   { "|", compact_message },
                   { "|", compact_enum } ;
 compact_name    = ? one or more NAME characters or "$" ? ;
-compact_message = compact_name, "{", { compact_field }, "}" ;
-compact_field   = INTEGER, [ marker ], ":", compact_name,
+compact_type    = compact_name, { ".", compact_name } ;
+compact_message = compact_type, "{", { compact_field }, "}" ;
+compact_field   = INTEGER, [ marker ], ":", compact_type,
                   { dimension }, ":", compact_name,
                   [ wire_suffix ], ";" ;
 marker          = "?" | "*" | "+" ;
-compact_enum    = "#", compact_name, "{",
+compact_enum    = "#", compact_type, "{",
                   compact_item, { compact_item }, "}" ;
 compact_item    = compact_name, "=", enum_value, ";" ;
 wire_suffix     = "@", compact_option, { ",", compact_option } ;
@@ -315,9 +323,11 @@ rules.
    decimal value; the runtime subsequently converts it to binary64.
 5. An anonymous message becomes a named declaration `Root$k`, where `k`
    counts anonymous openings in source order, starting at 1, for each named
-   root message. Its field uses that name as its type.
+   root message. Its field uses that name as its type. A declared package
+   qualifies both the root and its anonymous message names.
 6. All declarations in the file appear, including those referenced by no
-   field. There is no `|` after the final declaration.
+   field, plus transitive declarations referenced in other input files.
+   There is no `|` after the final declaration.
 
 Runtimes may accept some noncanonical spellings, such as leading zeros or a
 different option order. For publication or identity calculation, use the

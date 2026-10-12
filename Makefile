@@ -14,7 +14,7 @@ BUILD_DIR := build
 GENERATED_DIR := $(BUILD_DIR)/generated
 C_GENERATED_DIR := $(GENERATED_DIR)/c
 C_RUNTIME_HEADERS := $(wildcard runtime/c/*.h)
-C_GENERATED_HEADERS := $(wildcard $(C_GENERATED_DIR)/*.h)
+C_GENERATED_HEADERS := $(shell find $(C_GENERATED_DIR) -type f -name '*.h' 2>/dev/null)
 RUST_GENERATED_DIR := $(GENERATED_DIR)/rust
 PYTHON_GENERATED_DIR := $(GENERATED_DIR)/python
 matlab_generated_dir := $(GENERATED_DIR)/matlab
@@ -25,7 +25,8 @@ JAVAC ?= javac
 JAVA ?= java
 JAVA_GENERATED_DIR := $(GENERATED_DIR)/java
 JAVA_TEST_CLASSES := $(BUILD_DIR)/java-test-classes
-SDL_FILES := $(wildcard sdl/*.sdl)
+SDL_FILES := $(shell find sdl -type f -name '*.sdl')
+SDL_DIRS := $(shell find sdl -type d)
 CHECK_SILENT := $(findstring s,$(firstword $(MAKEFLAGS)))
 RUN_TEST := $(if $(CHECK_SILENT),$(PYTHON) tst/run_quiet.py --,)
 matlab_available := $(if $(strip $(matlab)),$(shell command -v $(matlab) >/dev/null 2>&1 && echo yes))
@@ -53,6 +54,7 @@ test:
 	@$(MAKE) --no-print-directory CHECK_SILENT= test-java
 	@$(MAKE) --no-print-directory CHECK_SILENT= test-ada
 	@$(MAKE) --no-print-directory CHECK_SILENT= test-representation
+	@$(MAKE) --no-print-directory CHECK_SILENT= test-packages
 
 test-c: $(BUILD_DIR)/sdl_utest
 	@if [ -z "$(CHECK_SILENT)" ]; then echo "=== Component C: generated typed codec, runtime storage, then wire limits ==="; fi
@@ -138,7 +140,7 @@ test-matlab: $(GENERATED_DIR)/.stamp
 
 test-java: $(GENERATED_DIR)/.stamp
 	mkdir -p $(JAVA_TEST_CLASSES)
-	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
+	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $$(find $(JAVA_GENERATED_DIR) -name '*.java') tst/java/*.java
 	$(RUN_TEST) env $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaTests
 
 matlab-mex: $(GENERATED_DIR)/.stamp
@@ -156,10 +158,10 @@ endif
 
 bench-java: $(GENERATED_DIR)/.stamp
 	mkdir -p $(JAVA_TEST_CLASSES)
-	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
+	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $$(find $(JAVA_GENERATED_DIR) -name '*.java') tst/java/*.java
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaBench
 
-$(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py gen/ada_backend.py gen/ada_direct.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m runtime/matlab/sdl_mex_context.m runtime/matlab/sdl_representation.m Makefile
+$(GENERATED_DIR)/.stamp: $(SDL_DIRS) $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py gen/ada_backend.py gen/ada_direct.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m runtime/matlab/sdl_mex_context.m runtime/matlab/sdl_representation.m Makefile
 	mkdir -p $(GENERATED_DIR)
 	$(PYTHON) gen/generator.py -c -rust -python -matlab -java -ada sdl $(GENERATED_DIR)
 	touch $@
@@ -168,11 +170,11 @@ $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/
 
 $(BUILD_DIR)/sdl_utest: runtime/c/sdl_representation.inc runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c $(C_RUNTIME_HEADERS) $(C_GENERATED_HEADERS) tst/main.c $(GENERATED_DIR)/.stamp $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/empty_message.h $(C_GENERATED_DIR)/sdl_registry.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) -Iruntime/c -I$(C_GENERATED_DIR) runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c $(C_GENERATED_DIR)/*.c tst/main.c -lm -o $@
+	$(CC) $(CFLAGS) -Iruntime/c -I$(C_GENERATED_DIR) runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c $$(find $(C_GENERATED_DIR) -name '*.c') tst/main.c -lm -o $@
 
 $(BUILD_DIR)/sdl_bench: runtime/c/sdl_representation.inc runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c $(C_RUNTIME_HEADERS) $(C_GENERATED_HEADERS) tst/bench.c $(GENERATED_DIR)/.stamp $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/sdl_registry.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) -Iruntime/c -I$(C_GENERATED_DIR) runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c $(C_GENERATED_DIR)/*.c tst/bench.c -lm -o $@
+	$(CC) $(CFLAGS) -Iruntime/c -I$(C_GENERATED_DIR) runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c $$(find $(C_GENERATED_DIR) -name '*.c') tst/bench.c -lm -o $@
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -211,3 +213,7 @@ bench-ada-fixed: build/ada/sdl_ada_bench_fixed
 .PHONY: test-representation
 test-representation:
 	$(RUN_TEST) $(PYTHON) tst/run_representation.py --gnatmake "$(GNATMAKE)" $(if $(matlab_available),--matlab "$(matlab)")
+
+.PHONY: test-packages
+test-packages:
+	$(RUN_TEST) $(PYTHON) tst/run_packages.py --gnatmake "$(GNATMAKE)" $(if $(matlab_available),--matlab "$(matlab)")

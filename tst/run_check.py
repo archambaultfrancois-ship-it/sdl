@@ -14,6 +14,7 @@ BACKENDS = (
    ("Java", "test-java"),
    ("Ada", "test-ada"),
    ("Wire", "test-representation"),
+   ("Packages", "test-packages"),
 )
 BAR_WIDTH = 24
 

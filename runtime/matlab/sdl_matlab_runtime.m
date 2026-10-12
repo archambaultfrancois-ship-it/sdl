@@ -30,12 +30,15 @@ case 'description'
  varargout{1}=render_schema(messages,enums);
 case 'prepare'
  s=parse_catalogue(varargin{1});types={};if numel(varargin)>1,types=varargin{2};end;if ischar(types),types={types};end
- localmessages=containers.Map();localenums=containers.Map();
- for k=1:numel(types),local=parse_catalogue(feval(types{k},'description'));[localmessages,localenums]=merge_schema(localmessages,localenums,local);end
+ localmessages=containers.Map();localenums=containers.Map();s.functions=containers.Map();
+ for k=1:numel(types)
+  local=parse_catalogue(feval(types{k},'description'));[localmessages,localenums]=merge_schema(localmessages,localenums,local);
+  pairs=feval(types{k},'bindings');for z=1:size(pairs,1),s.functions(pairs{z,1})=pairs{z,2};end
+ end
  s.mex=~s.representation&&exist('sdl_packed_mex','file')==3&&isempty(getenv('SDL_MATLAB_NO_MEX'));
  s.local=containers.Map();s.bindings=containers.Map();s.sizes=containers.Map();s.exact=containers.Map();s.exact_cache=containers.Map();
  names=keys(localmessages);
- for k=1:numel(names),fn=identifier(names{k});if exist(fn,'file'),s.local(names{k})=feval(fn,'fields');end,end
+ for k=1:numel(names),if isKey(s.functions,names{k}),s.local(names{k})=feval(s.functions(names{k}),'fields');end,end
  for k=1:numel(s.names)
   name=s.names{k};s.sizes(name)=fixed_size(s,name,{},0);remote=s.messages(name);local={};if isKey(s.local,name),local=s.local(name);end
   binding=zeros(numel(remote),1);exact=numel(local)==numel(remote);
@@ -54,7 +57,7 @@ case 'prepare'
  for k=1:numel(s.names)
   name=s.names{k};n=s.sizes(name);supported=false;
   if s.fixed_enabled&&n>0&&n<=65536&&exact_type(s,name,{})
-   try,supported=feval(identifier(name),'fixed_size')==n;
+   try,supported=feval(s.functions(name),'fixed_size')==n;
    catch err,if ~strcmp(err.identifier,'SDL:InvalidAction'),rethrow(err);end,end
   end
   s.fixed_codecs(name)=supported;
@@ -113,14 +116,17 @@ case 'unpack_fixed'
 otherwise,error('SDL:InvalidAction','unknown action');
 end
 end
-function result=identifier(name),result=regexprep(name,'\W','_');if strncmp(result,'__',2),result=['sdl' result];end,end
+function result=identifier(name)
+parts=strsplit(name,'.');for k=1:numel(parts),parts{k}=regexprep(parts{k},'\W','_');if strncmp(parts{k},'__',2),parts{k}=['sdl' parts{k}];end,end
+result=strjoin(parts,'.');
+end
 function m=cardinality(m),if any(strcmp(m,{'packed','repeated'})),m='sequence';end,end
 function s=parse_catalogue(text)
 if isa(text,'uint8'),valid_utf8(text);text=native2unicode(text(:)','UTF-8');end
 if ~ischar(text)||numel(unicode2native(text,'UTF-8'))>1048576||numel(text)<5||~strcmp(text(1:5),'SDL2|')||any(text==0)||any(isspace(text)),error('SDL:Descriptor','expected compact SDL2 catalogue');end
 parts=strsplit(text(6:end),'|','CollapseDelimiters',false);s.messages=containers.Map();s.enums=containers.Map();s.fixed_cache=containers.Map();s.heights=containers.Map();previousm='';previouse='';
 for k=1:numel(parts)
- h=regexp(parts{k},'^(#?[\w$]+)\{([^{}]*)\}$','tokens','once');if isempty(h),error('SDL:Descriptor','invalid declaration');end
+ h=regexp(parts{k},'^(#?[\w$]+(?:\.[\w$]+)*)\{([^{}]*)\}$','tokens','once');if isempty(h),error('SDL:Descriptor','invalid declaration');end
  name=h{1};enumeration=name(1)=='#';if enumeration,name=name(2:end);end
  if numel(unicode2native(name,'UTF-8'))>65535,error('SDL:Descriptor','identifier limit');end
  body='';if numel(h)>1,body=h{2};end;rows={};if ~isempty(body),if body(end)~=';',error('SDL:Descriptor','missing field separator');end;rows=strsplit(body(1:end-1),';','CollapseDelimiters',false);end
@@ -140,9 +146,9 @@ for k=1:numel(parts)
   previousm=name;fields={};ids=[];
   for j=1:numel(rows)
    pieces=strsplit(rows{j},'@','CollapseDelimiters',false);if numel(pieces)>2,error('SDL:Descriptor','invalid clause');end
-   f=regexp(pieces{1},'^([0-9]+[?*+]?):([\w$]+(?:\[[0-9]+\])*):([\w$]+)$','tokens','once');if isempty(f),error('SDL:Descriptor','invalid field');end
+   f=regexp(pieces{1},'^([0-9]+[?*+]?):([\w$]+(?:\.[\w$]+)*(?:\[[0-9]+\])*):([\w$]+)$','tokens','once');if isempty(f),error('SDL:Descriptor','invalid field');end
    id=f{1};modifier='required';if id(end)=='?',modifier='optional';id=id(1:end-1);elseif id(end)=='*',modifier='repeated';id=id(1:end-1);elseif id(end)=='+',modifier='packed';id=id(1:end-1);end
-   id=decimal(id);type=regexp(f{2},'^[\w$]+','match','once');fieldname=f{3};
+   id=decimal(id);type=regexp(f{2},'^[\w$]+(?:\.[\w$]+)*','match','once');fieldname=f{3};
    if numel(unicode2native(type,'UTF-8'))>65535||numel(unicode2native(fieldname,'UTF-8'))>65535,error('SDL:Descriptor','identifier limit');end
    dims=regexp(f{2},'\[([0-9]+)\]','tokens');dimensions=zeros(1,numel(dims));for z=1:numel(dims),dimensions(z)=decimal(dims{z}{1});end
    if id==0||(~isempty(ids)&&id<=ids(end))||any(strcmp(names,fieldname))||numel(dimensions)>255||any(dimensions==0)||(~isempty(dimensions)&&~strcmp(modifier,'required')),error('SDL:Descriptor','invalid field metadata');end
@@ -211,7 +217,7 @@ error('SDL:Malformed','invalid counter');
 end
 function b=write_message(ctx,name,value)
 if ~isKey(ctx.local,name)||~ctx.exact(name),error('SDL:SchemaMismatch','encoding requires emission catalogue');end
-if ctx.fixed_codecs(name),b=feval(identifier(name),'encode_fixed',ctx,value);return;end
+if ctx.fixed_codecs(name),b=feval(ctx.functions(name),'encode_fixed',ctx,value);return;end
 fields=ctx.messages(name);local=ctx.local(name);binding=ctx.bindings(name);parts=cell(numel(fields)*2,1);p=0;
 for k=1:numel(fields)
  f=fields{k};l=local{binding(k)};x=value.(l.name);
@@ -361,9 +367,9 @@ if depth>64,error('SDL:Malformed','nesting too deep');end
 if ~skip&&~isKey(ctx.local,name),error('SDL:SchemaMismatch','unknown local message');end
 if ~skip&&ctx.fixed_codecs(name)
  n=ctx.sizes(name);if n>numel(data)-pos+1,error('SDL:Malformed','truncated fixed record');end
- value=feval(identifier(name),'decode_fixed',ctx,data(pos:pos+n-1));pos=pos+n;return
+ value=feval(ctx.functions(name),'decode_fixed',ctx,data(pos:pos+n-1));pos=pos+n;return
 end
-fields=ctx.messages(name);binding=ctx.bindings(name);local={};value=[];if ~skip,local=ctx.local(name);value=feval(identifier(name),'new');end
+fields=ctx.messages(name);binding=ctx.bindings(name);local={};value=[];if ~skip,local=ctx.local(name);value=feval(ctx.functions(name),'new');end
 for k=1:numel(fields)
  f=fields{k};n=1;if ~strcmp(f.modifier,'required'),[n,pos]=read_count(data,pos);end
  if strcmp(f.modifier,'optional')&&n>1,error('SDL:Malformed','optional count exceeds one');end
@@ -415,7 +421,7 @@ is_enum=isKey(ctx.enums,type);if is_enum,n=4;else,n=primitive_size(type);end
 if n==0||n>numel(data)-pos+1,error('SDL:Malformed','truncated scalar');end;b=data(pos:pos+n-1);pos=pos+n;
 value=unpack_packed(type,b,is_enum);
 if is_enum,e=ctx.enums(type);if ~ismember(value,e.values),error('SDL:InvalidEnum','invalid sender enum');end
- fn=identifier(type);if ~skip&&exist(fn,'file'),local=feval(fn);if ~ismember(value,cell2mat(struct2cell(local))),error('SDL:InvalidEnum','invalid local enum');end,end
+ if ~skip&&isKey(ctx.functions,type),local=feval(ctx.functions(type));if ~ismember(value,cell2mat(struct2cell(local))),error('SDL:InvalidEnum','invalid local enum');end,end
 end
 if skip,value=[];end
 end

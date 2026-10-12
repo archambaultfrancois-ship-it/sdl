@@ -45,6 +45,9 @@ SDL2|Position{1:int32:x;2:int32:y@b12;}|Vehicule{1:uint32:id;2:Position:position
 ```
 
 - Messages use `Name{fields}`; enums use `#Name{items}`.
+- A packaged type uses its complete dotted logical name, for example
+  `navigation.geometry.Point`, both in declarations and field references.
+  Global type names have no leading dot. Fields and enum items are unqualified.
 - Fields use `ID:Type[dim]:name;`, sorted by numeric ID.
 - A marker immediately after the ID encodes cardinality: none for `required`,
   `?` for `optional`, `*` for `repeated`, `+` for `packed`.
@@ -60,9 +63,11 @@ SDL2|Position{1:int32:x;2:int32:y@b12;}|Vehicule{1:uint32:id;2:Position:position
 For example, an optional field followed by packed values renders as
 `1?:int16:code;2+:uint8:flags@b3;`.
 
-Inline messages become named declarations such as `Envelope$1`. Nested types
+Inline messages become named declarations such as `Envelope$1` or
+`navigation.geometry.Envelope$1`. Nested types
 are referenced by name and defined once. A generated catalogue contains all
-declarations from its SDL file, including unused ones; `description(types)`
+declarations from its SDL file, including unused ones, plus the transitive
+declarations referenced from other files; `description(types)`
 merges catalogues and rejects conflicts. Changes to a nested declaration
 therefore change the enclosing catalogue's hash. The catalogue does not depend
 on native struct layout. Field names support diagnostics; IDs identify fields.

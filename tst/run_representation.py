@@ -86,6 +86,8 @@ fn check<T:SdlMessage>(x:&T,hex:&str,types:&[TypeInfo]){let d=description(types)
 fn main(){let p=Packet{active:true,alarm:false,level:-1,counter:u64::MAX,delta:-2,value:42.0};check(&p,"@PACKET@",&[Packet::type_info()]);let u=Unsigned{tiny:u8::MAX,small:u16::MAX,medium:u32::MAX,large:u64::MAX,values:vec![0,u64::MAX]};check(&u,"@UNSIGNED@",&[Unsigned::type_info()]);let a=Arrays{matrix:[[-2048,-1],[0,2047]],flags:vec![0,7,1],code:Some(-1),child:Child{delta:-1,level:31},label:"hi".to_owned()};check(&a,"@ARRAYS@",&[Arrays::type_info(),Child::type_info()]);let records=Records{items:vec![BitRecord{value:-2048,flag:true},BitRecord{value:2047,flag:false}],tail:165};check(&records,"@RECORDS@",&[Records::type_info(),BitRecord::type_info()]);let rc=prepare(Records::DESCRIPTOR,&[Records::type_info(),BitRecord::type_info()]).unwrap();let rb=encode(&rc,&records).unwrap();for i in [3,5]{let mut bad=rb.clone();bad[i]|=1;assert!(decode::<Records>(&rc,&bad).is_err());}let mut records=records;records.items[0].value=2048;assert!(encode(&rc,&records).is_err());let c=prepare(Packet::DESCRIPTOR,&[Packet::type_info()]).unwrap();let mut b=encode(&c,&p).unwrap();*b.last_mut().unwrap()=1;assert!(decode::<Packet>(&c,&b).is_err());let mut bad=p;bad.level=32;assert!(encode(&c,&bad).is_err());}
 '''
 JAVA=r'''
+import sdl.runtime.SdlCodec;
+import sdl.globaltypes.*;
 public class RepresentationCheck {
  static void quantized(){
  quantized.QuantWide wide=new quantized.QuantWide();wide.small=-Math.scalb(1.0f,29);wide.large=-Math.scalb(1.0,61);check(wide,"@QUANTUM_WIDE@",quantized.QuantWide.class);
@@ -230,7 +232,7 @@ def main():
   (rust/'Cargo.toml').write_text('[package]\nname="representation-check"\nversion="0.1.0"\nedition="2021"\n[dependencies]\nsdl-runtime={path="'+str(ROOT/'runtime/rust')+'"}\n')
   (rust/'src/main.rs').write_text(expand(RUST));run(shlex.split(os.environ.get('CARGO','cargo'))+['run','--offline','--manifest-path',str(rust/'Cargo.toml')]);print('Rust representation and unsigned oracles passed.',flush=True)
   (generated/'java/RepresentationCheck.java').write_text(expand(JAVA));classes=work/'classes';classes.mkdir()
-  run(shlex.split(os.environ.get('JAVAC','javac'))+['-d',str(classes)]+[str(p) for p in (generated/'java').glob('*.java')]);run(shlex.split(os.environ.get('JAVA','java'))+['-cp',str(classes),'RepresentationCheck']);print('Java representation and unsigned oracles passed.',flush=True)
+  run(shlex.split(os.environ.get('JAVAC','javac'))+['-d',str(classes)]+[str(p) for p in (generated/'java').rglob('*.java')]);run(shlex.split(os.environ.get('JAVA','java'))+['-cp',str(classes),'RepresentationCheck']);print('Java representation and unsigned oracles passed.',flush=True)
   (work/'check_representation.m').write_text(expand(MATLAB))
   run(shlex.split(os.environ.get('OCTAVE','octave'))+['--quiet','--no-gui','--eval',"run('"+str(work/'check_representation.m')+"')"]);print('Octave representation and unsigned oracles passed.',flush=True)
   if args.matlab:

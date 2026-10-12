@@ -56,6 +56,9 @@ fn identifier(name: &str) -> bool {
             .chars()
             .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
+fn type_identifier(name: &str) -> bool {
+    name.len() <= 65535 && name.split('.').all(identifier)
+}
 fn number(text: &str) -> Result<u32, CodecError> {
     if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
         return Err(CodecError::InvalidDescriptor);
@@ -76,7 +79,7 @@ pub(crate) fn parse_descriptor(text: &str) -> Result<SchemaDesc, CodecError> {
         let body = body.strip_suffix('}').ok_or(CodecError::InvalidDescriptor)?;
         let enumeration = name.starts_with('#');
         let name = if enumeration { &name[1..] } else { name };
-        if !identifier(name) { return Err(CodecError::InvalidDescriptor); }
+        if !type_identifier(name) { return Err(CodecError::InvalidDescriptor); }
         let rows: Vec<_> = if body.is_empty() { Vec::new() } else {
             body.strip_suffix(';').ok_or(CodecError::InvalidDescriptor)?.split(';').collect()
         };
@@ -135,7 +138,7 @@ pub(crate) fn parse_descriptor(text: &str) -> Result<SchemaDesc, CodecError> {
                     Some(w) => crate::representation::WireOptions::parse(w)?,
                     None => Default::default(),
                 };
-                if id <= previous_id || !identifier(&type_name) || !identifier(field_name)
+                if id <= previous_id || !type_identifier(&type_name) || !identifier(field_name)
                     || !names.insert(field_name.to_owned()) || (!dimensions.is_empty() && modifier != 0) {
                     return Err(CodecError::InvalidDescriptor);
                 }

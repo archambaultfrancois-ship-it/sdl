@@ -8,7 +8,11 @@ make test-ada bench-ada
 ```
 
 Each schema file becomes an `SDL_<file>` package, with a specification `.ads`
-and body `.adb`. The runtime is `runtime/ada/sdl_runtime.ads/.adb` plus
+and body `.adb`. With `package navigation.geometry;`, `shapes.sdl` instead
+becomes the child package `SDL.navigation.geometry.shapes`, stored as
+`sdl-navigation-geometry-shapes.ads/.adb`. Parent specifications are generated
+automatically; GNAT files remain flat. Referenced external types use subtype
+aliases of their original generated types. The runtime is `runtime/ada/sdl_runtime.ads/.adb` plus
 `runtime/ada/sdl_ada_bridge.c` and the C runtime sources in `runtime/c`.
 No generated C bindings are needed for Ada applications.
 

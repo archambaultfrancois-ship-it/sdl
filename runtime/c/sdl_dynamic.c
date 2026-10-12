@@ -340,6 +340,20 @@ static bool identifier(const char *s) {
    }
    return true;
 }
+static bool type_identifier(const char *s) {
+   size_t i;
+   if (!s || !s[0] || strlen(s) > 65535)
+      return false;
+   for (i = 0; s[i]; ++i) {
+      unsigned char c = (unsigned char)s[i];
+      if (c == '.') {
+         if (!i || !s[i + 1] || s[i + 1] == '.') return false;
+      } else if (!(c >= 128 || c == '_' || c == '$' || (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')))
+         return false;
+   }
+   return true;
+}
 static bool valid_wire(const SdlDynamicSchema *s, const SdlDynamicFieldDesc *f) {
    unsigned width=0;
    const char *t=f->type_name;
@@ -434,7 +448,7 @@ static bool parse_descriptor(const uint8_t *data, size_t size, SdlDynamicSchema 
          if(!strcmp(kind,"#")){free(kind);kind=malloc(5);if(!kind)goto fail;memcpy(kind,"enum",5);name=token(&l);}
          else{name=kind;kind=malloc(8);if(!kind){free(name);goto fail;}memcpy(kind,"message",8);}
       }
-      if (!identifier(name) || is_builtin_type(name) || !expect(&l, "{")) {
+      if (!type_identifier(name) || is_builtin_type(name) || !expect(&l, "{")) {
          free(kind);
          free(name);
          goto fail;
@@ -500,7 +514,7 @@ static bool parse_descriptor(const uint8_t *data, size_t size, SdlDynamicSchema 
             free(t);
             if(f->modifier && !expect(&l,":")){free(kind);goto fail;}
             f->type_name = token(&l);
-            if (!identifier(f->type_name)) {
+            if (!type_identifier(f->type_name)) {
                free(kind);
                goto fail;
             }

@@ -1,0 +1,8 @@
+package radio;
+enum State {
+   ZERO = 0;
+   ONE = 1;
+}
+message Point {
+   int32 x;
+}

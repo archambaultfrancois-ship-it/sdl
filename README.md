@@ -33,6 +33,10 @@ python3 gen/generator.py -c -rust -python -matlab -java -ada sdl build/generated
 Select any combination of backends. The input can be a file or directory;
 outputs go under `build/generated/<language>`. Regeneration removes stale
 bindings. Edit schemas and regenerate instead of editing generated files.
+An optional `package navigation.geometry;` gives types complete logical names
+and places generated files under the corresponding package hierarchy (GNAT
+files remain flat). `.Point` selects a global type explicitly; short names
+resolve only in the current package. See [packages](docs/schema.md#packages-and-type-references).
 
 ## Build and validation
 

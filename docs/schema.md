@@ -29,14 +29,89 @@ of the source spelling.
 
 Put one declaration on each line;
 `//` starts a line comment. Braces delimit declarations, and fields and enum
-items end with semicolons. When the generator reads a directory, each `.sdl`
-file is parsed as a separate schema: types referenced by a message must be
-declared in the same file. Type names must also remain unique across all files
-after C identifier normalization, including case folding.
+items end with semicolons. When the generator reads a directory, it discovers
+`.sdl` files recursively and resolves type references across the entire input set.
+Each file remains a separate generation unit. Logical names and emitted symbols
+must remain unique within their respective namespaces.
 Message dependencies must be acyclic and contain at most 64 nested message
 references along any path. The generator checks this limit before emitting
 bindings, including paths through shared subtypes. Text after an enum item's
 semicolon must be whitespace or a `//` comment.
+
+## Packages and type references
+
+A file may start with one package declaration, before any message or enum:
+
+```sdl
+package navigation.geometry;
+
+message Point {
+   int32 x;
+}
+
+message Segment {
+   Point start;
+   navigation.geometry.Point end;
+   .Point global_origin;
+   radio.Point receiver;
+}
+```
+
+Package segments start with an ASCII letter and contain ASCII letters, digits
+and underscores. Target language keywords and collisions after conversion are
+rejected by the corresponding backend. Without `package`, a file belongs to the
+empty/global package. There is no `package '';` declaration.
+
+`Point` always resolves in the current package (`navigation.geometry.Point` in
+this example); there is no fallback to a global `Point`. `radio.Point` is an
+explicit absolute reference, and `.Point` explicitly selects the global package.
+The initial dot is source syntax only: the global logical name is `Point`.
+Built-in types such as `int32` remain unqualified. Referenced declarations must
+exist among the input files; no import directive is necessary. Files in the same
+package can refer to each other's declarations. Two packages may both declare
+`Point`, but two files may not declare the same complete logical name.
+C and Ada additionally require acyclic dependencies between schema files, because
+their generated headers and package specifications depend on each other. If
+separate messages create a cycle between files, regroup those declarations.
+
+Enums and anonymous structures use the same qualification rules. For example,
+`navigation.geometry.Envelope$1` identifies an anonymous nested message. The
+canonical catalogue qualifies both declarations and field type references;
+runtime registration, compatibility checks, dynamic values and message inspection
+all use complete logical names. Changing the package changes the type identity
+and catalogue hash. Two versions of the same complete name are still the same
+logical type and do not become independent merely because they come from
+different files.
+
+For `shapes.sdl` in `navigation.geometry`, output is:
+
+| Backend | Generated files |
+| --- | --- |
+| Python | `python/navigation/geometry/shapes.py`, package initializers |
+| Rust | `rust/navigation/geometry/shapes.rs`, module declarations at each level |
+| Java | `java/navigation/geometry/shapes.java` |
+| C | `c/navigation/geometry/shapes.h` and `.c` |
+| Matlab/Octave | `matlab/+navigation/+geometry/Point.m`, etc. |
+| Ada | `ada/sdl-navigation-geometry-shapes.ads` and `.adb`, parent specifications |
+
+The declared package, not the input directory path, determines the output path.
+Two input files named `shapes.sdl` can coexist in different packages. Without a
+package, files are written at the language output root. C symbols for qualified
+types and registration functions use length-delimited hexadecimal UTF-8 segments
+under `sdlq_`, so punctuation and package boundaries cannot collapse to the same
+identifier. C descriptors remain private; add the generated C root to the include
+path and compile generated sources recursively.
+
+Python types stay in their schema modules; package initializers expose modules,
+without wildcard type exports. Include Rust's root `mod.rs` to get the complete
+module hierarchy. Java's codec is in `sdl.runtime.SdlCodec`; global SDL schemas use
+the native Java package `sdl.globaltypes` so packaged classes can reference their
+types. Those two native Java package names are reserved. Logical global SDL names
+remain unqualified. Compile all generated Java sources recursively.
+
+`make test-packages` validates simultaneous global, local and foreign types,
+enums, anonymous structures, fixed arrays and packed elements in all six backends
+against the same independent wire oracle.
 
 ```sdl
 enum State {
@@ -67,8 +142,8 @@ converted field names. Ada checks names without regard to case after
 conversion. Matlab/Octave converts field names but does not explicitly reject
 all collisions after conversion.
 Backends reject schema filenames that collide with generated package or registry
-files, or that produce invalid module names. Type names must be unique across
-the input schema set and cannot reuse built-in type names. Enum item names and
+files, or that produce invalid module names. Complete logical type names must be
+unique across the input schema set; local type names cannot reuse built-in type names. Enum item names and
 numeric values must each be unique within their enum. Enums must declare at
 least one item; values are signed 32-bit integers written with ASCII decimal
 digits. Leading zeros do not change their decimal value; generated bindings

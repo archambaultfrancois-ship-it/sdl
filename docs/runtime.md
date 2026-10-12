@@ -320,6 +320,9 @@ Generation produces a wrapper per SDL file, public nested message/enum classes,
 and the dependency-free `SdlCodec.java`. For `wire_example.sdl`:
 
 ```java
+import sdl.runtime.SdlCodec;
+import sdl.globaltypes.wire_example;
+
 String text = SdlCodec.description(wire_example.Packet.class);
 SdlCodec.Context ctx = SdlCodec.prepare(text, wire_example.Packet.class);
 wire_example.Packet packet = new wire_example.Packet();

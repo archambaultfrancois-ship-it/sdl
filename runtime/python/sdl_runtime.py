@@ -10,6 +10,7 @@ import os
 import math
 import operator
 import sys
+import importlib
 
 try:
    import _sdl_native
@@ -231,14 +232,13 @@ class SdlMessage:
             value = kwargs.pop(name)
          elif dimensions:
             value = _default_fixed_array(type_name, dimensions,
-               __import__(self.__class__.__module__, fromlist=['*']).__dict__)
+               _type_namespace(self.__class__))
          elif modifier == 'optional':
             value = None
          elif modifier in ('repeated', 'packed'):
             value = []
          else:
-            value = default_value(type_name, self.__class__.__module__ and
-               __import__(self.__class__.__module__, fromlist=['*']).__dict__)
+            value = default_value(type_name, _type_namespace(self.__class__))
          setattr(self, name, value)
       if kwargs:
          raise TypeError('unknown message field: ' + next(iter(kwargs)))
@@ -498,6 +498,7 @@ def display(message, indent_width=3, *, max_items=None):
 
 
 _NAME = r'[\w$]+'
+_TYPE_NAME = _NAME + r'(?:\.' + _NAME + r')*'
 def _parse_description(text):
    if isinstance(text, bytes):
       try:
@@ -513,7 +514,7 @@ def _parse_description(text):
       raise CodecError('expected compact SDL2 catalogue')
    declarations = {'messages': [], 'enums': []}
    for declaration in text[5:].split('|'):
-      match = re.fullmatch(r'(#?)(' + _NAME + r')\{([^{}]*)\}', declaration)
+      match = re.fullmatch(r'(#?)(' + _TYPE_NAME + r')\{([^{}]*)\}', declaration)
       if not match:
          raise CodecError('invalid declaration')
       enum, name, body = match.groups()
@@ -534,7 +535,7 @@ def _parse_description(text):
             try: items.append([match[1], int(match[2])])
             except ValueError as error: raise CodecError('invalid enum decimal') from error
          else:
-            match = re.fullmatch(r'([0-9]+)([?*+]?):(' + _NAME + r')((?:\[[0-9]+\])*):(' + _NAME + r')(?:@([^@]+))?', row)
+            match = re.fullmatch(r'([0-9]+)([?*+]?):(' + _TYPE_NAME + r')((?:\[[0-9]+\])*):(' + _NAME + r')(?:@([^@]+))?', row)
             if not match:
                raise CodecError('invalid field')
             field_id, marker, type_name, dimensions, name, wire = match.groups()
@@ -574,6 +575,25 @@ def _render_description(messages, enums):
    return 'SDL2|' + '|'.join(declarations)
 
 
+class TypeBindings(dict):
+   """Logical type names resolve lazily, including across generated modules."""
+
+   def __init__(self, owners):
+      super().__init__()
+      self.owners = owners
+
+   def get(self, name, default=None):
+      if name not in self and name in self.owners:
+         module, symbol = self.owners[name]
+         self[name] = getattr(importlib.import_module(module), symbol)
+      return super().get(name, default)
+
+
+def _type_namespace(cls):
+   bindings = getattr(cls, '_SDL_TYPES', None)
+   return bindings if bindings is not None else __import__(cls.__module__, fromlist=['*']).__dict__
+
+
 def _classes(types):
    if isinstance(types, type):
       types = [types]
@@ -589,9 +609,9 @@ def _classes(types):
             raise CodecError('duplicate local type: ' + name)
          continue
       result[name] = cls
-      namespace = __import__(cls.__module__, fromlist=['*']).__dict__
+      namespace = _type_namespace(cls)
       for unused_id, unused_name, unused_modifier, type_name, unused_dims in cls._SDL_FIELDS:
-         child = namespace.get(re.sub(r'\W', '_', type_name))
+         child = namespace.get(type_name)
          if isinstance(child, type) and issubclass(child, SdlMessage):
             pending.append(child)
    return result
@@ -739,7 +759,7 @@ class Context:
       self.namespaces = {}
       for name, cls in self.classes.items():
          self.local_fields[name] = {f[0]: f for f in cls._SDL_FIELDS}
-         self.namespaces[name] = __import__(cls.__module__, fromlist=['*']).__dict__
+         self.namespaces[name] = _type_namespace(cls)
          for f in self.messages.get(name, ()):
             local = self.local_fields[name].get(f['id'])
             if local and (local[3] != f['type'] or tuple(f['dimensions']) != local[4] or
@@ -1027,8 +1047,8 @@ def _fixed_codec(ctx, name, dimensions=()):
             return result
          return fmt, emit_message, read_message
       if type_name in ctx.enums:
-         enum_cls = next((ns.get(re.sub(r'\W', '_', type_name)) for ns in ctx.namespaces.values()
-            if re.sub(r'\W', '_', type_name) in ns), None)
+         enum_cls = next((cls for ns in ctx.namespaces.values()
+            if (cls := ns.get(type_name)) is not None), None)
          if enum_cls is None:
             return None
          def emit_enum(value, output):
@@ -1323,8 +1343,8 @@ def _read_value(ctx, name, reader, dimensions=(), dynamic=False, skip=False):
          return None
       if dynamic:
          return SdlDynamicEnum(name, value, ctx.enums[name][value])
-      enum_cls = next((ns.get(re.sub(r'\W', '_', name)) for ns in ctx.namespaces.values()
-         if re.sub(r'\W', '_', name) in ns), None)
+      enum_cls = next((cls for ns in ctx.namespaces.values()
+         if (cls := ns.get(name)) is not None), None)
       if enum_cls is None:
          raise CodecError('unknown local enum')
       try:
@@ -1453,7 +1473,7 @@ def _default_fixed_array(type_name, dimensions, namespace):
    if dimensions:
       return [_default_fixed_array(type_name, dimensions[1:], namespace)
          for unused in range(dimensions[0])]
-   cls = namespace.get(re.sub(r'\W', '_', type_name))
+   cls = namespace.get(type_name)
    if isinstance(cls, type) and issubclass(cls, SdlMessage):
       return cls()
    return default_value(type_name, namespace)

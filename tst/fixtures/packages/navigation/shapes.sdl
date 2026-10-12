@@ -1,0 +1,23 @@
+package navigation.geometry;
+enum State {
+   ZERO = 0;
+   ONE = 1;
+}
+message Point {
+   int32 x;
+   State state;
+}
+message Sample {
+   Point local;
+   .Point global_point;
+   radio.Point remote;
+   State state;
+   .State global_state;
+   radio.State remote_state;
+   Point[2] points;
+   packed radio.Point remote_points;
+   optional struct {
+      State state;
+      int32 code;
+   } detail;
+}
