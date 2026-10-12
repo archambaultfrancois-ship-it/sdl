@@ -1,0 +1,223 @@
+"""Small dependency-free runtime for SDL generated Python messages."""
+
+import struct
+
+
+class CodecError(ValueError):
+   """Raised when an SDL wire payload is malformed or has the wrong type."""
+
+
+class Complex32:
+   def __init__(self, real=0.0, imag=0.0):
+      self.real = real
+      self.imag = imag
+
+   def __eq__(self, other):
+      return isinstance(other, Complex32) and self.real == other.real and self.imag == other.imag
+
+   def __repr__(self):
+      return 'Complex32(real={!r}, imag={!r})'.format(self.real, self.imag)
+
+
+class Complex64:
+   def __init__(self, real=0.0, imag=0.0):
+      self.real = real
+      self.imag = imag
+
+   def __eq__(self, other):
+      return isinstance(other, Complex64) and self.real == other.real and self.imag == other.imag
+
+   def __repr__(self):
+      return 'Complex64(real={!r}, imag={!r})'.format(self.real, self.imag)
+
+
+def default_value(type_name, namespace):
+   defaults = {
+      'bool': False,
+      'int8': 0,
+      'int16': 0,
+      'int32': 0,
+      'int64': 0,
+      'fl32': 0.0,
+      'fl64': 0.0,
+      'c32': Complex32(),
+      'c64': Complex64(),
+      'string': '',
+   }
+   if type_name in defaults:
+      value = defaults[type_name]
+      if type_name in ('c32', 'c64'):
+         return type(value)()
+      return value
+   value_type = namespace.get(type_name)
+   if value_type is not None and hasattr(value_type, '_SDL_FIELDS'):
+      return None
+   if value_type is not None and hasattr(value_type, '__members__'):
+      return next(iter(value_type))
+   return None
+
+
+def _pack_value(type_name, value):
+   formats = {
+      'int8': '<b', 'int16': '<h', 'int32': '<i', 'int64': '<q',
+      'fl32': '<f', 'fl64': '<d',
+   }
+   if type_name == 'bool':
+      return b'\x01' if value else b'\x00'
+   if type_name in formats:
+      try:
+         return struct.pack(formats[type_name], value)
+      except (struct.error, TypeError) as error:
+         raise CodecError('invalid value for ' + type_name) from error
+   if type_name in ('c32', 'c64'):
+      fmt = '<ff' if type_name == 'c32' else '<dd'
+      try:
+         return struct.pack(fmt, value.real, value.imag)
+      except (struct.error, AttributeError, TypeError) as error:
+         raise CodecError('invalid complex value') from error
+   if type_name == 'string':
+      if not isinstance(value, str):
+         raise CodecError('string field requires str')
+      return value.encode('utf-8')
+   if hasattr(value, '_SDL_FIELDS'):
+      return value.encode_payload()
+   if hasattr(value, '__int__'):
+      return struct.pack('<i', int(value))
+   raise CodecError('unsupported SDL type: ' + type_name)
+
+
+def _unpack_value(type_name, payload, namespace):
+   formats = {
+      'int8': '<b', 'int16': '<h', 'int32': '<i', 'int64': '<q',
+      'fl32': '<f', 'fl64': '<d',
+   }
+   if type_name == 'bool':
+      if len(payload) != 1:
+         raise CodecError('invalid boolean length')
+      if payload[0] not in (0, 1):
+         raise CodecError('invalid boolean value')
+      return payload[0] == 1
+   if type_name in formats:
+      if len(payload) != struct.calcsize(formats[type_name]):
+         raise CodecError('invalid scalar length for ' + type_name)
+      return struct.unpack(formats[type_name], payload)[0]
+   if type_name in ('c32', 'c64'):
+      fmt = '<ff' if type_name == 'c32' else '<dd'
+      if len(payload) != struct.calcsize(fmt):
+         raise CodecError('invalid complex length')
+      value = struct.unpack(fmt, payload)
+      return (Complex32 if type_name == 'c32' else Complex64)(*value)
+   if type_name == 'string':
+      try:
+         return payload.decode('utf-8')
+      except UnicodeDecodeError as error:
+         raise CodecError('invalid UTF-8 string') from error
+   value_type = namespace.get(type_name)
+   if value_type is not None and hasattr(value_type, '_SDL_FIELDS'):
+      return value_type.decode_payload(payload)
+   if value_type is not None and hasattr(value_type, '__members__'):
+      if len(payload) != 4:
+         raise CodecError('invalid enum length')
+      try:
+         return value_type(struct.unpack('<i', payload)[0])
+      except ValueError as error:
+         raise CodecError('invalid enum value') from error
+   raise CodecError('unknown SDL type: ' + type_name)
+
+
+class SdlMessage:
+   """Base class used by generated SDL message dataclasses."""
+
+   _SDL_FIELDS = ()
+   _SDL_HASH = 0
+
+   def __init__(self, *args, **kwargs):
+      if len(args) > len(self._SDL_FIELDS):
+         raise TypeError('too many positional message arguments')
+      for index, field in enumerate(self._SDL_FIELDS):
+         unused_id, name, modifier, type_name = field
+         if name in kwargs and index < len(args):
+            raise TypeError('field supplied more than once: ' + name)
+         if index < len(args):
+            value = args[index]
+         elif name in kwargs:
+            value = kwargs.pop(name)
+         elif modifier == 'optional':
+            value = None
+         elif modifier == 'repeated':
+            value = []
+         else:
+            value = default_value(type_name, self.__class__.__module__ and
+               __import__(self.__class__.__module__, fromlist=['*']).__dict__)
+         setattr(self, name, value)
+      if kwargs:
+         raise TypeError('unknown message field: ' + next(iter(kwargs)))
+
+   def __eq__(self, other):
+      return (type(self) is type(other) and
+         all(getattr(self, field[1]) == getattr(other, field[1])
+            for field in self._SDL_FIELDS))
+
+   def __repr__(self):
+      values = ', '.join(field[1] + '=' + repr(getattr(self, field[1]))
+         for field in self._SDL_FIELDS)
+      return self.__class__.__name__ + '(' + values + ')'
+
+   def encode_payload(self):
+      output = bytearray()
+      for field_id, name, modifier, type_name in self._SDL_FIELDS:
+         value = getattr(self, name)
+         if modifier == 'optional':
+            if value is None:
+               continue
+            values = (value,)
+         elif modifier == 'repeated':
+            values = value
+         else:
+            values = (value,)
+         for item in values:
+            payload = _pack_value(type_name, item)
+            if len(payload) > 0xFFFFFFFF:
+               raise CodecError('field payload exceeds uint32 length')
+            output.extend(struct.pack('<II', field_id, len(payload)))
+            output.extend(payload)
+      return bytes(output)
+
+   @classmethod
+   def decode_payload(cls, payload):
+      value = cls()
+      fields = {field[0]: field for field in cls._SDL_FIELDS}
+      offset = 0
+      while offset < len(payload):
+         if len(payload) - offset < 8:
+            raise CodecError('truncated field header')
+         field_id, length = struct.unpack_from('<II', payload, offset)
+         offset += 8
+         if length > len(payload) - offset:
+            raise CodecError('truncated field payload')
+         field = fields.get(field_id)
+         if field is not None:
+            unused_id, name, modifier, type_name = field
+            namespace = __import__(cls.__module__, fromlist=['*']).__dict__
+            item = _unpack_value(type_name, payload[offset:offset + length], namespace)
+            if modifier == 'repeated':
+               getattr(value, name).append(item)
+            else:
+               setattr(value, name, item)
+         offset += length
+      return value
+
+
+def encode(message):
+   if not isinstance(message, SdlMessage):
+      raise CodecError('encode expects an SDL message')
+   return struct.pack('<I', message._SDL_HASH) + message.encode_payload()
+
+
+def decode(wire, message_type):
+   if len(wire) < 4:
+      raise CodecError('truncated message hash')
+   type_hash = struct.unpack_from('<I', wire)[0]
+   if type_hash != message_type._SDL_HASH:
+      raise CodecError('message type hash mismatch')
+   return message_type.decode_payload(wire[4:])
