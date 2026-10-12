@@ -1,0 +1,11 @@
+[package]
+name = "sdl-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "sdl_runtime"
+path = "src/lib.rs"
+
+[features]
+wire-little-endian = []

@@ -1,186 +1,379 @@
-# ============================================================================
-# AUTOMATIC AUTO-DESCRIPTIVE CODE GENERATOR FOR C TARGET
-# ============================================================================
+#!/usr/bin/env python3
+"""SDL parser and code generator entry point."""
 
 import re
+import argparse
+import os
+import sys
 
-def fnv1a_32(string_data):
-   """ Computes a fast 32-bit FNV-1a hash signature for type matching """
-   h = 2166136261
-   for char in string_data:
-      h = h ^ ord(char)
-      h = (h * 16777619) & 0xFFFFFFFF
-   return h
+
+def canonical_type_descriptor(schema, root_name):
+   """Return a stable binary descriptor for a message and its reachable types."""
+   messages = {}
+   enums = {}
+   pending = [root_name]
+   while pending:
+      name = pending.pop()
+      if name in messages or name in enums:
+         continue
+      if name in schema.messages:
+         message = schema.messages[name]
+         fields = []
+         for field in sorted(message.fields, key=lambda item: item.index):
+            fields.append({
+               'id': field.index,
+               'name': field.name,
+               'modifier': field.modifier,
+               'type': field.type_name,
+               'dimensions': list(field.array_dimensions),
+            })
+            if field.type_name in schema.messages or field.type_name in schema.enums:
+               pending.append(field.type_name)
+         messages[name] = fields
+      elif name in schema.enums:
+         enums[name] = [[enum_name, int(value)]
+            for enum_name, value in schema.enums[name].pairs]
+      elif name not in MsgParser.BUILTINS:
+         raise ValueError('unknown type in descriptor: ' + name)
+   output = bytearray(b'SDD1')
+
+   def append_u16(value, label):
+      if value < 0 or value > 0xFFFF:
+         raise ValueError(label + ' exceeds uint16 in schema descriptor')
+      output.extend(value.to_bytes(2, 'big'))
+
+   def append_u32(value):
+      output.extend(value.to_bytes(4, 'big'))
+
+   def append_text(value):
+      encoded = value.encode('utf-8')
+      append_u16(len(encoded), 'descriptor string length')
+      output.extend(encoded)
+
+   if len(messages) > 0xFFFF or len(enums) > 0xFFFF:
+      raise ValueError('too many declarations in schema descriptor')
+   append_text(root_name)
+   append_u16(len(messages), 'message count')
+   modifier_codes = {'required': 0, 'optional': 1, 'repeated': 2, 'packed': 3}
+   for name in sorted(messages):
+      append_text(name)
+      fields = messages[name]
+      append_u16(len(fields), 'field count')
+      for field in fields:
+         append_u32(field['id'])
+         append_text(field['name'])
+         output.append(modifier_codes[field['modifier']])
+         append_text(field['type'])
+         if len(field['dimensions']) > 0xFF:
+            raise ValueError('too many array dimensions in schema descriptor')
+         output.append(len(field['dimensions']))
+         for dimension in field['dimensions']:
+            append_u32(dimension)
+   append_u16(len(enums), 'enum count')
+   for name in sorted(enums):
+      append_text(name)
+      values = enums[name]
+      append_u16(len(values), 'enum value count')
+      for enum_name, value in values:
+         append_text(enum_name)
+         try:
+            output.extend(int(value).to_bytes(4, 'big', signed=True))
+         except OverflowError as error:
+            raise ValueError('enum value must fit signed int32 in ' + name) from error
+   return bytes(output)
+
+
+def canonical_type_hash(schema, root_name):
+   value = 2166136261
+   for byte in canonical_type_descriptor(schema, root_name):
+      value = ((value ^ byte) * 16777619) & 0xFFFFFFFF
+   return value
+
+
+def c_identifier(value):
+   identifier = re.sub(r'\W', '_', value)
+   if not identifier or identifier[0].isdigit():
+      identifier = '_' + identifier
+   return identifier
+
 
 class Field:
-   def __init__(self, index, modifier, type_name, name):
+   def __init__(self, index, modifier, type_name, name, array_dimensions=None):
       self.index = int(index)
       self.modifier = modifier
       self.type_name = type_name
       self.name = name
+      self.array_dimensions = array_dimensions or []
+
 
 class Message:
    def __init__(self, name):
       self.name = name
       self.fields = []
 
+
 class Enum:
    def __init__(self, name):
       self.name = name
       self.pairs = []
 
+
 class MsgParser:
+   BUILTINS = {'bool', 'int8', 'int16', 'int32', 'int64', 'fl32', 'fl64',
+      'c32', 'c64', 'string'}
+
    def __init__(self):
       self.enums = {}
       self.messages = {}
       self.message_order = []
 
    def parse_text(self, text):
-      lines = [re.sub(r'//.*', '', l).strip() for l in text.split('\n')]
-      lines = [l for l in lines if l]
-
       current_enum = None
       current_msg = None
-
-      for line in lines:
-         if line.startswith('enum'):
-            name = line.split()[1].replace('{', '').strip()
+      anonymous_stack = []
+      anonymous_counters = {}
+      for raw_line in text.splitlines():
+         line = re.sub(r'//.*', '', raw_line).strip()
+         if not line:
+            continue
+         match = re.match(r'enum\s+(\w+)\s*\{?$', line)
+         if match:
+            name = match.group(1)
+            if name in self.enums or name in self.messages:
+               raise ValueError('duplicate type name: ' + name)
             current_enum = Enum(name)
             self.enums[name] = current_enum
+            current_msg = None
             continue
-         elif line.startswith('message'):
-            name = line.split()[1].replace('{', '').strip()
+         match = re.match(r'message\s+(\w+)\s*\{?$', line)
+         if match:
+            name = match.group(1)
+            if name in self.enums or name in self.messages:
+               raise ValueError('duplicate type name: ' + name)
             current_msg = Message(name)
             self.messages[name] = current_msg
             self.message_order.append(name)
+            current_enum = None
             continue
-         elif line == '}':
+         if line == '}':
+            if anonymous_stack:
+               raise ValueError('anonymous struct must close with its field name')
             current_enum = None
             current_msg = None
             continue
+         match = re.match(r'(\d+):\s+(optional|required|repeated|packed)\s+struct\s*\{\s*$', line)
+         if match and current_msg is not None:
+            root_name = anonymous_stack[0]['root'] if anonymous_stack else current_msg.name
+            anonymous_counters[root_name] = anonymous_counters.get(root_name, 0) + 1
+            anonymous_name = root_name + '$' + str(anonymous_counters[root_name])
+            anonymous_stack.append({
+               'parent': current_msg,
+               'field_id': match.group(1),
+               'modifier': match.group(2),
+               'message': Message(anonymous_name),
+               'root': root_name,
+            })
+            current_msg = anonymous_stack[-1]['message']
+            continue
+         match = re.match(r'}\s+(\w+)\s*;', line)
+         if match and anonymous_stack:
+            frame = anonymous_stack.pop()
+            anonymous_message = frame['message']
+            self.messages[anonymous_message.name] = anonymous_message
+            self.message_order.append(anonymous_message.name)
+            field_name = match.group(1)
+            frame['parent'].fields.append(Field(frame['field_id'],
+               frame['modifier'], anonymous_message.name, field_name))
+            current_msg = frame['parent']
+            continue
+         if current_enum is not None:
+            match = re.match(r'(\w+)\s*=\s*(-?\d+)\s*;', line)
+            if not match:
+               raise ValueError('invalid enum entry: ' + line)
+            current_enum.pairs.append((match.group(1), match.group(2)))
+            continue
+         if current_msg is not None:
+            match = re.match(r'(\d+):\s+(optional|required|repeated|packed)\s+(\w+(?:\[\d+\])*)\s+(\w+)\s*;', line)
+            if not match:
+               raise ValueError('invalid field declaration: ' + line)
+            declared_type = match.group(3)
+            type_name = re.match(r'\w+', declared_type).group(0)
+            dimensions = [int(value) for value in re.findall(r'\[(\d+)\]', declared_type)]
+            current_msg.fields.append(Field(match.group(1), match.group(2),
+               type_name, match.group(4), dimensions))
+            continue
+         raise ValueError('unexpected SDL statement: ' + line)
+      if anonymous_stack:
+         raise ValueError('unterminated anonymous struct in ' + anonymous_stack[0]['root'])
+      self.validate()
+      self._order_embedded_messages()
 
-         if current_enum:
-            match = re.match(r'(\w+)\s*=\s*(\d+)\s*;', line)
-            if match: current_enum.pairs.append((match.group(1), match.group(2)))
+   def _order_embedded_messages(self):
+      ordered = []
+      visiting = set()
+      visited = set()
 
-         if current_msg:
-            match = re.match(r'(\d+):\s+(optional|required|repeated)\s+(\w+)\s+(\w+)\s*;', line)
-            if match:
-               field = Field(match.group(1), match.group(2), match.group(3), match.group(4))
-               current_msg.fields.append(field)
+      def visit(name):
+         if name in visited:
+            return
+         if name in visiting:
+            raise ValueError('recursive message dependency involving ' + name)
+         visiting.add(name)
+         message = self.messages[name]
+         for field in message.fields:
+            if (field.type_name in self.messages and field.type_name != name and
+                  (field.modifier not in ('repeated', 'packed') or '$' in field.type_name)):
+               visit(field.type_name)
+         visiting.remove(name)
+         visited.add(name)
+         ordered.append(name)
 
-   def _to_c_type(self, type_name):
-      mapping = {
-         'int8': 'int8_t', 'int16': 'int16_t', 'int32': 'int32_t', 'int64': 'int64_t',
-         'fl32': 'float', 'fl64': 'double', 'string': 'char*', 
-         'c32': 'float complex', 'c64': 'double complex'
+      for name in self.message_order:
+         visit(name)
+      self.message_order = ordered
+
+   def validate(self):
+      generated_symbols = {}
+      for type_name in list(self.enums) + list(self.messages):
+         symbol = c_identifier(type_name).upper()
+         if symbol in generated_symbols and generated_symbols[symbol] != type_name:
+            raise ValueError('generated type identifier collision: ' + type_name +
+               ' and ' + generated_symbols[symbol])
+         generated_symbols[symbol] = type_name
+      for message in self.messages.values():
+         ids = set()
+         names = set()
+         for field in message.fields:
+            if field.index <= 0 or field.index > 0xFFFFFFFF:
+               raise ValueError('field ID must fit in a nonzero uint32')
+            if field.index in ids or field.name in names:
+               raise ValueError('duplicate field ID or name in ' + message.name)
+            if field.type_name not in self.BUILTINS and field.type_name not in self.enums and field.type_name not in self.messages:
+               raise ValueError('unknown type ' + field.type_name + ' in ' + message.name)
+            if any(dimension <= 0 or dimension > 0xFFFFFFFF for dimension in field.array_dimensions):
+               raise ValueError('fixed array dimensions must be positive uint32 values in ' +
+                  message.name + '.' + field.name)
+            if field.array_dimensions and field.modifier != 'required':
+               raise ValueError('fixed arrays require the required modifier in ' +
+                  message.name + '.' + field.name)
+            if field.array_dimensions:
+               array_size = self.fixed_wire_size(field.type_name)
+               if array_size is None:
+                  raise ValueError('fixed array element has variable wire size in ' +
+                     message.name + '.' + field.name)
+               for dimension in field.array_dimensions:
+                  if array_size > 0xFFFFFFFF // dimension:
+                     raise ValueError('fixed array wire size exceeds uint32 in ' +
+                        message.name + '.' + field.name)
+                  array_size *= dimension
+            if field.array_dimensions and field.modifier == 'packed':
+               raise ValueError('packed fields cannot also declare fixed dimensions in ' +
+                  message.name + '.' + field.name)
+            ids.add(field.index)
+            names.add(field.name)
+            if field.modifier == 'packed' and self.fixed_wire_size(field.type_name) is None:
+               raise ValueError('packed field type must have a fixed wire size: ' +
+                  message.name + '.' + field.name)
+      for enum in self.enums.values():
+         names = set()
+         values = set()
+         for name, value in enum.pairs:
+            if name in names or int(value) in values:
+               raise ValueError('duplicate enum name or value in ' + enum.name)
+            names.add(name)
+            values.add(int(value))
+
+   def fixed_wire_size(self, type_name, active=None):
+      primitive_sizes = {
+         'bool': 1, 'int8': 1, 'int16': 2, 'int32': 4, 'int64': 8,
+         'fl32': 4, 'fl64': 8, 'c32': 8, 'c64': 16,
       }
-      return mapping.get(type_name, type_name)
+      if type_name in primitive_sizes:
+         return primitive_sizes[type_name]
+      if type_name in self.enums:
+         return 4
+      message = self.messages.get(type_name)
+      if message is None:
+         return None
+      if active is None:
+         active = set()
+      if type_name in active or not message.fields:
+         return None
+      active = set(active)
+      active.add(type_name)
+      total = 0
+      for field in message.fields:
+         if field.modifier != 'required':
+            return None
+         field_size = self.fixed_wire_size(field.type_name, active)
+         if field_size is None:
+            return None
+         for dimension in field.array_dimensions:
+            field_size *= dimension
+            if field_size > 0xFFFFFFFF:
+               return None
+         total += field_size
+         if total > 0xFFFFFFFF:
+            return None
+      return total
 
-   def _is_dynamic_type(self, type_name, known_formats):
-      if type_name == 'string': return True
-      if type_name in self.messages:
-         sub_fmt = known_formats.get(type_name, "")
-         return 's' in sub_fmt or 'a' in sub_fmt
-      return False
+def parse_schemas(input_path):
+   if os.path.isdir(input_path):
+      schema_paths = [os.path.join(input_path, item) for item in sorted(os.listdir(input_path))
+         if item.endswith('.sdl') and os.path.isfile(os.path.join(input_path, item))]
+   else:
+      schema_paths = [input_path]
+   if not schema_paths:
+      raise ValueError('no .sdl files found in ' + input_path)
 
-   def _get_format_char(self, field, known_formats):
-      t = field.type_name
-      req = field.modifier == 'required'
-      
-      if field.modifier == 'repeated':
-         if t in self.messages and self._is_dynamic_type(t, known_formats):
-            return f"a({known_formats[t]})"
-         return 'a'
-         
-      if t == 'string': return 's'
-      elif t == 'int8': return 'B' if req else 'b'
-      elif t == 'int16': return 'H' if req else 'h'
-      elif t == 'int32': return 'I' if req else 'i'
-      elif t == 'int64': return 'L' if req else 'l'
-      elif t == 'fl32': return 'F' if req else 'f'
-      elif t == 'fl64': return 'D' if req else 'd'
-      elif t == 'c32': return 'C' if req else 'c'
-      elif t == 'c64': return 'Z' if req else 'z'
-      elif t in self.enums: return 'e'
-      elif t in known_formats: return f"({known_formats[t]})"
-      return '?'
+   parsed = []
+   seen_type_names = set()
+   seen_symbols = set()
+   seen_bases = set()
+   for schema_path in schema_paths:
+      base_name = os.path.splitext(os.path.basename(schema_path))[0]
+      identifier = c_identifier(base_name)
+      if identifier in seen_bases:
+         raise ValueError('SDL filenames map to the same identifier: ' + identifier)
+      seen_bases.add(identifier)
+      parser = MsgParser()
+      with open(schema_path, 'r', encoding='utf-8') as input_file:
+         parser.parse_text(input_file.read())
+      for name in list(parser.enums) + list(parser.messages):
+         symbol = c_identifier(name).upper()
+         if name in seen_type_names or symbol in seen_symbols:
+            raise ValueError('duplicate type name across SDL files: ' + name)
+         seen_type_names.add(name)
+         seen_symbols.add(symbol)
+      parsed.append((base_name, identifier, parser))
+   return parsed
 
-   def generate_c_code(self):
-      output = [
-         "/* Automatically generated - Do not modify */\n\n",
-         "#ifndef GENERATED_MESSAGES_H\n#define GENERATED_MESSAGES_H\n\n",
-         "#include <stdint.h>\n#include <stdbool.h>\n#include <complex.h>\n#include \"type_engine.h\"\n\n"
-      ]
 
-      for enum_name, enum in self.enums.items():
-         output.append(f"typedef enum {{\n")
-         for key, val in enum.pairs: output.append(f"   {enum_name.upper()}_{key} = {val},\n")
-         output.append(f"}} {enum_name};\n\n")
+def main():
+   argument_parser = argparse.ArgumentParser(description='Generate code from SDL schemas.')
+   argument_parser.add_argument('-c', action='store_true', help='generate C code')
+   argument_parser.add_argument('-rust', action='store_true', help='generate Rust code')
+   argument_parser.add_argument('-python', action='store_true', help='generate Python 3 code')
+   argument_parser.add_argument('input', nargs='?', default='sdl', help='SDL file or directory')
+   argument_parser.add_argument('output', nargs='?', default='build/generated',
+      help='output directory (language subdirectory is added automatically)')
+   arguments = argument_parser.parse_args()
+   if not arguments.c and not arguments.rust and not arguments.python:
+      argument_parser.error('select at least one backend with -c, -rust or -python')
+   sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+   try:
+      if arguments.c:
+         from c_backend import generate_c
+         generate_c(arguments.input, os.path.join(arguments.output, 'c'))
+      if arguments.rust:
+         from rust_backend import generate_rust
+         generate_rust(arguments.input, os.path.join(arguments.output, 'rust'))
+      if arguments.python:
+         from python_backend import generate_python
+         generate_python(arguments.input, os.path.join(arguments.output, 'python'))
+   except ValueError as error:
+      argument_parser.error(str(error))
 
-      known_formats = {}
-      for msg_name in self.message_order:
-         msg = self.messages[msg_name]
-         fmt_str = ""
-         for field in sorted(msg.fields, key=lambda f: f.index):
-            fmt_str += self._get_format_char(field, known_formats)
-         known_formats[msg_name] = fmt_str
 
-      output.append("#pragma pack(push, 1)\n")
-      for msg_name in self.message_order:
-         msg = self.messages[msg_name]
-         output.append(f"typedef struct {{\n")
-         
-         for field in sorted(msg.fields, key=lambda f: f.index):
-            c_base_type = self._to_c_type(field.type_name)
-            
-            if field.modifier == 'optional' and field.type_name == 'string':
-               output.append(f"   bool has_{field.name};\n")
-               output.append(f"   const char* {field.name};\n")
-            elif field.modifier == 'repeated':
-               output.append(f"   uint32_t {field.name}_count;\n")
-               output.append(f"   const {c_base_type}* {field.name};\n")
-            else:
-               output.append(f"   {c_base_type} {field.name};\n")
-               
-         output.append(f"}} {msg_name};\n\n")
-      output.append("#pragma pack(pop)\n\n")
-
-      for msg_name in self.message_order:
-         msg_hash = fnv1a_32(msg_name)
-         output.append(f'#define {msg_name.upper()}_FORMAT "{known_formats[msg_name]}"\n')
-         output.append(f'#define {msg_name.upper()}_HASH 0x{msg_hash:08X}U\n')
-
-      output.append("\n/* Runtime setup routine to map all schemas at boot */\n")
-      output.append("static inline void register_all_types() {\n")
-      for msg_name in self.message_order:
-         output.append(f'   type_register("{msg_name}", {msg_name.upper()}_HASH, {msg_name.upper()}_FORMAT, sizeof({msg_name}));\n')
-      output.append("}\n")
-
-      output.append("\n#endif /* GENERATED_MESSAGES_H */\n")
-      return "".join(output)
-
-if __name__ == "__main__":
-   # Load DSL schema descriptor with dual array usage styles
-   schema_dsl = """
-   message FixedItem {
-      1: required fl32 x;
-      2: required fl32 y;
-   }
-
-   message VarItem {
-      1: optional string name;
-      2: required int64 id;
-   }
-
-   message RootPayload {
-      1: optional string header;
-      2: repeated FixedItem fixed_array;
-      3: repeated VarItem var_array;
-   }
-   """
-   parser = MsgParser()
-   parser.parse_text(schema_dsl)
-   with open("generated_messages.h", "w", encoding="utf-8") as f:
-      f.write(parser.generate_c_code())
-   print("File 'generated_messages.h' built successfully.")
+if __name__ == '__main__':
+   main()
