@@ -1,0 +1,2 @@
+# The SDL v1 profile uses no compression. The SDK imports compression plugins optionally.
+mcap==1.5.0

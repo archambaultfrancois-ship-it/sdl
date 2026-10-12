@@ -1,0 +1,60 @@
+# Record and replay radio captures
+
+This Python demo reuses the [radio capture schema](../radio_capture/schema/radio_capture.sdl).
+Ten synthetic frames contain 4096 complex IQ samples each. Every fifth frame
+contains an interference burst. The live path and replay call the same
+`pipeline.on_record(record)` function with the same encoded SDL2 bytes.
+
+From the repository root:
+
+```sh
+make recording-deps
+make -C samples/record_replay demo
+```
+
+The demo creates `build/radio.mcap`, prints file information and a bounded
+structured display of the burst at 300 ms, validates the entire file, and replays without
+waiting. It compares `build/live.log` with `build/replayed.log` byte for byte.
+Analysis logs use the runtime `display()` style, with one indented block per capture:
+
+```text
+CaptureAnalysis {
+   sequence: 0
+   captured_at_ns: 1791724536610867471
+   sample_count: 4096
+   peak_power: 0.25
+   burst_detected: false
+}
+```
+
+The recording contains its catalogue; decoding it does not need generated classes.
+
+For a structured display of one recorded capture:
+
+```sh
+PYTHONPATH=build/recording-deps \
+  python3 tools/recording/sdl-recording inspect samples/record_replay/build/radio.mcap \
+  --format text --topic radio/iq --from 300ms --limit 1
+```
+
+This command runs from the repository root. It shows recording timestamps,
+nested messages and the first eight IQ samples; add `--full` to show every sample.
+Use `--indent-width 2` to change indentation or `--format table` for field/type/value columns.
+
+To replay at half speed:
+
+```sh
+PYTHONPATH=build/recording-deps:samples/record_replay \
+  python3 tools/recording/sdl-recording replay samples/record_replay/build/radio.mcap \
+  --speed 0.5 --consumer pipeline:on_record
+```
+
+Replace `acquire_captures()` with the application's acquisition source, keeping
+its timestamps in `CaptureMetadata`. The demo synthesizes acquisition and log
+times 100 ms apart without waiting during recording. A real recorder can omit
+`log_time_ns` to record wall-clock arrival time while retaining acquisition time
+in `publish_time_ns` and the SDL message. The analysis uses recorded acquisition
+time, so its result does not depend on replay speed or the current wall clock.
+
+See [the profile and API reference](../../docs/recording.md) for schema evolution,
+durability, validation and replay semantics.

@@ -3,7 +3,8 @@ import pathlib
 import struct
 import unittest
 from sdl_runtime import (CodecError, Complex32, Complex64, SdlMessage,
-   description, prepare, encode, decode, decode_dynamic, catalogue_id, message_name, message_names, compare_catalogues)
+   SdlDynamicMessage, SdlDynamicEnum, display, description, prepare, encode, decode,
+   decode_dynamic, catalogue_id, message_name, message_names, compare_catalogues)
 from wire_example import Packet
 from codec_cases import CodecCases, State, EnumRecord, EnumRecordBatch
 from schema import (RootPayload, FixedItem, VarItem, FixedBoard, FixedRow,
@@ -18,6 +19,38 @@ def context(*types):
 
 
 class CodecTests(unittest.TestCase):
+   def test_01_codec_typed_and_dynamic_display(self):
+      ctx = context(Packet)
+      typed = Packet(active=True, code=None, label='a\nb', samples=[1, 2, 3])
+      dynamic = decode_dynamic(ctx, encode(ctx, typed))
+      expected = ('Packet {\n   active: true\n   code: null\n   label: "a\\nb"\n'
+         '   samples: [\n      1,\n      2,\n      3\n   ]\n}\n')
+      self.assertEqual(display(typed), expected)
+      self.assertEqual(display(dynamic), expected)
+      self.assertEqual(display(dynamic, max_items=1), expected.replace(
+         '      2,\n      3', '      ... (2 more elements)'))
+      ctx = context(EnumRecordBatch)
+      typed = EnumRecordBatch(records=[EnumRecord(state=State.READY, code=1),
+         EnumRecord(state=State.NEGATIVE, code=2)])
+      dynamic = decode_dynamic(ctx, encode(ctx, typed))
+      self.assertEqual(display(dynamic, 2), display(typed, 2))
+      self.assertIn('state: READY', display(dynamic))
+      self.assertIn('... (1 more elements)', display(dynamic, max_items=1))
+      value = SdlDynamicMessage('Status', {'unknown': SdlDynamicEnum('State', 9),
+         'point': Complex32(1, -2), 'empty': []})
+      self.assertEqual(display(value),
+         'Status {\n   unknown: 9\n   point: (1, -2)\n   empty: []\n}\n')
+
+   def test_02_invalid_display_arguments(self):
+      for value in (-1, True, 1.5):
+         with self.subTest(value=value):
+            with self.assertRaises(ValueError):
+               display(Packet(), indent_width=value)
+            with self.assertRaises(ValueError):
+               display(Packet(), max_items=value)
+      with self.assertRaises(CodecError):
+         display(object())
+
    def test_01_codec_envelope(self):
       from sdl_runtime import pack_envelope, unpack_envelope
       for identity in (0, 0x89abcdef, 0xffffffff):

@@ -66,6 +66,44 @@ test-python: $(GENERATED_DIR)/.stamp
 	@if [ -z "$(CHECK_SILENT)" ]; then echo "=== Component Python: runtime, schema/codegen, invalid input, limits ==="; fi
 	$(RUN_TEST) env PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) tst/python/run_tests.py
 
+# Optional recording tools do not add dependencies to the core runtime tests.
+RECORDING_DEPS ?= build/recording-deps
+recording-deps:
+	$(PYTHON) -m pip install --target "$(RECORDING_DEPS)" --no-deps -r tools/recording/requirements.txt
+
+test-recording:
+	PYTHONPATH=$(RECORDING_DEPS):runtime/python $(PYTHON) -m unittest discover -s tst/recording -v
+
+recording-native:
+	CARGO="$(CARGO)" CC="$(CC)" $(PYTHON) tools/recording/build_native.py
+
+recording-jni:
+	CARGO="$(CARGO)" CC="$(CC)" JAVAC="$(JAVAC)" $(PYTHON) tools/recording/build_native.py --jni
+
+recording-mex:
+	CARGO="$(CARGO)" CC="$(CC)" $(PYTHON) tools/recording/build_native.py --mex
+
+test-recording-native: recording-native
+	$(CARGO) test --locked --manifest-path runtime/recording/Cargo.toml --target-dir build/recording
+	PYTHONPATH=$(RECORDING_DEPS):runtime/python CC="$(CC)" $(PYTHON) -m unittest discover -s tst/recording -p test_native.py -v
+
+test-recording-jni: recording-jni
+	PYTHONPATH=$(RECORDING_DEPS):runtime/python JAVAC="$(JAVAC)" JAVA="$(JAVA)" $(PYTHON) tst/recording/run_gateways.py --jni
+
+test-recording-mex: recording-mex
+	PYTHONPATH=$(RECORDING_DEPS):runtime/python OCTAVE="$(OCTAVE)" $(PYTHON) tst/recording/run_gateways.py --mex
+
+# Optional GNAT binding depends only on standard Ada packages and the C ABI.
+# Override RECORDING_GNATMAKE / RECORDING_ADA_FLAGS for a native GNAT installation.
+RECORDING_GNATMAKE ?= $(GNATMAKE)
+RECORDING_ADA_FLAGS ?= $(ADA_FLAGS)
+test-recording-ada: recording-native
+	mkdir -p build/recording/ada
+	$(RECORDING_GNATMAKE) $(RECORDING_ADA_FLAGS) -Iruntime/recording/ada -D build/recording/ada -o build/recording/ada/test tst/recording/native/recording_ada_tests.adb -largs -L$(CURDIR)/build/recording/release -lsdl_recording -Wl,-rpath,$(CURDIR)/build/recording/release
+	$(PYTHON) tst/recording/run_ada.py
+
+.PHONY: recording-deps test-recording recording-native recording-jni recording-mex test-recording-native test-recording-jni test-recording-mex test-recording-ada
+
 bench: $(GENERATED_DIR)/.stamp
 	@$(PYTHON) tst/run_benchmarks.py make "$(BENCH_ITERATIONS)" "$(matlab_bench_label)"
 

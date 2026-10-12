@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""Inspect, validate and replay SDL2 MCAP recordings."""
+
+import argparse
+from decimal import Decimal, DecimalException, localcontext
+import importlib
+import itertools
+import json
+import math
+from pathlib import Path
+import sys
+import textwrap
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'runtime/python'))
+
+try:
+   from sdl_recording import RecordingError, RecordingReader, replay
+except ModuleNotFoundError as error:
+   if error.name == 'mcap':
+      sys.exit('Recording requires mcap: python3 -m pip install --no-deps -r tools/recording/requirements.txt')
+   raise
+from sdl_runtime import Complex32, Complex64, SdlDynamicEnum, SdlDynamicMessage, display
+
+
+def _json_value(value, limit, depth=0):
+   if depth >= 16:
+      return {'summary': 'maximum display depth reached'}
+   if isinstance(value, SdlDynamicMessage):
+      return {'type': value.type_name, 'fields': {
+         k: _json_value(v, limit, depth + 1) for k, v in value.fields.items()}}
+   if isinstance(value, SdlDynamicEnum):
+      return {'type': value.type_name, 'value': value.value, 'name': value.name}
+   if isinstance(value, (Complex32, Complex64)):
+      return {'real': _json_value(value.real, limit, depth + 1),
+              'imag': _json_value(value.imag, limit, depth + 1)}
+   if isinstance(value, (list, tuple)):
+      if limit is not None and len(value) > limit:
+         return {'length': len(value), 'preview': [
+            _json_value(v, limit, depth + 1) for v in value[:limit]]}
+      return [_json_value(v, limit, depth + 1) for v in value]
+   if isinstance(value, float) and not math.isfinite(value):
+      return str(value)
+   if isinstance(value, str) and limit is not None and len(value) > 1024:
+      return {'length': len(value), 'preview': value[:1024]}
+   return value
+
+
+def _duration(value):
+   scales = {'ns': 1, 'us': 1000, 'ms': 1000000, 's': 1000000000}
+   for suffix, scale in scales.items():
+      if value.endswith(suffix):
+         try:
+            duration = Decimal(value[:-len(suffix)])
+            with localcontext() as context:
+               context.prec = max(28, len(duration.as_tuple().digits) + 10)
+               ns = duration * scale
+               if ns.is_finite() and 0 <= ns < 1 << 64 and ns == ns.to_integral_value():
+                  return int(ns)
+         except DecimalException:
+            pass
+         break
+   raise argparse.ArgumentTypeError('use a nonnegative duration with ns, us, ms or s (e.g. 1.5s)')
+
+
+def _positive(value):
+   result = int(value)
+   if result < 1:
+      raise argparse.ArgumentTypeError('must be positive')
+   return result
+
+
+def _nonnegative(value):
+   result = int(value)
+   if result < 0:
+      raise argparse.ArgumentTypeError('must be nonnegative')
+   return result
+
+
+def _emit(value):
+   print(json.dumps(value, ensure_ascii=False, allow_nan=False))
+
+
+def _inspect(record, full=False):
+   return {'topic': record.channel.topic, 'channel_id': record.channel.id,
+      'schema_id': record.channel.schema_id, 'root_type': record.channel.root_type,
+      'log_time_ns': record.log_time_ns, 'publish_time_ns': record.publish_time_ns,
+      'sequence': record.sequence, 'payload_bytes': len(record.payload),
+      'message': _json_value(record.decode(), None if full else 8)}
+
+
+def _text_value(value, limit):
+   if isinstance(value, str):
+      if limit is not None and len(value) > 1024:
+         return json.dumps(value[:1024], ensure_ascii=False) + ' ... (length=%d)' % len(value)
+      return json.dumps(value, ensure_ascii=False)
+   if isinstance(value, SdlDynamicEnum):
+      return '%s (%d)' % (value.name, value.value) if value.name is not None else str(value.value)
+   if isinstance(value, (Complex32, Complex64)):
+      return '(%s, %s)' % (value.real, value.imag)
+   if value is None:
+      return 'null'
+   if isinstance(value, bool):
+      return 'true' if value else 'false'
+   return str(value)
+
+
+def _text_rows(record, full):
+   limit = None if full else 8
+   for name, type_name, value in (
+         ('topic', 'string', record.channel.topic),
+         ('channel_id', 'uint16', record.channel.id),
+         ('schema_id', 'uint16', record.channel.schema_id),
+         ('root_type', 'string', record.channel.root_type),
+         ('log_time_ns', 'uint64', record.log_time_ns),
+         ('publish_time_ns', 'uint64', record.publish_time_ns),
+         ('sequence', 'uint32', record.sequence),
+         ('payload_bytes', 'uint64', len(record.payload))):
+      yield '@' + name, type_name, _text_value(value, limit)
+
+   def visit(path, value, type_name, dimensions=(), modifier='required', depth=0):
+      label = (modifier + ' ' if modifier != 'required' else '') + type_name
+      label += ''.join('[%d]' % size for size in dimensions)
+      if depth >= 16:
+         yield path, label, 'maximum display depth reached'
+      elif isinstance(value, SdlDynamicMessage):
+         if not value.fields:
+            yield path, label, '{}'
+         for field in record.channel.context.messages[value.type_name]:
+            name = field['name']
+            yield from visit(path + '.' + name if path else name, value.fields[name],
+               field['type'], field['dimensions'], field['modifier'], depth + 1)
+      elif isinstance(value, (list, tuple)):
+         yield path, label, 'length=%d' % len(value)
+         end = len(value) if limit is None else min(len(value), limit)
+         child_dimensions = dimensions if modifier in ('packed', 'repeated') else dimensions[1:]
+         for i in range(end):
+            yield from visit('%s[%d]' % (path, i), value[i], type_name,
+               child_dimensions, depth=depth + 1)
+         if end < len(value):
+            yield path + '[...]', label, '%d more elements (use --full)' % (len(value) - end)
+      else:
+         yield path, label, _text_value(value, limit)
+
+   message = record.decode()
+   yield from visit('', message, message.type_name)
+
+
+def _inspect_table(record, number, full):
+   rows = [('FIELD', 'TYPE', 'VALUE')] + list(_text_rows(record, full))
+   widths = [min(cap, max(len(row[i]) for row in rows))
+      for i, cap in enumerate((48, 32, 80))]
+   print('Record %d' % number)
+   for row_index, row in enumerate(rows):
+      cells = [textwrap.wrap(cell, width=width, replace_whitespace=False,
+         drop_whitespace=False, break_on_hyphens=False) or ['']
+         for cell, width in zip(row, widths)]
+      for line in itertools.zip_longest(*cells, fillvalue=''):
+         print(' | '.join(cell.ljust(width) for cell, width in zip(line, widths)).rstrip())
+      if row_index == 0:
+         print('-+-'.join('-' * width for width in widths))
+   print()
+
+
+def _inspect_text(record, full, indent_width):
+   message = SdlDynamicMessage('RecordingRecord', {
+      'topic': record.channel.topic,
+      'channel_id': record.channel.id,
+      'schema_id': record.channel.schema_id,
+      'log_time_ns': record.log_time_ns,
+      'publish_time_ns': record.publish_time_ns,
+      'sequence': record.sequence,
+      'payload_bytes': len(record.payload),
+      'message': record.decode(),
+   })
+   print(display(message, indent_width, max_items=None if full else 8), end='')
+
+
+def main(argv=None):
+   parser = argparse.ArgumentParser(description=__doc__)
+   sub = parser.add_subparsers(dest='command', required=True)
+   for name in ('info', 'validate', 'inspect', 'replay'):
+      command = sub.add_parser(name)
+      command.add_argument('file')
+      if name in ('inspect', 'replay'):
+         command.add_argument('--topic', action='append', help='repeat to select multiple topics')
+         command.add_argument('--from', dest='start', type=_duration, help='offset from the earliest file log time')
+         command.add_argument('--to', dest='end', type=_duration, help='exclusive end offset from the earliest file log time')
+      if name == 'inspect':
+         command.add_argument('--limit', type=_positive, default=5)
+         command.add_argument('--full', action='store_true', help='print entire arrays and strings')
+         command.add_argument('--format', choices=('json', 'text', 'table'), default='json',
+            help='json: objects (default); text: SDL display; table: field/type/value columns')
+         command.add_argument('--indent-width', type=_nonnegative, default=3,
+            help='spaces per level for --format text (default: 3)')
+      if name == 'replay':
+         command.add_argument('--speed', type=float, default=1.0, help='0: no wait; 1: recorded pace')
+         command.add_argument('--consumer', required=True, help='Python module:function receiving a RecordingRecord')
+   args = parser.parse_args(argv)
+   try:
+      reader = RecordingReader(args.file)
+      if args.command == 'info':
+         _emit(reader.info())
+      elif args.command == 'validate':
+         _emit({'valid': True, 'message_count': reader.validate()})
+      else:
+         origin = reader.info()['start_time_ns'] if args.start is not None or args.end is not None else 0
+         origin = origin or 0
+         start = None if args.start is None else origin + args.start
+         end = None if args.end is None else origin + args.end
+         if start is not None and end is not None and end < start:
+            raise RecordingError('--to must be at or after --from')
+         selection = dict(topics=args.topic, start_time_ns=start, end_time_ns=end)
+         if args.command == 'inspect':
+            records = reader.iter_records(**selection)
+            try:
+               for number, record in enumerate(itertools.islice(records, args.limit), 1):
+                  if args.format == 'text':
+                     _inspect_text(record, args.full, args.indent_width)
+                  elif args.format == 'table':
+                     _inspect_table(record, number, args.full)
+                  else:
+                     _emit(_inspect(record, args.full))
+            finally:
+               records.close()
+         else:
+            if not math.isfinite(args.speed) or args.speed < 0:
+               raise RecordingError('--speed must be finite and nonnegative')
+            # Complete validation before delivering anything to application code.
+            reader.validate()
+            previous = None
+            if args.speed:
+               for record in reader.iter_records(**selection):
+                  if previous is not None and record.log_time_ns < previous:
+                     raise RecordingError('log time moved backwards; use --speed 0 for file-order replay')
+                  previous = record.log_time_ns
+            module, separator, function = args.consumer.partition(':')
+            if not separator or not module or not function:
+               raise RecordingError('--consumer must be module:function')
+            consumer = getattr(importlib.import_module(module), function)
+            if not callable(consumer):
+               raise RecordingError('consumer is not callable')
+            count = replay(reader.iter_records(**selection), consumer, speed=args.speed)
+            print('Replayed %d messages' % count, file=sys.stderr)
+      return 0
+   except (RecordingError, OSError, ValueError, ImportError, AttributeError) as error:
+      print('sdl-recording: ' + str(error), file=sys.stderr)
+      return 1
+
+
+if __name__ == '__main__':
+   sys.exit(main())

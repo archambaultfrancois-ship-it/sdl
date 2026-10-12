@@ -1,0 +1,16 @@
+[package]
+name = "sdl-recording"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+
+[lib]
+name = "sdl_recording"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+mcap = { version = "=0.25.0", default-features = false }
+sdl-runtime = { path = "../rust" }
+
+[profile.release]
+opt-level = 3

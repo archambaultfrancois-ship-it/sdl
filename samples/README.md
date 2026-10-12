@@ -14,3 +14,5 @@
 
 - [`PoC_PubSub`](PoC_PubSub/README.md): Python TCP/IP pub/sub broker with
   catalogue identities, topic contracts, schema evolution and catalogue resolution.
+- [`record_replay`](record_replay/README.md): autonomous MCAP recordings of SDL2
+  radio captures, dynamic inspection and replay through the live analysis entry point.

@@ -431,36 +431,48 @@ def _display_indent(depth, indent_width):
    return ' ' * (depth * indent_width)
 
 
-def _display_sequence(values, indent_width, depth):
+def _display_sequence(values, indent_width, depth, max_items=None):
    if not values:
       return '[]'
    lines = ['[']
-   for index, value in enumerate(values):
+   count = len(values) if max_items is None else min(len(values), max_items)
+   for index in range(count):
+      value = values[index]
       comma = ',' if index + 1 < len(values) else ''
       lines.append(_display_indent(depth + 1, indent_width) +
-         _display_value(value, indent_width, depth + 1) + comma)
+         _display_value(value, indent_width, depth + 1, max_items) + comma)
+   if count < len(values):
+      lines.append(_display_indent(depth + 1, indent_width) +
+         '... (%d more elements)' % (len(values) - count))
    lines.append(_display_indent(depth, indent_width) + ']')
    return '\n'.join(lines)
 
 
-def _display_message(message, indent_width, depth):
-   lines = [message.__class__.__name__ + ' {']
-   for unused_id, name, unused_modifier, unused_type, unused_dimensions in message._SDL_FIELDS:
+def _display_message(message, indent_width, depth, max_items=None):
+   if isinstance(message, SdlDynamicMessage):
+      type_name, fields = message.type_name, message.fields.items()
+   else:
+      type_name = message.__class__.__name__
+      fields = ((field[1], getattr(message, field[1])) for field in message._SDL_FIELDS)
+   lines = [type_name + ' {']
+   for name, value in fields:
       lines.append(_display_indent(depth + 1, indent_width) + name + ': ' +
-         _display_value(getattr(message, name), indent_width, depth + 1))
+         _display_value(value, indent_width, depth + 1, max_items))
    lines.append(_display_indent(depth, indent_width) + '}')
    return '\n'.join(lines)
 
 
-def _display_value(value, indent_width, depth):
-   if isinstance(value, SdlMessage):
-      return _display_message(value, indent_width, depth)
+def _display_value(value, indent_width, depth, max_items=None):
+   if isinstance(value, (SdlMessage, SdlDynamicMessage)):
+      return _display_message(value, indent_width, depth, max_items)
+   if isinstance(value, SdlDynamicEnum):
+      return value.name if value.name is not None else str(value.value)
    if isinstance(value, IntEnum):
       return value.name
    if isinstance(value, (Complex32, Complex64)):
       return '({}, {})'.format(value.real, value.imag)
    if isinstance(value, (list, tuple)):
-      return _display_sequence(value, indent_width, depth)
+      return _display_sequence(value, indent_width, depth, max_items)
    if value is None:
       return 'null'
    if isinstance(value, str):
@@ -470,13 +482,19 @@ def _display_value(value, indent_width, depth):
    return repr(value)
 
 
-def display(message, indent_width=3):
-   """Format a generated SDL message in memory using `indent_width` spaces per level."""
-   if not isinstance(message, SdlMessage):
+def display(message, indent_width=3, *, max_items=None):
+   """Format a typed or dynamic message; optionally preview each sequence.
+
+   The default renders all elements, using `indent_width` spaces per level.
+   """
+   if not isinstance(message, (SdlMessage, SdlDynamicMessage)):
       raise CodecError('display expects an SDL message')
    if isinstance(indent_width, bool) or not isinstance(indent_width, int) or indent_width < 0:
       raise ValueError('indent_width must be a nonnegative integer')
-   return _display_message(message, indent_width, 0) + '\n'
+   if max_items is not None and (isinstance(max_items, bool) or
+         not isinstance(max_items, int) or max_items < 0):
+      raise ValueError('max_items must be a nonnegative integer or None')
+   return _display_message(message, indent_width, 0, max_items) + '\n'
 
 
 _NAME = r'[\w$]+'
