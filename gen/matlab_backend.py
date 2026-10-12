@@ -112,7 +112,7 @@ class MatlabBackend:
          'string':"''"}
       if type_name in self.schema.enums:
          enum = self.schema.enums[type_name]
-         return matlab_identifier(type_name) + '().' + matlab_identifier(enum.pairs[0][0])
+         return matlab_identifier(type_name) + '(' + _quote(enum.pairs[0][0]) + ')'
       if type_name in self.schema.messages:
          return matlab_identifier(type_name) + "('new')"
       return primitive[type_name]

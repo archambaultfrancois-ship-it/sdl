@@ -3,7 +3,7 @@ import statistics
 import time
 from sdl_runtime import Complex32, description, prepare, encode, decode
 from benchmark import BenchPayload
-from bench_cases import BenchSmall, BenchOptionals, BenchEntry, BenchVariable
+from bench_cases import BenchSmall, BenchOptionals, BenchEntry, BenchVariable, BenchVector, BenchPose, BenchRecord, BenchRecordBatch
 
 
 def benchmark(label, message, useful):
@@ -36,3 +36,7 @@ if __name__ == '__main__':
       BenchEntry(label='entry'+str(i), number=i) for i in range(8)]), 152)
    benchmark('packed', BenchPayload(header='H'*200, samples=[
       Complex32(i*.25, -(i%97)*.5) for i in range(5000)]), 40200)
+   benchmark('packed_struct', BenchRecordBatch(records=[
+      BenchRecord(id=i, pose=BenchPose(position=BenchVector(values=[i*.25, -i*.5, i%97]),
+         rotation=[0, 0, 0, 1]), measures=[i*.125, -(i%31)*.5])
+      for i in range(1000)]), 40000)

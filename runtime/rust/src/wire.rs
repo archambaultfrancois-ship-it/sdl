@@ -25,6 +25,14 @@ pub struct Complex64 {
 }
 
 pub trait WireValue: Sized {
+    /// Fixed binary layout emitted by the generator; independent of Rust memory layout.
+    const FIXED_SIZE: Option<usize> = None;
+    fn decode_fixed(_bytes: &[u8]) -> Result<Self, CodecError> {
+        Err(CodecError::TypeMismatch)
+    }
+    fn encode_fixed(&self, _bytes: &mut [u8]) -> Result<(), CodecError> {
+        Err(CodecError::TypeMismatch)
+    }
     fn encode_value(&self, out: &mut Vec<u8>) -> Result<(), CodecError>;
     fn decode_value(reader: &mut Reader<'_>, type_name: &str) -> Result<Self, CodecError>;
     fn encoded_size(&self) -> Result<usize, CodecError>;
@@ -183,6 +191,7 @@ pub struct Context {
     locals: BTreeMap<String, TypeInfo>,
     emissions: BTreeMap<String, bool>,
     sizes: BTreeMap<String, Option<usize>>,
+    fixed_matches: HashSet<String>,
 }
 fn merge(catalogues: &[&str]) -> Result<SchemaDesc, CodecError> {
     let mut result = SchemaDesc {
@@ -256,14 +265,66 @@ pub fn prepare(text: &str, types: &[TypeInfo]) -> Result<Context, CodecError> {
     for name in &names {
         emission_match(&schema, &local_schema, name, &mut emissions);
     }
+    let mut fixed_cache = BTreeMap::new();
+    for name in schema.messages.keys().chain(schema.enums.keys()) {
+        fixed_match(&schema, &local_schema, name, &mut fixed_cache);
+    }
+    let fixed_matches = fixed_cache.into_iter().filter_map(|(name, matches)| {
+        if matches { Some(name) } else { None }
+    }).collect();
     Ok(Context {
         schema,
         names,
         locals,
         emissions,
         sizes,
+        fixed_matches,
     })
 }
+// Match binary layouts once, including enum value sets. Field/variant renames
+// do not change a layout. Added/removed fields or enum values retain the generic
+// decoder and its remote/local validation rules.
+fn fixed_match(schema: &SchemaDesc, local: &SchemaDesc, name: &str,
+               cache: &mut BTreeMap<String, bool>) -> bool {
+    if matches!(name, "bool" | "int8" | "int16" | "int32" | "int64" |
+                "fl32" | "fl64" | "c32" | "c64") {
+        return true;
+    }
+    if let Some(value) = cache.get(name) { return *value; }
+    let result = if let (Some(remote), Some(native)) =
+        (schema.enums.get(name), local.enums.get(name)) {
+        remote.len() == native.len() && remote.iter().all(|(_, value)|
+            native.iter().any(|(_, local_value)| local_value == value))
+    } else if let (Some(remote), Some(native)) =
+        (schema.messages.get(name), local.messages.get(name)) {
+        !remote.fields.is_empty() && remote.fields.len() == native.fields.len() &&
+        remote.fields.iter().zip(&native.fields).all(|(f, l)|
+            f.modifier == 0 && l.modifier == 0 && f.id == l.id &&
+            f.type_name == l.type_name && f.dimensions == l.dimensions &&
+            fixed_match(schema, local, &f.type_name, cache))
+    } else { false };
+    cache.insert(name.to_owned(), result);
+    result
+}
+
+/// Encode a fixed-size sequence into one output span. Generated fixed codecs
+/// write endian-aware fields at binary offsets, without exposing native padding.
+pub fn encode_sequence<T: WireValue>(values: &[T], out: &mut Vec<u8>) -> Result<(), CodecError> {
+    if let Some(size) = T::FIXED_SIZE.filter(|s| *s != 0) {
+        let bytes = size.checked_mul(values.len()).ok_or(CodecError::LengthOverflow)?;
+        let start = out.len();
+        let end = start.checked_add(bytes).ok_or(CodecError::LengthOverflow)?;
+        out.try_reserve(bytes).map_err(|_| CodecError::LengthOverflow)?;
+        out.resize(end, 0);
+        for (value, record) in values.iter().zip(out[start..].chunks_exact_mut(size)) {
+            value.encode_fixed(record)?;
+        }
+    } else {
+        for value in values { value.encode_value(out)?; }
+    }
+    Ok(())
+}
+
 fn emission_match(
     schema: &SchemaDesc,
     local: &SchemaDesc,
@@ -419,6 +480,30 @@ impl<'a> Reader<'a> {
             .map(|s| s.as_str())
             .ok_or(CodecError::TypeMismatch)
     }
+    pub fn fixed_compatible(&self, name: &str) -> bool {
+        matches!(name, "bool" | "int8" | "int16" | "int32" | "int64" |
+                 "fl32" | "fl64" | "c32" | "c64") || self.context.fixed_matches.contains(name)
+    }
+    pub fn decode_sequence<T: WireValue>(&mut self, name: &str, count: usize)
+        -> Result<Vec<T>, CodecError> {
+        if let Some(size) = T::FIXED_SIZE.filter(|s| *s != 0) {
+            if self.fixed_compatible(name) {
+                let bytes = count.checked_mul(size).ok_or(CodecError::LengthOverflow)?;
+                // Bounds are checked before allocation, even for hostile counts.
+                let payload = self.take(bytes)?;
+                let mut values = Vec::new();
+                values.try_reserve(count).map_err(|_| CodecError::LengthOverflow)?;
+                for record in payload.chunks_exact(size) {
+                    values.push(T::decode_fixed(record)?);
+                }
+                return Ok(values);
+            }
+        }
+        let mut values = Vec::new();
+        values.try_reserve(count).map_err(|_| CodecError::LengthOverflow)?;
+        for _ in 0..count { values.push(T::decode_value(self, name)?); }
+        Ok(values)
+    }
     pub fn fields(&self, name: &str) -> Result<&'a [FieldDesc], CodecError> {
         self.context
             .schema
@@ -534,6 +619,15 @@ impl<'a> Reader<'a> {
 }
 macro_rules! numeric {
    ($($t:ty),*)=>{$(impl WireValue for $t {
+      const FIXED_SIZE: Option<usize> = Some(std::mem::size_of::<Self>());
+      fn decode_fixed(bytes: &[u8])->Result<Self,CodecError>{
+         Ok(Self::from_be_bytes(bytes.try_into().map_err(|_|CodecError::Truncated)?))
+      }
+      #[inline]
+      fn encode_fixed(&self,bytes:&mut[u8])->Result<(),CodecError>{
+         if bytes.len()!=std::mem::size_of::<Self>() {return Err(CodecError::Truncated);}
+         bytes.copy_from_slice(&self.to_be_bytes());Ok(())
+      }
       fn encode_value(&self,out:&mut Vec<u8>)->Result<(),CodecError>{out.extend_from_slice(&self.to_be_bytes());Ok(())}
       fn decode_value(r:&mut Reader<'_>,_:&str)->Result<Self,CodecError>{Ok(Self::from_be_bytes(r.take(std::mem::size_of::<Self>())?.try_into().map_err(|_|CodecError::Truncated)?))}
       fn encoded_size(&self)->Result<usize,CodecError>{Ok(std::mem::size_of::<Self>())}
@@ -541,6 +635,16 @@ macro_rules! numeric {
 }
 numeric!(i8, i16, i32, i64, f32, f64);
 impl WireValue for bool {
+    const FIXED_SIZE: Option<usize> = Some(1);
+    fn decode_fixed(bytes: &[u8]) -> Result<Self, CodecError> {
+        match bytes { [0] => Ok(false), [1] => Ok(true), [_] => Err(CodecError::InvalidBoolean),
+                      _ => Err(CodecError::Truncated) }
+    }
+    #[inline]
+    fn encode_fixed(&self, bytes: &mut [u8]) -> Result<(), CodecError> {
+        if bytes.len() != 1 { return Err(CodecError::Truncated); }
+        bytes[0] = u8::from(*self); Ok(())
+    }
     fn encode_value(&self, out: &mut Vec<u8>) -> Result<(), CodecError> {
         out.push(u8::from(*self));
         Ok(())
@@ -575,6 +679,20 @@ impl WireValue for String {
 macro_rules! complex {
     ($t:ty,$f:ty) => {
         impl WireValue for $t {
+            const FIXED_SIZE: Option<usize> = Some(2 * std::mem::size_of::<$f>());
+            fn decode_fixed(bytes: &[u8]) -> Result<Self, CodecError> {
+                let size = std::mem::size_of::<$f>();
+                if bytes.len() != 2 * size { return Err(CodecError::Truncated); }
+                Ok(Self { real: <$f>::decode_fixed(&bytes[..size])?,
+                          imag: <$f>::decode_fixed(&bytes[size..])? })
+            }
+            #[inline]
+            fn encode_fixed(&self, bytes: &mut [u8]) -> Result<(), CodecError> {
+                let size = std::mem::size_of::<$f>();
+                if bytes.len() != 2 * size { return Err(CodecError::Truncated); }
+                self.real.encode_fixed(&mut bytes[..size])?;
+                self.imag.encode_fixed(&mut bytes[size..])
+            }
             fn encode_value(&self, out: &mut Vec<u8>) -> Result<(), CodecError> {
                 self.real.encode_value(out)?;
                 self.imag.encode_value(out)
@@ -594,6 +712,27 @@ macro_rules! complex {
 complex!(Complex32, f32);
 complex!(Complex64, f64);
 impl<T: WireValue, const N: usize> WireValue for [T; N] {
+    const FIXED_SIZE: Option<usize> = match T::FIXED_SIZE {
+        Some(size) => size.checked_mul(N),
+        None => None,
+    };
+    #[inline]
+    fn encode_fixed(&self, bytes: &mut [u8]) -> Result<(), CodecError> {
+        let size = T::FIXED_SIZE.filter(|s| *s != 0).ok_or(CodecError::TypeMismatch)?;
+        if Some(bytes.len()) != Self::FIXED_SIZE { return Err(CodecError::Truncated); }
+        for (value, record) in self.iter().zip(bytes.chunks_exact_mut(size)) {
+            value.encode_fixed(record)?;
+        }
+        Ok(())
+    }
+    fn decode_fixed(bytes: &[u8]) -> Result<Self, CodecError> {
+        let size = T::FIXED_SIZE.filter(|s| *s != 0).ok_or(CodecError::TypeMismatch)?;
+        if Some(bytes.len()) != Self::FIXED_SIZE { return Err(CodecError::Truncated); }
+        let mut values = Vec::new();
+        values.try_reserve(N).map_err(|_| CodecError::LengthOverflow)?;
+        for record in bytes.chunks_exact(size) { values.push(T::decode_fixed(record)?); }
+        values.try_into().map_err(|_| CodecError::TypeMismatch)
+    }
     fn encode_value(&self, out: &mut Vec<u8>) -> Result<(), CodecError> {
         for x in self {
             x.encode_value(out)?;

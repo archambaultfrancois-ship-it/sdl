@@ -1,7 +1,7 @@
 PYTHON ?= python3
 CC ?= cc
 CARGO ?= cargo
-CFLAGS ?= -std=c99 -Wall -Wextra -pedantic -O2
+CFLAGS ?= -std=c99 -Wall -Wextra -pedantic -O3
 INDENT_WIDTH ?= 3
 
 ROOT := ../..

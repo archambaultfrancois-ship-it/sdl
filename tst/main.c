@@ -1,4 +1,7 @@
 #include "type_engine.h"
+#include "type_private.h"
+#include "type_registry.h"
+#include "sdl_wire.h"
 #include "sdl_registry.h"
 #include "wire_example.h"
 #include "codec_cases.h"
@@ -224,6 +227,185 @@ static void graph_limits(void) {
       type_context_free(ctx);
    }
 }
+/* Mixed widths and native padding exercise the non-contiguous span path. */
+typedef struct {
+   bool enabled;
+   int16_t code;
+   double precise;
+   State state;
+   float complex point;
+} PackedTestRecord;
+typedef struct { char prefix; PackedTestRecord value; } PackedTestRecordAlign;
+typedef struct { uint32_t count; PackedTestRecord *records; } PackedTestBatch;
+typedef struct { char prefix; PackedTestBatch value; } PackedTestBatchAlign;
+static const SdlFieldDesc packed_test_record_fields[] = {
+   {1, "enabled", &SDL_BOOL_DESC, offsetof(PackedTestRecord, enabled), SDL_NO_OFFSET, SDL_NO_OFFSET, SDL_NO_OFFSET, 0},
+   {2, "code", &SDL_INT16_DESC, offsetof(PackedTestRecord, code), SDL_NO_OFFSET, SDL_NO_OFFSET, SDL_NO_OFFSET, 0},
+   {3, "precise", &SDL_FLOAT64_DESC, offsetof(PackedTestRecord, precise), SDL_NO_OFFSET, SDL_NO_OFFSET, SDL_NO_OFFSET, 0},
+   {4, "state", &SDL_ENUM_STATE_DESC, offsetof(PackedTestRecord, state), SDL_NO_OFFSET, SDL_NO_OFFSET, SDL_NO_OFFSET, 0},
+   {5, "point", &SDL_COMPLEX32_DESC, offsetof(PackedTestRecord, point), SDL_NO_OFFSET, SDL_NO_OFFSET, SDL_NO_OFFSET, 0},
+};
+static const SdlTypeDesc packed_test_record_desc = {
+   .kind = SDL_TYPE_STRUCT, .size = sizeof(PackedTestRecord),
+   .alignment = offsetof(PackedTestRecordAlign, value), .name = "PackedTestRecord",
+   .detail.structure = {5, packed_test_record_fields}
+};
+static const SdlFieldDesc packed_test_batch_fields[] = {
+   {1, "records", &packed_test_record_desc, offsetof(PackedTestBatch, records), SDL_NO_OFFSET,
+    offsetof(PackedTestBatch, count), SDL_NO_OFFSET, SDL_FIELD_REPEATED | SDL_FIELD_PACKED}
+};
+static const SdlTypeDesc packed_test_batch_desc = {
+   .kind = SDL_TYPE_STRUCT, .size = sizeof(PackedTestBatch),
+   .alignment = offsetof(PackedTestBatchAlign, value), .name = "PackedTestBatch",
+   .detail.structure = {1, packed_test_batch_fields}
+};
+static void packed_records(void) {
+   static const char text[] =
+      "SDL2\nenum State {\n  READY = 1;\n  NEGATIVE = -7;\n}\n"
+      "message PackedTestBatch {\n  1: packed PackedTestRecord records;\n}\n"
+      "message PackedTestRecord {\n  1: required bool enabled;\n  2: required int16 code;\n"
+      "  3: required fl64 precise;\n  4: required State state;\n  5: required c32 point;\n}\n";
+   PackedTestRecord records[2] = {{0}};
+   PackedTestBatch batch = {2, records}, *copy;
+   unsigned char expected[48] = {1, 2};
+   void *wire;
+   size_t size, i;
+   SdlContext *ctx;
+   assert(sdl_register_type(&packed_test_record_desc));
+   assert(sdl_register_type(&packed_test_batch_desc));
+   ctx = type_prepare(text, strlen(text));
+   assert(ctx);
+   records[0].enabled = true;
+   records[0].code = INT16_MIN;
+   records[0].precise = -0.0;
+   records[0].state = STATE_NEGATIVE;
+   records[0].point = 1.f - 2.f * I;
+   records[1].code = INT16_MAX;
+   records[1].precise = INFINITY;
+   records[1].state = STATE_READY;
+   records[1].point = -3.f + 4.f * I;
+   for (i = 0; i < 2; ++i)
+      assert(sdl_value_encode_fixed(&packed_test_record_desc, &records[i], expected + 2 + i * 23, 23));
+   wire = type_encode(ctx, "PackedTestBatch", &batch, &size);
+   assert(wire && size == sizeof(expected) && !memcmp(wire, expected, size));
+   copy = type_decode(ctx, wire, size);
+   assert(copy && copy->count == 2 && copy->records[0].enabled && !copy->records[1].enabled);
+   assert(copy->records[0].code == INT16_MIN && copy->records[1].code == INT16_MAX);
+   assert(signbit(copy->records[0].precise) && isinf(copy->records[1].precise));
+   assert(copy->records[0].state == STATE_NEGATIVE && copy->records[1].state == STATE_READY);
+   assert(copy->records[0].point == records[0].point && copy->records[1].point == records[1].point);
+   type_free(copy);
+   for (i = 0; i < size; ++i) {
+      assert(!type_decode_size(ctx, wire, i));
+      assert(!type_decode(ctx, wire, i));
+   }
+   expected[2] = 2;
+   assert(!type_decode(ctx, expected, sizeof(expected)));
+   expected[2] = 1;
+   sdl_wire_write_u32(expected + 13, 123);
+   assert(!type_decode(ctx, expected, sizeof(expected)));
+   /* Unknown fields validate against the remote enum, not the local subset. */
+   {
+      char remote[1024];
+      const char *closing = strstr(text, "}\nmessage");
+      SdlContext *changed;
+      assert(closing);
+      snprintf(remote, sizeof(remote), "%.*s  OTHER = 123;\n%s",
+               (int)(closing - text), text, closing);
+      changed = type_prepare(remote, strlen(remote));
+      assert(changed && !type_decode(changed, expected, sizeof(expected)));
+      type_context_free(changed);
+      strstr(remote, "  1: packed")[2] = '2';
+      changed = type_prepare(remote, strlen(remote));
+      assert(changed);
+      copy = type_decode(changed, expected, sizeof(expected));
+      assert(copy && copy->count == 0 && !copy->records);
+      type_free(copy);
+      type_context_free(changed);
+   }
+   records[0].state = 123;
+   assert(!type_encode_size(ctx, "PackedTestBatch", &batch));
+   assert(!type_encode(ctx, "PackedTestBatch", &batch, &size));
+   records[0].state = STATE_NEGATIVE;
+   batch.count = 0;
+   batch.records = NULL;
+   {
+      void *empty = type_encode(ctx, "PackedTestBatch", &batch, &size);
+      assert(empty && size == 2 && !memcmp(empty, "\1\0", 2));
+      copy = type_decode(ctx, empty, size);
+      assert(copy && copy->count == 0);
+      type_free(copy);
+      type_free(empty);
+   }
+   /* Added remote fields disable the plan and retain schema evolution. */
+   {
+      char remote[1024];
+      unsigned char evolved[50] = {1, 2};
+      SdlContext *changed;
+      memcpy(remote, text, strlen(text) - 2);
+      strcpy(remote + strlen(text) - 2, "  6: required int8 extra;\n}\n");
+      changed = type_prepare(remote, strlen(remote));
+      assert(changed);
+      for (i = 0; i < 2; ++i) {
+         memcpy(evolved + 2 + i * 24, (const unsigned char *)wire + 2 + i * 23, 23);
+         evolved[2 + i * 24 + 23] = 7;
+      }
+      copy = type_decode(changed, evolved, sizeof(evolved));
+      assert(copy && copy->count == 2 && copy->records[0].state == STATE_NEGATIVE &&
+             copy->records[1].point == records[1].point);
+      type_free(copy);
+      assert(!type_encode_size(changed, "PackedTestBatch", &batch));
+      type_context_free(changed);
+   }
+   type_free(wire);
+   type_context_free(ctx);
+   /* Nested fixed arrays use several spans with different component widths. */
+   {
+      FixedRow rows[2] = {0};
+      FixedRowBatch nested = {2, rows}, *result;
+      unsigned char reference[82];
+      ctx = context("FixedRowBatch");
+      rows[0].vectors[0].coords[0] = -0.0f;
+      rows[0].vectors[1].coords[1] = INFINITY;
+      rows[1].vectors[1].grid[1][2] = INT16_MIN;
+      wire = type_encode(ctx, "FixedRowBatch", &nested, &size);
+      assert(wire && size == sizeof(reference));
+      memcpy(reference, wire, 2);
+      for (i = 0; i < 2; ++i)
+         assert(sdl_value_encode_fixed(&FIXEDROW_DESC, &rows[i], reference + 2 + 40 * i, 40));
+      assert(!memcmp(reference, wire, size));
+      result = type_decode(ctx, wire, size);
+      assert(result && result->rows_count == 2 && !memcmp(result->rows, rows, sizeof(rows)));
+      type_free(result);
+      type_free(wire);
+      type_context_free(ctx);
+   }
+}
+
+static void wire_word_arrays(void) {
+   const size_t widths[] = {1, 2, 3, 4, 8, 16};
+   const size_t counts[] = {0, 1, 2, 3, 7, 15, 16, 17, 64, 1000};
+   unsigned char source[16005], actual[16005], expected[16005];
+   uint32_t state = 123456789;
+   size_t w, c, i;
+   for (i = 0; i < sizeof(source); ++i) {
+      state ^= state << 13; state ^= state >> 17; state ^= state << 5;
+      source[i] = (unsigned char)state;
+   }
+   for (w = 0; w < sizeof(widths) / sizeof(widths[0]); ++w)
+      for (c = 0; c < sizeof(counts) / sizeof(counts[0]); ++c) {
+         size_t width = widths[w], count = counts[c];
+         memset(actual, 0xa5, sizeof(actual));
+         memset(expected, 0xa5, sizeof(expected));
+         /* Both buffers are deliberately unaligned; canaries detect overruns. */
+         for (i = 0; i < count; ++i)
+            sdl_wire_encode_native(expected + 3 + i * width, source + 1 + i * width, width);
+         sdl_wire_convert_array(actual + 3, source + 1, width, count);
+         assert(!memcmp(actual, expected, sizeof(actual)));
+         sdl_wire_convert_array(NULL, NULL, width, 0);
+      }
+}
+
 static void invalid(void) {
    const char *bad[] = {"SDL1\n",
                         "SDL2\nmessage A {\n  1: required A a;\n}\n",
@@ -248,6 +430,8 @@ int main(void) {
    packet_cases();
    evolution();
    composites();
+   packed_records();
+   wire_word_arrays();
    invalid();
    graph_limits();
    puts("C SDL2 codec, evolution, malformed input and storage checks passed.");

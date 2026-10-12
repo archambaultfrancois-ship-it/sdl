@@ -1,6 +1,6 @@
 CC ?= cc
 PKG_CONFIG ?= pkg-config
-CFLAGS ?= -O2 -Wall -Wextra
+CFLAGS ?= -O3 -Wall -Wextra
 WIRESHARK_CFLAGS := $(shell $(PKG_CONFIG) --cflags wireshark 2>/dev/null)
 WIRESHARK_LIBS := $(shell $(PKG_CONFIG) --libs wireshark 2>/dev/null)
 WIRESHARK_VERSION := $(shell $(PKG_CONFIG) --modversion wireshark 2>/dev/null)

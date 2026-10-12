@@ -32,7 +32,7 @@ make bench
 
 The suite covers all five runtimes with the shared SDL2 fixture. Benchmarks
 report messages/s, useful MiB/s, catalogue size, and preparation time across
-five workloads. See [benchmarks](docs/benchmarks.md) for methodology and limits.
+six workloads. See [benchmarks](docs/benchmarks.md) for methodology and limits.
 On the Termux development environment, source `~/.bashrc` before using the JDK.
 
 ## Examples

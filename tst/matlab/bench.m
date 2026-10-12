@@ -3,6 +3,17 @@ m=BenchSmall('new');m.active=true;m.sequence=int32(123);m.code=int16(-2);run_cas
 m=BenchOptionals('new');m.a=int32(1);run_case('optional_sparse','BenchOptionals',m,4);names={'a','b','c','d','e','f','g','h'};for k=1:8,m.(names{k})=int32(k);end;run_case('optional_dense','BenchOptionals',m,32);
 m=BenchVariable('new');m.header=repmat('V',1,40);m.entries=cell(8,1);for k=1:8,e=BenchEntry('new');e.label=sprintf('entry%d',k-1);e.number=int64(k-1);m.entries{k}=e;end;run_case('variable','BenchVariable',m,152);
 m=BenchPayload('new');m.header=repmat('H',1,200);m.samples=complex(single((0:4999)'*.25),single(-mod((0:4999)',97)*.5));run_case('packed','BenchPayload',m,40200);
+m=BenchRecordBatch('new');
+m.records.id=int32((0:999)');
+m.records.pose.position.values=zeros(3,1000,'single');
+m.records.pose.rotation=zeros(4,1000,'single');
+m.records.measures=zeros(2,1000,'single');
+for i=0:999
+ m.records.pose.position.values(:,i+1)=single([i*.25;-i*.5;mod(i,97)]);
+ m.records.pose.rotation(:,i+1) = single([0;0;0;1]);
+ m.records.measures(:,i+1)=single([i*.125;-mod(i,31)*.5]);
+end
+run_case('packed_struct','BenchRecordBatch',m,40000);
 end
 function run_case(label,type,message,useful)
 text=sdl_matlab_runtime('description',{type});tic;ctx=sdl_matlab_runtime('prepare',text,{type});preparation=toc*1e6;wire=feval(type,'encode',ctx,message);decoded=feval(type,'decode',ctx,wire);assert(isequal(decoded,message));

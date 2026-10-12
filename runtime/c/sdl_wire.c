@@ -58,8 +58,52 @@ void sdl_wire_convert_array(void *dst, const void *src, size_t width, size_t cou
    uint8_t *out = (uint8_t *)dst;
    const uint8_t *in = (const uint8_t *)src;
    size_t i;
+   if (!count)
+      return;
    if (width == 1 || !host_is_little_endian()) {
       memcpy(out, in, width * count);
+      return;
+   }
+   /* Constant-width loads/stores let the compiler emit word swaps and vectorize.
+      memcpy keeps unaligned wire buffers and strict aliasing well-defined. */
+   if (width == 2) {
+      for (i = 0; i < count; ++i) {
+         uint16_t value;
+         memcpy(&value, in + i * 2, sizeof(value));
+         value = (uint16_t)((value >> 8) | (value << 8));
+         memcpy(out + i * 2, &value, sizeof(value));
+      }
+      return;
+   }
+   if (width == 4) {
+      for (i = 0; i < count; ++i) {
+         uint32_t value;
+         memcpy(&value, in + i * 4, sizeof(value));
+#if defined(__GNUC__) || defined(__clang__)
+         value = __builtin_bswap32(value);
+#else
+         value = (value >> 24) | ((value >> 8) & UINT32_C(0x0000ff00)) |
+                 ((value << 8) & UINT32_C(0x00ff0000)) | (value << 24);
+#endif
+         memcpy(out + i * 4, &value, sizeof(value));
+      }
+      return;
+   }
+   if (width == 8) {
+      for (i = 0; i < count; ++i) {
+         uint64_t value;
+         memcpy(&value, in + i * 8, sizeof(value));
+#if defined(__GNUC__) || defined(__clang__)
+         value = __builtin_bswap64(value);
+#else
+         value = ((value & UINT64_C(0x00ff00ff00ff00ff)) << 8) |
+                 ((value >> 8) & UINT64_C(0x00ff00ff00ff00ff));
+         value = ((value & UINT64_C(0x0000ffff0000ffff)) << 16) |
+                 ((value >> 16) & UINT64_C(0x0000ffff0000ffff));
+         value = (value << 32) | (value >> 32);
+#endif
+         memcpy(out + i * 8, &value, sizeof(value));
+      }
       return;
    }
    for (i = 0; i < count; ++i) {

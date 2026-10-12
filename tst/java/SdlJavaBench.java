@@ -19,7 +19,9 @@ public final class SdlJavaBench {
       SdlCodec.Context ctx = SdlCodec.prepare(description, value.getClass());
       double preparation = (System.nanoTime() - start) / 1e3;
       byte[] wire = SdlCodec.encode(ctx, value);
-      SdlCodec.decode(ctx, wire);
+      SdlCodec.Message copy = SdlCodec.decode(ctx, wire);
+      if (!Arrays.equals(wire, SdlCodec.encode(ctx, copy)))
+         throw new AssertionError("round trip differs: " + label);
       for (int i = 0; i < 1000; i++) {
          sink = SdlCodec.encode(ctx, value);
          sink = SdlCodec.decode(ctx, wire);
@@ -85,5 +87,15 @@ public final class SdlJavaBench {
       }
       packed.samples = new SdlCodec.Complex32Array(re, im);
       bench("packed", packed, 40200);
+      bench_cases.BenchRecordBatch batch = new bench_cases.BenchRecordBatch();
+      for (int i = 0; i < 1000; i++) {
+         bench_cases.BenchRecord record = new bench_cases.BenchRecord();
+         record.id = i;
+         record.pose.position.values = new Float[]{i * .25f, -i * .5f, (float)(i % 97)};
+         record.pose.rotation = new Float[]{0.f, 0.f, 0.f, 1.f};
+         record.measures = new Float[]{i * .125f, -(i % 31) * .5f};
+         batch.records.add(record);
+      }
+      bench("packed_struct", batch, 40000);
    }
 }

@@ -12,6 +12,17 @@
 #define SDL_DYNAMIC_MAX_NESTING 64U
 
 typedef struct {
+   size_t native_offset, wire_offset, width, count;
+   const SdlTypeDesc *checked_type; /* bool/enum values require validation. */
+} SdlFixedSpan;
+
+typedef struct {
+   SdlFixedSpan *spans;
+   size_t span_count, capacity, wire_size, native_size, steps;
+   bool checked_values;
+} SdlFixedPlan;
+
+typedef struct {
    uint32_t id;
    char *name;
    uint8_t modifier;
@@ -19,6 +30,7 @@ typedef struct {
    uint8_t dimension_count;
    uint32_t *dimensions;
    const SdlFieldDesc *local;
+   const SdlFixedPlan *record_plan;
 } SdlDynamicFieldDesc;
 
 typedef struct {
@@ -27,6 +39,7 @@ typedef struct {
    SdlDynamicFieldDesc *fields;
    const SdlTypeDesc *local;
    size_t height, fixed_size;
+   SdlFixedPlan plan;
    bool fixed_ready, emission_ready, can_encode;
 } SdlDynamicMessageDesc;
 
@@ -147,6 +160,7 @@ static void schema_clear(SdlDynamicSchema *schema) {
                free(message->fields[j].dimensions);
             }
          free(message->fields);
+         free(message->plan.spans);
       }
    free(schema->messages);
    if (schema->enums != NULL)
@@ -641,6 +655,91 @@ static bool bind_schema(SdlDynamicSchema *s) {
    return true;
 }
 
+/* Flatten fixed native records during preparation. Adjacent components of the
+   same width share a span, even across nested structures and fixed arrays.
+   Offsets preserve native padding; packed wire data never contains padding. */
+static bool fixed_plan_add(const SdlDynamicSchema *s, SdlFixedPlan *p, const SdlTypeDesc *t, size_t native,
+                           size_t depth) {
+   size_t i, width, count = 1;
+   const SdlTypeDesc *checked = NULL;
+   SdlFixedSpan *span;
+   if (depth > SDL_DYNAMIC_MAX_NESTING || ++p->steps > 65536)
+      return false;
+   if (t->kind == SDL_TYPE_STRUCT) {
+      const SdlDynamicMessageDesc *m = schema_message_const(s, native_name(t));
+      if (!m || !m->can_encode)
+         return false;
+      for (i = 0; i < t->detail.structure.field_count; ++i) {
+         const SdlFieldDesc *f = &t->detail.structure.fields[i];
+         if (m->fields[i].local != f ||
+             f->flags & (SDL_FIELD_OPTIONAL | SDL_FIELD_REPEATED) ||
+             !fixed_plan_add(s, p, f->type, native + f->offset, depth + 1))
+            return false;
+      }
+      return true;
+   }
+   if (t->kind == SDL_TYPE_ARRAY) {
+      const SdlTypeDesc *element = t->detail.array.element;
+      if (element->kind >= SDL_TYPE_INT8 && element->kind <= SDL_TYPE_COMPLEX64 &&
+          t->detail.array.count) {
+         size_t extra = t->detail.array.count - 1;
+         if (!fixed_plan_add(s, p, element, native, depth + 1))
+            return false;
+         span = &p->spans[p->span_count - 1];
+         span->count += extra * (element->size / span->width);
+         p->wire_size += extra * element->size;
+         return true;
+      }
+      if (t->detail.array.count > 65536)
+         return false;
+      for (i = 0; i < t->detail.array.count; ++i)
+         if (!fixed_plan_add(s, p, element, native + i * element->size, depth + 1))
+            return false;
+      return true;
+   }
+   width = sdl_fixed_wire_size(t);
+   if (!width)
+      return false;
+   if (t->kind == SDL_TYPE_BOOL || t->kind == SDL_TYPE_ENUM)
+      checked = t;
+   if (t->kind == SDL_TYPE_COMPLEX32 || t->kind == SDL_TYPE_COMPLEX64) {
+      width /= 2;
+      count = 2;
+   }
+   if (!checked && t->size != width * count)
+      return false;
+   if (!checked && p->span_count) {
+      span = &p->spans[p->span_count - 1];
+      if (!span->checked_type && span->width == width &&
+          span->native_offset + span->width * span->count == native) {
+         span->count += count;
+         p->wire_size += width * count;
+         return true;
+      }
+   }
+   /* Bound plan memory for pathological fixed dimensions. Falling back to the
+      generic codec is safe and does not reject otherwise valid catalogues. */
+   if (p->span_count == 65536)
+      return false;
+   if (p->span_count == p->capacity) {
+      size_t capacity = p->capacity ? p->capacity * 2 : 8;
+      void *spans = realloc(p->spans, capacity * sizeof(*p->spans));
+      if (!spans)
+         return false;
+      p->spans = (SdlFixedSpan *)spans;
+      p->capacity = capacity;
+   }
+   span = &p->spans[p->span_count++];
+   span->native_offset = native;
+   span->wire_offset = p->wire_size;
+   span->width = width;
+   span->count = count;
+   span->checked_type = checked;
+   p->checked_values |= checked != NULL;
+   p->wire_size += width * count;
+   return true;
+}
+
 static bool emission_match(const SdlDynamicSchema *, const SdlDynamicMessageDesc *, size_t);
 SdlContext *type_prepare(const void *text, size_t size) {
    size_t i;
@@ -653,6 +752,26 @@ SdlContext *type_prepare(const void *text, size_t size) {
    }
    for (i = 0; i < c->schema.message_count; ++i)
       emission_match(&c->schema, &c->schema.messages[i], 0);
+   for (i = 0; i < c->schema.message_count; ++i) {
+      SdlDynamicMessageDesc *m = &c->schema.messages[i];
+      if (m->can_encode && m->fixed_size &&
+          fixed_plan_add(&c->schema, &m->plan, m->local, 0, 0) && m->plan.wire_size == m->fixed_size) {
+         m->plan.native_size = m->local->size;
+      } else {
+         free(m->plan.spans);
+         memset(&m->plan, 0, sizeof(m->plan));
+      }
+   }
+   for (i = 0; i < c->schema.message_count; ++i) {
+      SdlDynamicMessageDesc *m = &c->schema.messages[i];
+      size_t j;
+      for (j = 0; j < m->field_count; ++j) {
+         SdlDynamicFieldDesc *f = &m->fields[j];
+         const SdlDynamicMessageDesc *child = schema_message_const(&c->schema, f->type_name);
+         if (!f->dimension_count && child && child->plan.span_count)
+            f->record_plan = &child->plan;
+      }
+   }
    return c;
 }
 void type_context_free(SdlContext *c) {
@@ -741,10 +860,63 @@ static bool write_native_sequence(const SdlTypeDesc *t, const void *items, size_
    w->offset += bytes;
    return true;
 }
-static bool write_native(const SdlTypeDesc *t, const void *value, Writer *w, size_t length) {
+static bool write_fixed_records(const SdlFixedPlan *p, const void *items,
+                                 size_t count, Writer *w) {
+   size_t bytes, i, j;
+   uint8_t *dst;
+   if (!count)
+      return true;
+   if (count > SIZE_MAX / p->wire_size || count > SIZE_MAX / p->native_size)
+      return false;
+   bytes = count * p->wire_size;
+   if (bytes > SIZE_MAX - w->offset || (w->data && bytes > w->size - w->offset))
+      return false;
+   if (!w->data) {
+      /* Preserve encode_size validation for enums without converting numbers. */
+      for (j = 0; j < p->span_count; ++j) {
+         const SdlFixedSpan *span = &p->spans[j];
+         if (span->checked_type && span->checked_type->kind == SDL_TYPE_ENUM)
+            for (i = 0; i < count; ++i) {
+               uint8_t scratch[16];
+               const uint8_t *src = (const uint8_t *)items + i * p->native_size + span->native_offset;
+               if (!sdl_value_encode_fixed(span->checked_type, src, scratch, sizeof(scratch)))
+                  return false;
+            }
+      }
+      w->offset += bytes;
+      return true;
+   }
+   dst = w->data + w->offset;
+   if (p->span_count == 1 && !p->spans[0].checked_type &&
+       p->spans[0].native_offset == 0 && p->native_size == p->wire_size) {
+      sdl_wire_convert_array(dst, items, p->spans[0].width,
+                             count * p->spans[0].count);
+   } else {
+      for (i = 0; i < count; ++i)
+         for (j = 0; j < p->span_count; ++j) {
+            const SdlFixedSpan *span = &p->spans[j];
+            const uint8_t *src = (const uint8_t *)items + i * p->native_size + span->native_offset;
+            uint8_t *wire = dst + i * p->wire_size + span->wire_offset;
+            if (span->checked_type) {
+               if (!sdl_value_encode_fixed(span->checked_type, src, wire, span->width))
+                  return false;
+            } else {
+               sdl_wire_convert_array(wire, src, span->width, span->count);
+            }
+         }
+   }
+   w->offset += bytes;
+   return true;
+}
+
+static bool write_native(const SdlDynamicSchema *s, const SdlTypeDesc *t,
+                          const void *value, Writer *w, size_t length) {
    size_t i;
    uint8_t temp[16];
    if (t->kind == SDL_TYPE_STRUCT) {
+      const SdlDynamicMessageDesc *m = schema_message_const(s, native_name(t));
+      if (m && m->plan.span_count)
+         return write_fixed_records(&m->plan, value, 1, w);
       for (i = 0; i < t->detail.structure.field_count; ++i) {
          const SdlFieldDesc *f = &t->detail.structure.fields[i];
          const uint8_t *base = (const uint8_t *)value;
@@ -760,6 +932,14 @@ static bool write_native(const SdlTypeDesc *t, const void *value, Writer *w, siz
             items = *(const void *const *)items;
             if ((count && !items) || !write_count(w, count))
                return false;
+         }
+         if (f->type->kind == SDL_TYPE_STRUCT) {
+            const SdlDynamicMessageDesc *child = schema_message_const(s, native_name(f->type));
+            if (child && child->plan.span_count) {
+               if (!write_fixed_records(&child->plan, items, count, w))
+                  return false;
+               continue;
+            }
          }
          if (f->type->kind <= SDL_TYPE_COMPLEX64) {
             if (!write_native_sequence(f->type, items, count, w))
@@ -782,7 +962,7 @@ static bool write_native(const SdlTypeDesc *t, const void *value, Writer *w, siz
                      n = v;
                }
             }
-            if (!write_native(f->type, item, w, n))
+            if (!write_native(s, f->type, item, w, n))
                return false;
          }
       }
@@ -790,7 +970,7 @@ static bool write_native(const SdlTypeDesc *t, const void *value, Writer *w, siz
    }
    if (t->kind == SDL_TYPE_ARRAY) {
       for (i = 0; i < t->detail.array.count; ++i)
-         if (!write_native(t->detail.array.element,
+         if (!write_native(s, t->detail.array.element,
                            (const uint8_t *)value + i * t->detail.array.element->size, w, SIZE_MAX))
             return false;
       return true;
@@ -831,7 +1011,7 @@ size_t type_encode_size(const SdlContext *c, const char *name, const void *value
       return 0;
    m = schema_message_const(&c->schema, name);
    if (!m || !m->can_encode || !write_count(&w, (size_t)(m - c->schema.messages) + 1) ||
-       !write_native(m->local, value, &w, SIZE_MAX))
+       !write_native(&c->schema, m->local, value, &w, SIZE_MAX))
       return 0;
    return w.offset;
 }
@@ -850,7 +1030,7 @@ void *type_encode(const SdlContext *c, const char *name, const void *value, size
       return NULL;
    m = schema_message_const(&c->schema, name);
    if (!write_count(&w, (size_t)(m - c->schema.messages) + 1) ||
-       !write_native(m->local, value, &w, SIZE_MAX)) {
+       !write_native(&c->schema, m->local, value, &w, SIZE_MAX)) {
       free(w.data);
       return NULL;
    }
@@ -890,11 +1070,49 @@ static const SdlTypeDesc *primitive_native(const char *name) {
 static bool read_native_value(const SdlDynamicSchema *, const char *, const uint32_t *, size_t,
                               const SdlTypeDesc *, void *, uint32_t *, SdlDynamicReader *, Pool *,
                               size_t);
+static bool read_fixed_records(const SdlDynamicSchema *s, const SdlFixedPlan *p,
+                                size_t count, void *items, bool validate_local, SdlDynamicReader *r) {
+   const uint8_t *bytes;
+   size_t i, j;
+   if (count > SIZE_MAX / p->wire_size || !reader_read(r, count * p->wire_size, &bytes))
+      return false;
+   if (!items && !p->checked_values)
+      return true;
+   if (p->span_count == 1 && !p->spans[0].checked_type &&
+       p->spans[0].native_offset == 0 && p->native_size == p->wire_size) {
+      if (items)
+         sdl_wire_convert_array(items, bytes, p->spans[0].width,
+                                count * p->spans[0].count);
+      return true;
+   }
+   for (i = 0; i < count; ++i)
+      for (j = 0; j < p->span_count; ++j) {
+         const SdlFixedSpan *span = &p->spans[j];
+         const uint8_t *wire = bytes + i * p->wire_size + span->wire_offset;
+         uint8_t scratch[16];
+         uint8_t *dst = items ? (uint8_t *)items + i * p->native_size + span->native_offset : NULL;
+         if (span->checked_type) {
+            if (span->checked_type->kind == SDL_TYPE_ENUM &&
+                !enum_item(s, native_name(span->checked_type), (int32_t)sdl_wire_read_u32(wire)))
+               return false;
+            if (span->checked_type->kind == SDL_TYPE_ENUM && !validate_local)
+               continue;
+            if (!sdl_value_decode_fixed(span->checked_type, wire, dst ? dst : scratch))
+               return false;
+         } else if (dst) {
+            sdl_wire_convert_array(dst, wire, span->width, span->count);
+         }
+      }
+   return true;
+}
+
 static bool read_native_message(const SdlDynamicSchema *s, const SdlDynamicMessageDesc *m,
                                 void *value, SdlDynamicReader *r, Pool *pool, size_t depth) {
    size_t i, j;
    if (depth > 64)
       return false;
+   if (m->plan.span_count)
+      return read_fixed_records(s, &m->plan, 1, value, pool != NULL, r);
    for (i = 0; i < m->field_count; ++i) {
       const SdlDynamicFieldDesc *f = &m->fields[i];
       const SdlFieldDesc *local = value ? f->local : NULL;
@@ -940,6 +1158,12 @@ static bool read_native_message(const SdlDynamicSchema *s, const SdlDynamicMessa
                   lengths = (uint32_t *)(base + local->string_length_offset);
             }
          }
+      }
+      if (f->record_plan) {
+         if (!read_fixed_records(s, f->record_plan, count, local ? items : NULL,
+                                  f->local && pool, r))
+            return false;
+         continue;
       }
       /* Resolve once per field and validate a whole primitive span. No numeric
          conversion is needed in the storage sizing or unknown-field pass. */
@@ -1199,8 +1423,10 @@ char *type_description(const char *const *types, size_t count, size_t *size) {
       }
       schema_clear(&part);
    }
-   qsort(merged.messages, merged.message_count, sizeof(*merged.messages), compare_message);
-   qsort(merged.enums, merged.enum_count, sizeof(*merged.enums), compare_enum);
+   if (merged.message_count > 1)
+      qsort(merged.messages, merged.message_count, sizeof(*merged.messages), compare_message);
+   if (merged.enum_count > 1)
+      qsort(merged.enums, merged.enum_count, sizeof(*merged.enums), compare_enum);
    if (!render_schema(&merged, &w) || w.offset > SDL_DYNAMIC_MAX_DESCRIPTOR)
       goto done;
    w.size = w.offset;

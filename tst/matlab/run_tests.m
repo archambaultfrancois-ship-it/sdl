@@ -2,7 +2,7 @@ function run_tests()
 ctx=sdl_matlab_runtime('prepare',Packet('description'),{'Packet'});
 m=Packet('new');m.active=true;m.code=int16(-2);m.label='été';m.samples=int16([300;-1]);wire=Packet('encode',ctx,m);
 f=fopen('tst/fixtures/packet.bin','rb');fixture=fread(f,Inf,'*uint8');fclose(f);assert(isequal(wire,fixture));
-f=fopen('tst/fixtures/packet.sdl2','rb');text=fread(f,Inf,'*uint8');fclose(f);assert(isequal(uint8(unicode2native(Packet('description'),'UTF-8'))(:),text));
+f=fopen('tst/fixtures/packet.sdl2','rb');text=fread(f,Inf,'*uint8');fclose(f);description_bytes=uint8(unicode2native(Packet('description'),'UTF-8'));assert(isequal(description_bytes(:),text));
 p=Packet('decode',ctx,wire);assert(p.active&&p.code==-2&&strcmp(p.label,m.label)&&isequal(p.samples,m.samples));
 for n=0:numel(wire)-1,must_fail(@() Packet('decode',ctx,wire(1:n)));end
 must_fail(@() Packet('decode',ctx,[wire;uint8(0)]));must_fail(@() Packet('decode',ctx,uint8([129;0])));must_fail(@() Packet('decode',ctx,uint8([255;255;255;255;16])));
