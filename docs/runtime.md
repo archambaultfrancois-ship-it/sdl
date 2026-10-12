@@ -183,8 +183,47 @@ default to empty lists. Fixed arrays are nested lists with the declared
 dimensions. The generated class definitions are the authoritative Python
 field types.
 
+## Java 7+
+
+Generate Java sources with `gen/generator.py -java`. Each `.sdl` file produces
+one wrapper class in the default Java package, with its enums and messages as
+public static nested types. `SdlCodec.java` is the dependency-free runtime.
+From the repository root:
+
+```sh
+python3 gen/generator.py -java sdl build/generated
+mkdir -p build/java-classes
+javac -d build/java-classes build/generated/java/*.java
+```
+
+For a schema file named `codec_cases.sdl`, use `codec_cases.CodecCases` and
+`codec_cases.State`. Message fields are public and strongly typed: optional
+fields are nullable boxed values, repeated and packed fields are mutable
+`java.util.List` instances, and fixed arrays use Java arrays. Complex numbers
+are represented by `SdlCodec.Complex32` and `SdlCodec.Complex64`.
+Packed complex fields use `SdlCodec.Complex32Array` or
+`SdlCodec.Complex64Array`; each stores its real and imaginary components in
+primitive `re` and `im` arrays. Assign equal-length arrays directly to avoid
+allocating one Java object per complex value.
+
+```java
+codec_cases.CodecCases message = new codec_cases.CodecCases();
+message.state = codec_cases.State.READY;
+message.samples.add(Short.valueOf((short) 12));
+message.points = new SdlCodec.Complex32Array(
+    new float[] { 1.0f, 2.0f }, new float[] { -1.0f, 0.5f });
+byte[] frame = message.encode();
+codec_cases.CodecCases copy = codec_cases.CodecCases.decode(frame);
+```
+
+Generated code and runtime use Java 7 language and library features. The local
+`make test-java` target defaults to compiler source/target 8 because newer JDKs
+removed Java 7 source mode; on a JDK that still accepts Java 7, pass
+`JAVA_SOURCE=1.7`. The runtime reads `SDL_WIRE_ENDIAN=little` for little endian;
+otherwise it uses big endian.
+
 ## Wire byte order
 
 All peers exchanging frames must use the same configured byte order. The
 runtime defaults to big endian. See [wire_descriptor.md](wire_descriptor.md)
-for the C, Rust, and Python configuration options.
+for the wire descriptor and per-language configuration options.

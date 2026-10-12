@@ -9,6 +9,7 @@ from c_backend import CBackend, generate_c
 from generator import MsgParser, canonical_type_descriptor
 from rust_backend import RustBackend, generate_rust
 from python_backend import PythonBackend, generate_python
+from java_backend import JavaBackend, generate_java
 
 
 class GeneratorValidationTests(unittest.TestCase):
@@ -320,6 +321,7 @@ message Packet {
          (generate_c, 'obsolete.c', 'custom.c'),
          (generate_rust, 'obsolete.rs', 'custom.rs'),
          (generate_python, 'obsolete.py', 'custom.py'),
+         (generate_java, 'obsolete.java', 'custom.java'),
       )
       for generate, obsolete_file, custom_file in cases:
          with self.subTest(backend=obsolete_file), tempfile.TemporaryDirectory() as directory:
@@ -406,6 +408,28 @@ message Packet {
             self.assertEqual(before_type_collision,
                {path.name: path.read_bytes() for path in output_path.iterdir()
                   if path.is_file()})
+
+   def test_02_backend_18_java_backend_emits_java7_style_codec(self):
+      schema = MsgParser()
+      schema.parse_text('''
+enum State {
+   UNKNOWN = 0;
+   READY = 1;
+}
+message Packet {
+   1: optional string text;
+   2: required int32[2] values;
+   3: packed State states;
+   4: packed c32 points;
+}
+''')
+      source = JavaBackend(schema, 'fixture').generate()
+      self.assertIn('public enum State implements SdlCodec.EnumValue', source)
+      self.assertIn('public static final class Packet implements SdlCodec.Message', source)
+      self.assertIn('new Integer[]{Integer.valueOf(0),Integer.valueOf(0)}', source)
+      self.assertIn('SdlCodec.Complex32Array points;', source)
+      self.assertNotIn('->', source)
+      self.assertNotIn('<>', source)
 
    def test_02_backend_06_rust_and_python_backends_reject_case_colliding_modules_safely(self):
       cases = (
