@@ -5,7 +5,7 @@
 #include <limits.h>
 #include <string.h>
 
-/* SDL wire v1 uses little-endian values, field IDs, and lengths. */
+/* SDL wire values, field IDs, and lengths use the configured byte order. */
 
 static size_t align_pool_offset(const uint8_t *pool, size_t value,
    size_t alignment) {
@@ -34,6 +34,167 @@ static const void *field_value(const SdlFieldDesc *field, const void *object) {
 static bool field_present(const SdlFieldDesc *field, const void *object) {
    return field->presence_offset == SDL_NO_OFFSET ||
       *((const bool *)((const uint8_t *)object + field->presence_offset));
+}
+
+static size_t fixed_wire_size_depth(const SdlTypeDesc *type,
+   const SdlTypeDesc **active, size_t depth) {
+   size_t size;
+   size_t i;
+   if (depth >= 64) return 0;
+   switch (type->kind) {
+      case SDL_TYPE_BOOL:
+      case SDL_TYPE_INT8: return 1;
+      case SDL_TYPE_INT16: return 2;
+      case SDL_TYPE_INT32:
+      case SDL_TYPE_FLOAT32: return 4;
+      case SDL_TYPE_INT64:
+      case SDL_TYPE_FLOAT64: return 8;
+      case SDL_TYPE_COMPLEX32: return 8;
+      case SDL_TYPE_COMPLEX64: return 16;
+      case SDL_TYPE_ENUM: return 4;
+      case SDL_TYPE_STRUCT: break;
+      default: return 0;
+   }
+   for (i = 0; i < depth; ++i)
+      if (active[i] == type) return 0;
+   active[depth] = type;
+   size = 0;
+   for (i = 0; i < type->detail.structure.field_count; ++i) {
+      const SdlFieldDesc *field = &type->detail.structure.fields[i];
+      size_t field_size;
+      if ((field->flags & (SDL_FIELD_OPTIONAL | SDL_FIELD_REPEATED)) != 0)
+         return 0;
+      field_size = fixed_wire_size_depth(field->type, active, depth + 1);
+      if (field_size == 0 || size > SIZE_MAX - field_size) return 0;
+      size += field_size;
+   }
+   return size;
+}
+
+size_t sdl_fixed_wire_size(const SdlTypeDesc *type) {
+   const SdlTypeDesc *active[64];
+   return fixed_wire_size_depth(type, active, 0);
+}
+
+bool sdl_value_encode_fixed(const SdlTypeDesc *type, const void *value,
+   uint8_t *buffer, size_t capacity) {
+   size_t size = sdl_fixed_wire_size(type);
+   size_t offset = 0;
+   size_t i;
+   if (size == 0 || capacity < size) return false;
+   if (type->kind == SDL_TYPE_STRUCT) {
+      for (i = 0; i < type->detail.structure.field_count; ++i) {
+         const SdlFieldDesc *field = &type->detail.structure.fields[i];
+         size_t field_size = sdl_fixed_wire_size(field->type);
+         if (!sdl_value_encode_fixed(field->type,
+               (const uint8_t *)value + field->offset, buffer + offset,
+               capacity - offset)) return false;
+         offset += field_size;
+      }
+      return true;
+   }
+   if (type->kind == SDL_TYPE_ENUM) {
+      int32_t enum_value = 0;
+      if (type->size == 1) {
+         int8_t part; memcpy(&part, value, 1); enum_value = part;
+      } else if (type->size == 2) {
+         int16_t part; memcpy(&part, value, 2); enum_value = part;
+      } else if (type->size == 4) {
+         memcpy(&enum_value, value, 4);
+      } else {
+         return false;
+      }
+      sdl_wire_write_u32(buffer, (uint32_t)enum_value);
+      return true;
+   }
+   if (type->kind == SDL_TYPE_BOOL) {
+      buffer[0] = *(const bool *)value ? 1U : 0U;
+      return true;
+   }
+   if (type->kind == SDL_TYPE_COMPLEX32) {
+      float complex complex_value;
+      float parts[2];
+      uint32_t bits;
+      memcpy(&complex_value, value, sizeof(complex_value));
+      parts[0] = crealf(complex_value);
+      parts[1] = cimagf(complex_value);
+      memcpy(&bits, &parts[0], 4); sdl_wire_write_u32(buffer, bits);
+      memcpy(&bits, &parts[1], 4); sdl_wire_write_u32(buffer + 4, bits);
+      return true;
+   }
+   if (type->kind == SDL_TYPE_COMPLEX64) {
+      double complex complex_value;
+      double parts[2];
+      memcpy(&complex_value, value, sizeof(complex_value));
+      parts[0] = creal(complex_value);
+      parts[1] = cimag(complex_value);
+      sdl_wire_encode_native(buffer, &parts[0], 8);
+      sdl_wire_encode_native(buffer + 8, &parts[1], 8);
+      return true;
+   }
+   sdl_wire_encode_native(buffer, value, size);
+   return true;
+}
+
+bool sdl_value_decode_fixed(const SdlTypeDesc *type, const uint8_t *buffer,
+   void *value) {
+   size_t size = sdl_fixed_wire_size(type);
+   size_t offset = 0;
+   size_t i;
+   if (size == 0) return false;
+   if (type->kind == SDL_TYPE_STRUCT) {
+      for (i = 0; i < type->detail.structure.field_count; ++i) {
+         const SdlFieldDesc *field = &type->detail.structure.fields[i];
+         size_t field_size = sdl_fixed_wire_size(field->type);
+         if (!sdl_value_decode_fixed(field->type, buffer + offset,
+               (uint8_t *)value + field->offset)) return false;
+         offset += field_size;
+      }
+      return true;
+   }
+   if (type->kind == SDL_TYPE_ENUM) {
+      int32_t enum_value = (int32_t)sdl_wire_read_u32(buffer);
+      if (type->size == 1) {
+         int8_t part = (int8_t)enum_value;
+         if (part != enum_value) return false;
+         memcpy(value, &part, 1);
+      } else if (type->size == 2) {
+         int16_t part = (int16_t)enum_value;
+         if (part != enum_value) return false;
+         memcpy(value, &part, 2);
+      } else if (type->size == 4) {
+         memcpy(value, &enum_value, 4);
+      } else {
+         return false;
+      }
+      return true;
+   }
+   if (type->kind == SDL_TYPE_BOOL) {
+      if (buffer[0] > 1) return false;
+      *(bool *)value = buffer[0] != 0;
+      return true;
+   }
+   if (type->kind == SDL_TYPE_COMPLEX32) {
+      uint32_t bits;
+      float parts[2];
+      float complex complex_value;
+      bits = sdl_wire_read_u32(buffer); memcpy(&parts[0], &bits, 4);
+      bits = sdl_wire_read_u32(buffer + 4); memcpy(&parts[1], &bits, 4);
+      memcpy(&complex_value, parts, sizeof(complex_value));
+      memcpy(value, &complex_value, sizeof(complex_value));
+      return true;
+   }
+   if (type->kind == SDL_TYPE_COMPLEX64) {
+      double parts[2];
+      double complex complex_value;
+      sdl_wire_decode_native(&parts[0], buffer, 8);
+      sdl_wire_decode_native(&parts[1], buffer + 8, 8);
+      memcpy(&complex_value, parts, sizeof(complex_value));
+      memcpy(value, &complex_value, sizeof(complex_value));
+      return true;
+   }
+   sdl_wire_decode_native(value, buffer, size);
+   return true;
 }
 
 static size_t value_measure(const SdlTypeDesc *type, const void *value);
@@ -181,6 +342,27 @@ static size_t encode_struct(const SdlTypeDesc *type, const void *value,
          field_data = *(const void * const *)field_data;
          if (count != 0 && field_data == NULL)
             return SIZE_MAX;
+         if ((field->flags & SDL_FIELD_PACKED) != 0) {
+            if (count == 0) continue;
+            size_t fixed_size = sdl_fixed_wire_size(field->type);
+            size_t payload_size;
+            if (fixed_size == 0 || count > SIZE_MAX / fixed_size)
+               return SIZE_MAX;
+            payload_size = (size_t)count * fixed_size;
+            if (payload_size > UINT32_MAX || offset > capacity ||
+                capacity - offset < 8 || payload_size > capacity - offset - 8)
+               return SIZE_MAX;
+            sdl_wire_write_u32(buffer + offset, field->id);
+            sdl_wire_write_u32(buffer + offset + 4, (uint32_t)payload_size);
+            for (item = 0; item < count; ++item) {
+               if (!sdl_value_encode_fixed(field->type,
+                     (const uint8_t *)field_data + item * field->type->size,
+                     buffer + offset + 8 + item * fixed_size, fixed_size))
+                  return SIZE_MAX;
+            }
+            offset += 8 + payload_size;
+            continue;
+         }
       }
       for (item = 0; item < count; ++item) {
          size_t payload;
@@ -302,8 +484,18 @@ size_t sdl_value_decode_measure(const SdlTypeDesc *type,
       for (field_index = 0; field_index < field_count; ++field_index)
          if (type->detail.structure.fields[field_index].id == id) break;
       if (field_index < field_count &&
-          (type->detail.structure.fields[field_index].flags & SDL_FIELD_REPEATED) != 0)
-         ++counts[field_index];
+          (type->detail.structure.fields[field_index].flags & SDL_FIELD_REPEATED) != 0) {
+         const SdlFieldDesc *field = &type->detail.structure.fields[field_index];
+         size_t item_count = 1;
+         if ((field->flags & SDL_FIELD_PACKED) != 0) {
+            size_t fixed_size = sdl_fixed_wire_size(field->type);
+            if (fixed_size == 0 || (size_t)length % fixed_size != 0)
+               return SIZE_MAX;
+            item_count = (size_t)length / fixed_size;
+         }
+         if (counts[field_index] > SIZE_MAX - item_count) return SIZE_MAX;
+         counts[field_index] += item_count;
+      }
       offset += length;
    }
    for (i = 0; i < field_count; ++i) {
@@ -327,10 +519,13 @@ size_t sdl_value_decode_measure(const SdlTypeDesc *type,
       for (field_index = 0; field_index < field_count; ++field_index)
          if (type->detail.structure.fields[field_index].id == id) break;
       if (field_index < field_count) {
-         size_t extra = sdl_value_decode_measure(type->detail.structure.fields[field_index].type,
-            buffer + offset, length);
-         if (extra == SIZE_MAX || total > SIZE_MAX - extra) return SIZE_MAX;
-         total += extra;
+         const SdlFieldDesc *field = &type->detail.structure.fields[field_index];
+         if ((field->flags & SDL_FIELD_PACKED) == 0) {
+            size_t extra = sdl_value_decode_measure(field->type,
+               buffer + offset, length);
+            if (extra == SIZE_MAX || total > SIZE_MAX - extra) return SIZE_MAX;
+            total += extra;
+         }
       }
       offset += length;
    }
@@ -409,8 +604,17 @@ bool sdl_value_decode(const SdlTypeDesc *type, const uint8_t *buffer,
          uint32_t length = sdl_wire_read_u32(buffer + offset + 4);
          for (i = 0; i < field_count; ++i)
             if (type->detail.structure.fields[i].id == id &&
-                (type->detail.structure.fields[i].flags & SDL_FIELD_REPEATED) != 0)
-               ++counts[i];
+                (type->detail.structure.fields[i].flags & SDL_FIELD_REPEATED) != 0) {
+               const SdlFieldDesc *field = &type->detail.structure.fields[i];
+               if ((field->flags & SDL_FIELD_PACKED) != 0) {
+                  size_t fixed_size = sdl_fixed_wire_size(field->type);
+                  if (fixed_size == 0 || (size_t)length % fixed_size != 0)
+                     return false;
+                  counts[i] += (size_t)length / fixed_size;
+               } else {
+                  ++counts[i];
+               }
+            }
          offset += 8 + length;
       }
       for (i = 0; i < field_count; ++i) {
@@ -449,6 +653,24 @@ bool sdl_value_decode(const SdlTypeDesc *type, const uint8_t *buffer,
                *((bool *)((uint8_t *)value + field->presence_offset)) = true;
             if ((field->flags & SDL_FIELD_REPEATED) != 0) {
                uint8_t *items = *(uint8_t **)target;
+               if ((field->flags & SDL_FIELD_PACKED) != 0) {
+                  size_t fixed_size = sdl_fixed_wire_size(field->type);
+                  size_t item_count;
+                  size_t item;
+                  if (fixed_size == 0 || (size_t)length % fixed_size != 0)
+                     return false;
+                  item_count = (size_t)length / fixed_size;
+                  for (item = 0; item < item_count; ++item) {
+                     void *item_target = items +
+                        (seen[field_index] + item) * field->type->size;
+                     if (!sdl_value_decode_fixed(field->type,
+                           buffer + offset + item * fixed_size, item_target))
+                        return false;
+                  }
+                  seen[field_index] += item_count;
+                  offset += length;
+                  continue;
+               }
                target = items + seen[field_index] * field->type->size;
                ++seen[field_index];
             }

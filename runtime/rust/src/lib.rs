@@ -1,6 +1,6 @@
 mod wire;
 
 pub use wire::{
-   decode, encode, write_field, CodecError, Complex32, Complex64, SdlMessage,
-   WireValue,
+   decode, encode, read_packed_field, write_field, write_packed_field, CodecError,
+   Complex32, Complex64, FixedWire, SdlMessage, WireValue,
 };

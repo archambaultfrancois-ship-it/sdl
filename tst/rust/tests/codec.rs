@@ -110,6 +110,15 @@ fn noncanonical_boolean_payload_is_rejected() {
 }
 
 #[test]
+fn packed_field_rejects_non_multiple_element_length() {
+   let mut wire = encode(&codec_cases()).unwrap();
+   wire.extend_from_slice(&wire_u32(15));
+   wire.extend_from_slice(&wire_u32(1));
+   wire.push(0);
+   assert_eq!(decode::<CodecCases>(&wire), Err(CodecError::TypeMismatch));
+}
+
+#[test]
 fn wrong_type_hash_is_rejected() {
    let mut wire = encode(&codec_cases()).unwrap();
    wire[0] ^= 0x80;

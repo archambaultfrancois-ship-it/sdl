@@ -43,6 +43,13 @@ pub trait WireValue: Sized {
    fn decode_payload(payload: &[u8]) -> Result<Self, CodecError>;
 }
 
+pub trait FixedWire: Sized {
+   const WIRE_SIZE: usize;
+
+   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError>;
+   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError>;
+}
+
 pub trait SdlMessage: WireValue + Default {
    const HASH: u32;
 
@@ -107,6 +114,37 @@ pub fn write_field<T: WireValue>(
    Ok(())
 }
 
+pub fn write_packed_field<T: FixedWire>(
+   id: u32,
+   values: &[T],
+   output: &mut Vec<u8>,
+) -> Result<(), CodecError> {
+   if values.is_empty() {
+      return Ok(());
+   }
+   if T::WIRE_SIZE == 0 || values.len() > u32::MAX as usize / T::WIRE_SIZE {
+      return Err(CodecError::LengthOverflow);
+   }
+   let payload_length = values.len() * T::WIRE_SIZE;
+   output.extend_from_slice(&wire_u32(id));
+   output.extend_from_slice(&wire_u32(payload_length as u32));
+   for value in values {
+      value.encode_fixed(output)?;
+   }
+   Ok(())
+}
+
+pub fn read_packed_field<T: FixedWire>(payload: &[u8]) -> Result<Vec<T>, CodecError> {
+   if T::WIRE_SIZE == 0 || payload.len() % T::WIRE_SIZE != 0 {
+      return Err(CodecError::TypeMismatch);
+   }
+   let mut values = Vec::with_capacity(payload.len() / T::WIRE_SIZE);
+   for item in payload.chunks_exact(T::WIRE_SIZE) {
+      values.push(T::decode_fixed(item)?);
+   }
+   Ok(values)
+}
+
 fn read_u32(bytes: &[u8]) -> Result<u32, CodecError> {
    let bytes: [u8; 4] = bytes.try_into().map_err(|_| CodecError::Truncated)?;
    Ok(if cfg!(feature = "wire-little-endian") {
@@ -146,6 +184,24 @@ macro_rules! fixed_integer {
             })
          }
       }
+
+      impl FixedWire for $type {
+         const WIRE_SIZE: usize = $size;
+
+         fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
+            let bytes = if cfg!(feature = "wire-little-endian") {
+               self.to_le_bytes()
+            } else {
+               self.to_be_bytes()
+            };
+            output.extend_from_slice(&bytes);
+            Ok(())
+         }
+
+         fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
+            <Self as WireValue>::decode_payload(payload)
+         }
+      }
    };
 }
 
@@ -169,6 +225,19 @@ impl WireValue for bool {
    }
 }
 
+impl FixedWire for bool {
+   const WIRE_SIZE: usize = 1;
+
+   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
+      output.push(if *self { 1 } else { 0 });
+      Ok(())
+   }
+
+   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
+      <Self as WireValue>::decode_payload(payload)
+   }
+}
+
 impl WireValue for f32 {
    fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
       Ok(wire_u32(self.to_bits()).to_vec())
@@ -178,6 +247,19 @@ impl WireValue for f32 {
       let bytes: [u8; 4] = payload.try_into().map_err(|_| CodecError::TypeMismatch)?;
       let bits = read_u32(&bytes)?;
       Ok(Self::from_bits(bits))
+   }
+}
+
+impl FixedWire for f32 {
+   const WIRE_SIZE: usize = 4;
+
+   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
+      output.extend_from_slice(&wire_u32(self.to_bits()));
+      Ok(())
+   }
+
+   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
+      <Self as WireValue>::decode_payload(payload)
    }
 }
 
@@ -192,6 +274,19 @@ impl WireValue for f64 {
       }
       let bits = read_u64(payload)?;
       Ok(Self::from_bits(bits))
+   }
+}
+
+impl FixedWire for f64 {
+   const WIRE_SIZE: usize = 8;
+
+   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
+      output.extend_from_slice(&wire_u64(self.to_bits()));
+      Ok(())
+   }
+
+   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
+      <Self as WireValue>::decode_payload(payload)
    }
 }
 
@@ -214,6 +309,20 @@ impl WireValue for Complex32 {
    }
 }
 
+impl FixedWire for Complex32 {
+   const WIRE_SIZE: usize = 8;
+
+   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
+      output.extend_from_slice(&wire_u32(self.real.to_bits()));
+      output.extend_from_slice(&wire_u32(self.imag.to_bits()));
+      Ok(())
+   }
+
+   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
+      <Self as WireValue>::decode_payload(payload)
+   }
+}
+
 impl WireValue for Complex64 {
    fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
       let mut output = Vec::with_capacity(16);
@@ -232,6 +341,20 @@ impl WireValue for Complex64 {
          real: f64::from_bits(real),
          imag: f64::from_bits(imag),
       })
+   }
+}
+
+impl FixedWire for Complex64 {
+   const WIRE_SIZE: usize = 16;
+
+   fn encode_fixed(&self, output: &mut Vec<u8>) -> Result<(), CodecError> {
+      output.extend_from_slice(&wire_u64(self.real.to_bits()));
+      output.extend_from_slice(&wire_u64(self.imag.to_bits()));
+      Ok(())
+   }
+
+   fn decode_fixed(payload: &[u8]) -> Result<Self, CodecError> {
+      <Self as WireValue>::decode_payload(payload)
    }
 }
 

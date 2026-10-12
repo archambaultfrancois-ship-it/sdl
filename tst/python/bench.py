@@ -22,6 +22,7 @@ def main():
       ],
    )
    wire = encode(message)
+   assert len(wire) == 40220
 
    start = time.perf_counter()
    for unused_iteration in range(iterations):

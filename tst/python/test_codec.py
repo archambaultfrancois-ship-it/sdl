@@ -95,6 +95,11 @@ class CodecTests(unittest.TestCase):
       with self.assertRaisesRegex(CodecError, 'hash'):
          decode(bytes(wrong_hash), CodecCases)
 
+   def test_packed_field_rejects_non_multiple_element_length(self):
+      malformed = encode(codec_cases()) + wire_u32(15) + wire_u32(1) + b'\x00'
+      with self.assertRaisesRegex(CodecError, 'packed field length'):
+         decode(malformed, CodecCases)
+
 
 if __name__ == '__main__':
    unittest.main()

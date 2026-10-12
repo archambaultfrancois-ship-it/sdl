@@ -35,6 +35,7 @@ static void test_codec_cases(void) {
    uint8_t unknown_field[8];
    const uint8_t unknown_payload[3] = { 0xA1, 0xB2, 0xC3 };
    uint8_t invalid_bool_field[9];
+   uint8_t invalid_packed_field[9];
    bool bool_flags[3] = { true, false, true };
 
    sdl_wire_write_u32(unknown_field, 999);
@@ -42,6 +43,9 @@ static void test_codec_cases(void) {
    sdl_wire_write_u32(invalid_bool_field, 17);
    sdl_wire_write_u32(invalid_bool_field + 4, 1);
    invalid_bool_field[8] = 2;
+   sdl_wire_write_u32(invalid_packed_field, 15);
+   sdl_wire_write_u32(invalid_packed_field + 4, 1);
+   invalid_packed_field[8] = 0;
 
    memset(&input, 0, sizeof(input));
    input.has_tiny = true;
@@ -132,6 +136,17 @@ static void test_codec_cases(void) {
    assert(invalid != NULL);
    memcpy(invalid, encoded, encoded_size);
    memcpy(invalid + encoded_size, invalid_bool_field, sizeof(invalid_bool_field));
+   decode_size = extended_size;
+   invalid_decoded = (CodecCases *)type_decode(invalid, &decode_size);
+   assert(invalid_decoded == NULL);
+   type_free(invalid);
+
+   extended_size = encoded_size + sizeof(invalid_packed_field);
+   invalid = (uint8_t *)malloc(extended_size);
+   assert(invalid != NULL);
+   memcpy(invalid, encoded, encoded_size);
+   memcpy(invalid + encoded_size, invalid_packed_field,
+      sizeof(invalid_packed_field));
    decode_size = extended_size;
    invalid_decoded = (CodecCases *)type_decode(invalid, &decode_size);
    assert(invalid_decoded == NULL);

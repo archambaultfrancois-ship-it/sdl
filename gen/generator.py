@@ -87,7 +87,7 @@ class MsgParser:
             current_enum.pairs.append((match.group(1), match.group(2)))
             continue
          if current_msg is not None:
-            match = re.match(r'(\d+):\s+(optional|required|repeated)\s+(\w+)\s+(\w+)\s*;', line)
+            match = re.match(r'(\d+):\s+(optional|required|repeated|packed)\s+(\w+)\s+(\w+)\s*;', line)
             if not match:
                raise ValueError('invalid field declaration: ' + line)
             current_msg.fields.append(Field(match.group(1), match.group(2),
@@ -109,6 +109,9 @@ class MsgParser:
                raise ValueError('unknown type ' + field.type_name + ' in ' + message.name)
             ids.add(field.index)
             names.add(field.name)
+            if field.modifier == 'packed' and self.fixed_wire_size(field.type_name) is None:
+               raise ValueError('packed field type must have a fixed wire size: ' +
+                  message.name + '.' + field.name)
       for enum in self.enums.values():
          names = set()
          values = set()
@@ -117,6 +120,34 @@ class MsgParser:
                raise ValueError('duplicate enum name or value in ' + enum.name)
             names.add(name)
             values.add(int(value))
+
+   def fixed_wire_size(self, type_name, active=None):
+      primitive_sizes = {
+         'bool': 1, 'int8': 1, 'int16': 2, 'int32': 4, 'int64': 8,
+         'fl32': 4, 'fl64': 8, 'c32': 8, 'c64': 16,
+      }
+      if type_name in primitive_sizes:
+         return primitive_sizes[type_name]
+      if type_name in self.enums:
+         return 4
+      message = self.messages.get(type_name)
+      if message is None:
+         return None
+      if active is None:
+         active = set()
+      if type_name in active or not message.fields:
+         return None
+      active = set(active)
+      active.add(type_name)
+      total = 0
+      for field in message.fields:
+         if field.modifier != 'required':
+            return None
+         field_size = self.fixed_wire_size(field.type_name, active)
+         if field_size is None:
+            return None
+         total += field_size
+      return total
 
 def parse_schemas(input_path):
    if os.path.isdir(input_path):

@@ -38,6 +38,9 @@ class PythonBackend:
             key=lambda field: field.index)
          output.append('class ' + c_identifier(message_name) + '(SdlMessage):\n')
          output.append('   _SDL_HASH = 0x' + format(fnv1a_32(message_name), '08X') + '\n')
+         fixed_size = self.schema.fixed_wire_size(message_name)
+         if fixed_size is not None:
+            output.append('   _SDL_FIXED_SIZE = ' + str(fixed_size) + '\n')
          output.append('   _SDL_FIELDS = (\n')
          for field in fields:
             output.append('      (' + str(field.index) + ', ' + repr(c_identifier(field.name)) +

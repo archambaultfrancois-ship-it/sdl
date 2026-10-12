@@ -18,7 +18,7 @@ message CodecCases {
    12: repeated int16 samples;
    13: repeated fl64 measurements;
    14: repeated string labels;
-   15: repeated c32 points;
+   15: packed c32 points;
    16: repeated int64 empty_values;
    17: required bool required_enabled;
    18: optional bool optional_enabled;
