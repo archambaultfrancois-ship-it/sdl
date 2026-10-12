@@ -4,6 +4,8 @@
 
 #include "type_engine.h"
 #include "schema.h"
+#include "codec_cases.h"
+#include "sdl_registry.h"
 #include <assert.h>
 #include <inttypes.h>
 #include <math.h>
