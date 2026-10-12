@@ -2,9 +2,8 @@
 """Rust code generator for the shared SDL schema model."""
 
 import os
-import sys
 
-from generator import MsgParser, c_identifier
+from generator import c_identifier, parse_schemas
 
 
 def rust_variant(name):
@@ -139,34 +138,16 @@ class RustBackend:
       return value
 
 
-def main():
-   input_dir = sys.argv[1] if len(sys.argv) > 1 else 'sdl'
-   output_dir = sys.argv[2] if len(sys.argv) > 2 else 'build/generated/rust'
-   if os.path.isdir(input_dir):
-      schema_paths = [os.path.join(input_dir, item) for item in sorted(os.listdir(input_dir))
-         if item.endswith('.sdl') and os.path.isfile(os.path.join(input_dir, item))]
-   else:
-      schema_paths = [input_dir]
-   if not schema_paths:
-      raise ValueError('no .sdl files found in ' + input_dir)
-
+def generate_rust(input_path, output_dir):
+   schemas = parse_schemas(input_path)
    os.makedirs(output_dir, exist_ok=True)
    modules = []
    seen_modules = set()
-   seen_types = set()
-   for schema_path in schema_paths:
-      base_name = os.path.splitext(os.path.basename(schema_path))[0]
+   for base_name, unused_identifier, parser in schemas:
       module_name = c_identifier(base_name).lower()
       if module_name in seen_modules:
          raise ValueError('SDL filenames map to the same Rust module: ' + module_name)
       seen_modules.add(module_name)
-      parser = MsgParser()
-      with open(schema_path, 'r', encoding='utf-8') as input_file:
-         parser.parse_text(input_file.read())
-      for name in list(parser.enums) + list(parser.messages):
-         if name.upper() in seen_types:
-            raise ValueError('duplicate type name across SDL files: ' + name)
-         seen_types.add(name.upper())
       with open(os.path.join(output_dir, module_name + '.rs'), 'w', encoding='utf-8') as output_file:
          output_file.write(RustBackend(parser).generate())
       modules.append(module_name)
@@ -175,7 +156,3 @@ def main():
       output_file.write('// Generated SDL modules.\n')
       for module in modules:
          output_file.write('pub mod ' + module + ';\n')
-
-
-if __name__ == '__main__':
-   main()
