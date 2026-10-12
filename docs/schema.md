@@ -1,7 +1,7 @@
 # SDL schema language
 
 This page describes the SDL syntax accepted by the current generator and the
-constraints shared by its C, Rust, and Python 3 backends. SDL schemas describe
+constraints shared by its C, Rust, Python 3, Matlab/Octave, and Java backends. SDL schemas describe
 logical messages; target-language memory layout is generated separately. The
 wire representation is described in [wire_descriptor.md](wire_descriptor.md).
 
@@ -38,6 +38,8 @@ requires portable ASCII identifiers that do not conflict with C or runtime
 names for emitted types, fields, and enum items. Rust validates identifiers
 after its name conversion. Python rejects names that collide with runtime
 methods or metadata, invalid normalized identifiers, and reserved `Enum` names.
+Matlab/Octave and Java apply their target-language identifier and reserved-name
+rules during generation.
 Backends reject schema filenames that collide with generated package or registry
 files, or that produce invalid module names. Type names must be unique across
 the input schema set and cannot reuse built-in type names. Enum item names and
@@ -74,8 +76,10 @@ dynamically sized messages cannot.
 
 In C, optional fields have a generated presence flag, and repeated or packed
 fields have a generated count member. Rust and Python use their native optional
-and sequence representations. The generated bindings document target-specific
-member names.
+and sequence representations. Java uses nullable values for optional fields,
+lists for repeated and packed fields, and native arrays for fixed arrays.
+Matlab/Octave maps values to its generated structures and arrays. The generated
+bindings document target-specific member names and value representations.
 
 ## Anonymous nested messages
 
@@ -124,7 +128,8 @@ the SDL schema or wire representation.
 
 ## Current target support
 
-The generator currently has C99, Rust, and Python 3 backends. Java and Ada are
-not implemented yet. Schema syntax and the wire descriptor are language-neutral
-so future backends can use the same logical schema without inheriting C or Rust
-memory-layout assumptions.
+The generator currently has C99, Rust, Python 3, Matlab/Octave, and Java
+backends. Schema syntax and the wire descriptor are language-neutral, so each
+backend maps the same logical schema to its target language without inheriting
+another language's memory-layout assumptions. The wire descriptor leaves room
+for additional future backends.

@@ -32,8 +32,13 @@ methodology.
 
 ## Examples
 
-- [`samples/abc`](samples/abc/README.md) demonstrates SDL message exchange
-  between three C threads using Unix-domain socket pairs.
+- [`samples/abc-c`](samples/abc-c/README.md),
+  [`samples/abc-rust`](samples/abc-rust/README.md),
+  [`samples/abc-java`](samples/abc-java/README.md), and
+  [`samples/abc-python`](samples/abc-python/README.md) demonstrate the same
+  three-stage equation solver using Unix-domain socket pairs;
+  [`samples/abc-matlab`](samples/abc-matlab/README.md) demonstrates the same
+  SDL workflow with three sequential stages.
 - [`samples/radio_capture`](samples/radio_capture/README.md) uses one schema
   with all three backends and checks each encoder against the other two
   decoders.

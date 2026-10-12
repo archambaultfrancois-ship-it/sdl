@@ -6,7 +6,7 @@ ROOT := ../..
 BUILD_DIR := build
 GENERATED_DIR := $(BUILD_DIR)/generated
 C_GENERATED_DIR := $(GENERATED_DIR)/c
-BINARY := $(BUILD_DIR)/abc
+BINARY := $(BUILD_DIR)/abc-c
 C_RUNTIME := $(ROOT)/runtime/c/type_engine.c $(ROOT)/runtime/c/type_registry.c \
 	$(ROOT)/runtime/c/type_codec.c $(ROOT)/runtime/c/sdl_wire.c \
 	$(ROOT)/runtime/c/sdl_dynamic.c $(ROOT)/runtime/c/type_display.c
