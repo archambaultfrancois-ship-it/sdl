@@ -1,33 +1,18 @@
-/* ============================================================================
-   PRIVATE COMPILATION UNIT SHAREABLE HEADERS
-   ============================================================================ */
+#ifndef SDL_TYPE_PRIVATE_H
+#define SDL_TYPE_PRIVATE_H
 
-#ifndef TYPE_PRIVATE_H
-#define TYPE_PRIVATE_H
+#include "type_engine.h"
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
+const SdlTypeDesc *sdl_lookup_type(const char *name);
+const SdlTypeDesc *sdl_lookup_hash(uint32_t hash);
+size_t sdl_value_measure(const SdlTypeDesc *type, const void *value);
+void sdl_value_clone(const SdlTypeDesc *type, const void *src, void *dst,
+   uint8_t *pool, size_t *pool_offset);
+size_t sdl_value_encode(const SdlTypeDesc *type, const void *value,
+   uint8_t *buffer, size_t capacity);
+size_t sdl_value_decode_measure(const SdlTypeDesc *type,
+   const uint8_t *buffer, size_t size);
+bool sdl_value_decode(const SdlTypeDesc *type, const uint8_t *buffer,
+   size_t size, void *value, uint8_t *pool, size_t *pool_offset);
 
-/* Node definition for the dynamic schema repository database */
-typedef struct TypeNode {
-   char* name;
-   uint32_t hash;
-   char* format;
-   size_t struct_size;
-   struct TypeNode* next;
-} TypeNode;
-
-/* Registry lookup routines */
-const TypeNode* lookup_by_name(const char* name);
-const TypeNode* lookup_by_hash(uint32_t hash);
-
-/* Internal codec plumbing routines */
-size_t get_type_size(char type);
-size_t internal_encode(const void* decoded, const char* format, uint8_t* buf, size_t max_size);
-size_t internal_measure_buffer(const uint8_t* buffer, size_t buffer_size);
-size_t internal_measure_struct(const void* struct_ptr, const char* format);
-void internal_decode_into(const uint8_t* buffer, size_t buffer_size, const char* format, uint8_t* struct_ptr, uint8_t* pool, size_t* pool_offset);
-void internal_clone_into(const void* src_struct, const char* format, uint8_t* dst_struct, uint8_t* pool, size_t* pool_offset);
-
-#endif /* TYPE_PRIVATE_H */
+#endif /* SDL_TYPE_PRIVATE_H */

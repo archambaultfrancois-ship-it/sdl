@@ -50,7 +50,10 @@ int main() {
    printf(" 3. Blind Type-Agnostic Decoding..... OK\n");
 
    /* 6. Verify data integrity */
-   uint32_t stream_hash = *(const uint32_t*)bin_stream;
+   const uint8_t* wire_bytes = (const uint8_t*)bin_stream;
+   uint32_t stream_hash = (uint32_t)wire_bytes[0] |
+      ((uint32_t)wire_bytes[1] << 8) | ((uint32_t)wire_bytes[2] << 16) |
+      ((uint32_t)wire_bytes[3] << 24);
    if (stream_hash == ROOTPAYLOAD_HASH) {
       RootPayload* res = (RootPayload*)generic_output;
       printf("\n============================================\n");
