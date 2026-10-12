@@ -1,4 +1,10 @@
 function run_tests()
+cases = CodecCases('new');
+% Enum defaults must work in MATLAB R2017a, including fixed arrays.
+defaults = State();
+assert(isequal(cases.fixed_states, repmat(defaults.UNKNOWN, [3,1])));
+record = EnumRecord('new');
+assert(record.state == defaults.UNKNOWN);
 ctx=sdl_matlab_runtime('prepare',Packet('description'),{'Packet'});
 m=Packet('new');m.active=true;m.code=int16(-2);m.label='été';m.samples=int16([300;-1]);wire=Packet('encode',ctx,m);
 f=fopen('tst/fixtures/packet.bin','rb');fixture=fread(f,Inf,'*uint8');fclose(f);assert(isequal(wire,fixture));
