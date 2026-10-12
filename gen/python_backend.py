@@ -44,7 +44,7 @@ class PythonBackend:
          output.append('   _SDL_FIELDS = (\n')
          for field in fields:
             output.append('      (' + str(field.index) + ', ' + repr(c_identifier(field.name)) +
-               ', ' + repr(field.modifier) + ', ' + repr(field.type_name) + ', ' +
+               ', ' + repr(field.modifier) + ', ' + repr(c_identifier(field.type_name)) + ', ' +
                repr(tuple(field.array_dimensions)) + '),\n')
          output.append('   )\n\n')
       return ''.join(output)

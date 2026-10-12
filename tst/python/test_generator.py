@@ -8,6 +8,22 @@ from generator import MsgParser
 
 
 class GeneratorValidationTests(unittest.TestCase):
+   def test_anonymous_nested_structs_get_stable_logical_names(self):
+      parser = MsgParser()
+      parser.parse_text('''
+message Packet {
+   1: required struct {
+      1: required int32 code;
+      2: required struct {
+         1: required string label;
+      } detail;
+   } metadata;
+}
+''')
+      self.assertIn('Packet$1', parser.messages)
+      self.assertIn('Packet$2', parser.messages)
+      self.assertEqual(parser.messages['Packet$1'].fields[1].type_name, 'Packet$2')
+
    def test_fixed_array_rejects_variable_wire_type_with_field_name(self):
       parser = MsgParser()
       with self.assertRaisesRegex(ValueError,

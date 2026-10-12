@@ -5,7 +5,9 @@ import struct
 import unittest
 
 from codec_cases import CodecCases, State
-from schema import FixedBoard, FixedItem, FixedRow, FixedVector, RootPayload, VarItem
+from schema import (AnonymousEnvelope, AnonymousEnvelope_1, AnonymousEnvelope_2,
+   AnonymousEnvelope_3, FixedBoard, FixedItem, FixedRow, FixedVector,
+   RootPayload, VarItem)
 from sdl_runtime import CodecError, Complex32, Complex64, decode, encode
 
 
@@ -81,6 +83,17 @@ class CodecTests(unittest.TestCase):
       malformed = wire + wire_u32(1) + wire_u32(1) + b'\x00'
       with self.assertRaisesRegex(CodecError, 'fixed array length'):
          decode(malformed, FixedBoard)
+
+   def test_anonymous_nested_structs_round_trip(self):
+      original = AnonymousEnvelope(
+         metadata=AnonymousEnvelope_1(
+            code=42,
+            detail=AnonymousEnvelope_2(text='anonymous detail'),
+         ),
+         points=[AnonymousEnvelope_3(x=1.25, y=-2.5),
+            AnonymousEnvelope_3(x=3.0, y=4.5)],
+      )
+      self.assertEqual(decode(encode(original), AnonymousEnvelope), original)
 
    def test_scalars_optionals_enums_arrays_and_empty_values(self):
       original = codec_cases()

@@ -54,6 +54,8 @@ class MsgParser:
    def parse_text(self, text):
       current_enum = None
       current_msg = None
+      anonymous_stack = []
+      anonymous_counters = {}
       for raw_line in text.splitlines():
          line = re.sub(r'//.*', '', raw_line).strip()
          if not line:
@@ -78,8 +80,35 @@ class MsgParser:
             current_enum = None
             continue
          if line == '}':
+            if anonymous_stack:
+               raise ValueError('anonymous struct must close with its field name')
             current_enum = None
             current_msg = None
+            continue
+         match = re.match(r'(\d+):\s+(optional|required|repeated|packed)\s+struct\s*\{\s*$', line)
+         if match and current_msg is not None:
+            root_name = anonymous_stack[0]['root'] if anonymous_stack else current_msg.name
+            anonymous_counters[root_name] = anonymous_counters.get(root_name, 0) + 1
+            anonymous_name = root_name + '$' + str(anonymous_counters[root_name])
+            anonymous_stack.append({
+               'parent': current_msg,
+               'field_id': match.group(1),
+               'modifier': match.group(2),
+               'message': Message(anonymous_name),
+               'root': root_name,
+            })
+            current_msg = anonymous_stack[-1]['message']
+            continue
+         match = re.match(r'}\s+(\w+)\s*;', line)
+         if match and anonymous_stack:
+            frame = anonymous_stack.pop()
+            anonymous_message = frame['message']
+            self.messages[anonymous_message.name] = anonymous_message
+            self.message_order.append(anonymous_message.name)
+            field_name = match.group(1)
+            frame['parent'].fields.append(Field(frame['field_id'],
+               frame['modifier'], anonymous_message.name, field_name))
+            current_msg = frame['parent']
             continue
          if current_enum is not None:
             match = re.match(r'(\w+)\s*=\s*(-?\d+)\s*;', line)
@@ -98,9 +127,43 @@ class MsgParser:
                type_name, match.group(4), dimensions))
             continue
          raise ValueError('unexpected SDL statement: ' + line)
+      if anonymous_stack:
+         raise ValueError('unterminated anonymous struct in ' + anonymous_stack[0]['root'])
       self.validate()
+      self._order_embedded_messages()
+
+   def _order_embedded_messages(self):
+      ordered = []
+      visiting = set()
+      visited = set()
+
+      def visit(name):
+         if name in visited:
+            return
+         if name in visiting:
+            raise ValueError('recursive message dependency involving ' + name)
+         visiting.add(name)
+         message = self.messages[name]
+         for field in message.fields:
+            if (field.type_name in self.messages and field.type_name != name and
+                  (field.modifier not in ('repeated', 'packed') or '$' in field.type_name)):
+               visit(field.type_name)
+         visiting.remove(name)
+         visited.add(name)
+         ordered.append(name)
+
+      for name in self.message_order:
+         visit(name)
+      self.message_order = ordered
 
    def validate(self):
+      generated_symbols = {}
+      for type_name in list(self.enums) + list(self.messages):
+         symbol = c_identifier(type_name).upper()
+         if symbol in generated_symbols and generated_symbols[symbol] != type_name:
+            raise ValueError('generated type identifier collision: ' + type_name +
+               ' and ' + generated_symbols[symbol])
+         generated_symbols[symbol] = type_name
       for message in self.messages.values():
          ids = set()
          names = set()
@@ -201,7 +264,7 @@ def parse_schemas(input_path):
       with open(schema_path, 'r', encoding='utf-8') as input_file:
          parser.parse_text(input_file.read())
       for name in list(parser.enums) + list(parser.messages):
-         symbol = name.upper()
+         symbol = c_identifier(name).upper()
          if name in seen_type_names or symbol in seen_symbols:
             raise ValueError('duplicate type name across SDL files: ' + name)
          seen_type_names.add(name)

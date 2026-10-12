@@ -14,7 +14,7 @@ class CBackend:
       return {'bool': 'bool', 'int8': 'int8_t', 'int16': 'int16_t', 'int32': 'int32_t',
          'int64': 'int64_t', 'fl32': 'float', 'fl64': 'double',
          'c32': 'float complex', 'c64': 'double complex',
-         'string': 'const char *'}.get(name, name)
+         'string': 'const char *'}.get(name, c_identifier(name))
 
    def _type_desc(self, name):
       descriptors = {'bool': 'SDL_BOOL_DESC', 'int8': 'SDL_INT8_DESC',
@@ -26,7 +26,7 @@ class CBackend:
          return '&' + descriptors[name]
       if name in self.schema.enums:
          return '&SDL_ENUM_' + name.upper() + '_DESC'
-      return '&' + name.upper() + '_DESC'
+      return '&' + c_identifier(name).upper() + '_DESC'
 
    @staticmethod
    def _array_desc(message_name, field_name):
@@ -57,6 +57,7 @@ class CBackend:
 
       for name in self.schema.message_order:
          message = self.schema.messages[name]
+         c_name = c_identifier(name)
          header.append('typedef struct {\n')
          fields = sorted(message.fields, key=lambda item: item.index)
          for field in fields:
@@ -71,18 +72,19 @@ class CBackend:
                header.append('   ' + c_type + ' ' + field.name + suffix + ';\n')
             else:
                header.append('   ' + c_type + ' ' + field.name + ';\n')
-         header.append('} ' + name + ';\n')
-         header.append('extern const SdlTypeDesc ' + name.upper() + '_DESC;\n\n')
-         header.append('#define ' + name.upper() + '_HASH 0x' +
+         header.append('} ' + c_name + ';\n')
+         header.append('extern const SdlTypeDesc ' + c_name.upper() + '_DESC;\n\n')
+         header.append('#define ' + c_name.upper() + '_HASH 0x' +
             format(fnv1a_32(name), '08X') + 'U\n')
 
       header.append('\nvoid register_' + identifier + '_types(void);\n\n#endif\n')
       for name in self.schema.message_order:
+         c_name = c_identifier(name)
          fields = sorted(self.schema.messages[name].fields, key=lambda item: item.index)
          for field in fields:
             if not field.array_dimensions:
                continue
-            prefix = name.lower() + '_' + field.name.lower() + '_array'
+            prefix = c_name.lower() + '_' + field.name.lower() + '_array'
             for dimension_index in range(len(field.array_dimensions) - 1, -1, -1):
                alias = prefix + '_type_' + str(dimension_index)
                count_value = field.array_dimensions[dimension_index]
@@ -104,13 +106,13 @@ class CBackend:
                   ', value), .name = "' + desc + '", .hash = 0,\n')
                source.append('   .detail.array = { ' + child_desc + ', ' +
                   str(count_value) + ' }\n};\n')
-         source.append('static const SdlFieldDesc ' + name.lower() + '_fields[] = {\n')
+         source.append('static const SdlFieldDesc ' + c_name.lower() + '_fields[] = {\n')
          if not fields:
             source.append('   { 0, NULL, NULL, 0, SDL_NO_OFFSET, SDL_NO_OFFSET, 0 }\n')
          for field in fields:
-            presence = ('offsetof(' + name + ', has_' + field.name + ')'
+            presence = ('offsetof(' + c_name + ', has_' + field.name + ')'
                if field.modifier == 'optional' else 'SDL_NO_OFFSET')
-            count = ('offsetof(' + name + ', ' + field.name + '_count)'
+            count = ('offsetof(' + c_name + ', ' + field.name + '_count)'
                if field.modifier in ('repeated', 'packed') else 'SDL_NO_OFFSET')
             flags = 'SDL_FIELD_OPTIONAL' if field.modifier == 'optional' else '0'
             if field.modifier in ('repeated', 'packed'):
@@ -118,20 +120,20 @@ class CBackend:
             if field.modifier == 'packed':
                flags += ' | SDL_FIELD_PACKED'
             source.append('   { ' + str(field.index) + 'U, "' + field.name + '", ' +
-               (self._array_desc(name, field.name) if field.array_dimensions else
-                self._type_desc(field.type_name)) + ', offsetof(' + name + ', ' + field.name +
+               (self._array_desc(c_name, field.name) if field.array_dimensions else
+                self._type_desc(field.type_name)) + ', offsetof(' + c_name + ', ' + field.name +
                '), ' + presence + ', ' + count + ', ' + flags + ' },\n')
          source.append('};\n')
-         source.append('typedef struct { char prefix; ' + name +
-            ' value; } SDL_ALIGN_' + name.upper() + ';\n')
-         source.append('const SdlTypeDesc ' + name.upper() + '_DESC = {\n')
-         source.append('   SDL_TYPE_STRUCT, sizeof(' + name + '), offsetof(SDL_ALIGN_' +
-            name.upper() + ', value),\n')
-         source.append('   "' + name + '", ' + name.upper() + '_HASH,\n')
-         source.append('   { { ' + str(len(fields)) + ', ' + name.lower() + '_fields } }\n};\n\n')
+         source.append('typedef struct { char prefix; ' + c_name +
+            ' value; } SDL_ALIGN_' + c_name.upper() + ';\n')
+         source.append('const SdlTypeDesc ' + c_name.upper() + '_DESC = {\n')
+         source.append('   SDL_TYPE_STRUCT, sizeof(' + c_name + '), offsetof(SDL_ALIGN_' +
+            c_name.upper() + ', value),\n')
+         source.append('   "' + name + '", ' + c_name.upper() + '_HASH,\n')
+         source.append('   { { ' + str(len(fields)) + ', ' + c_name.lower() + '_fields } }\n};\n\n')
       source.append('void register_' + identifier + '_types(void) {\n')
       for name in self.schema.message_order:
-         source.append('   (void)sdl_register_type(&' + name.upper() + '_DESC);\n')
+         source.append('   (void)sdl_register_type(&' + c_identifier(name).upper() + '_DESC);\n')
       source.append('}\n')
       return ''.join(header), ''.join(source)
 
