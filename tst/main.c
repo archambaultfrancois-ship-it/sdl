@@ -156,6 +156,19 @@ static void test_codec_cases(void) {
    type_free(encoded);
 }
 
+static void assert_root_wire_fixture(const void *wire, size_t wire_size) {
+   uint8_t expected[512];
+   size_t expected_size;
+   FILE *fixture = fopen("tst/fixtures/root_payload.bin", "rb");
+   assert(fixture != NULL);
+   expected_size = fread(expected, 1, sizeof(expected), fixture);
+   assert(!ferror(fixture));
+   assert(feof(fixture));
+   fclose(fixture);
+   assert(expected_size == wire_size);
+   assert(memcmp(wire, expected, wire_size) == 0);
+}
+
 int main(void) {
    /* 1. Startup registry initialization */
    register_all_types();
@@ -204,6 +217,7 @@ int main(void) {
    size_t bin_size = 0;
    void* bin_stream = type_encode("RootPayload", cloned, &bin_size);
    if (!bin_stream) { printf("Error: Encoding step failed\n"); return 1; }
+   assert_root_wire_fixture(bin_stream, bin_size);
    printf(" 2. Binary Auto-Descriptive Stream... OK (%zu bytes written)\n", bin_size);
 
    /* 5. Blind dynamic decoder step (Zero type info passed) */

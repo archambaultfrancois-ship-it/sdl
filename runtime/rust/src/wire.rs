@@ -1,0 +1,205 @@
+use std::convert::TryInto;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CodecError {
+   Truncated,
+   TypeMismatch,
+   LengthOverflow,
+   InvalidBoolean,
+   InvalidEnum,
+   InvalidUtf8,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Complex32 {
+   pub real: f32,
+   pub imag: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Complex64 {
+   pub real: f64,
+   pub imag: f64,
+}
+
+pub trait WireValue: Sized {
+   fn encode_payload(&self) -> Result<Vec<u8>, CodecError>;
+   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError>;
+}
+
+pub trait SdlMessage: WireValue + Default {
+   const HASH: u32;
+
+   fn encode_fields(&self, output: &mut Vec<u8>) -> Result<(), CodecError>;
+   fn decode_field(&mut self, id: u32, payload: &[u8]) -> Result<(), CodecError>;
+
+   fn encode_body(&self) -> Result<Vec<u8>, CodecError> {
+      let mut output = Vec::new();
+      self.encode_fields(&mut output)?;
+      Ok(output)
+   }
+
+   fn decode_body(input: &[u8]) -> Result<Self, CodecError> {
+      let mut value = Self::default();
+      let mut offset = 0;
+      while offset < input.len() {
+         if input.len() - offset < 8 {
+            return Err(CodecError::Truncated);
+         }
+         let id = read_u32(&input[offset..offset + 4])?;
+         let length = read_u32(&input[offset + 4..offset + 8])? as usize;
+         offset += 8;
+         if length > input.len() - offset {
+            return Err(CodecError::Truncated);
+         }
+         value.decode_field(id, &input[offset..offset + length])?;
+         offset += length;
+      }
+      Ok(value)
+   }
+}
+
+pub fn encode<T: SdlMessage>(value: &T) -> Result<Vec<u8>, CodecError> {
+   let body = value.encode_body()?;
+   let mut output = Vec::with_capacity(4 + body.len());
+   output.extend_from_slice(&T::HASH.to_le_bytes());
+   output.extend_from_slice(&body);
+   Ok(output)
+}
+
+pub fn decode<T: SdlMessage>(input: &[u8]) -> Result<T, CodecError> {
+   if input.len() < 4 {
+      return Err(CodecError::Truncated);
+   }
+   let hash = read_u32(&input[..4])?;
+   if hash != T::HASH {
+      return Err(CodecError::TypeMismatch);
+   }
+   T::decode_body(&input[4..])
+}
+
+pub fn write_field<T: WireValue>(
+   id: u32,
+   value: &T,
+   output: &mut Vec<u8>,
+) -> Result<(), CodecError> {
+   let payload = value.encode_payload()?;
+   let length: u32 = payload.len().try_into().map_err(|_| CodecError::LengthOverflow)?;
+   output.extend_from_slice(&id.to_le_bytes());
+   output.extend_from_slice(&length.to_le_bytes());
+   output.extend_from_slice(&payload);
+   Ok(())
+}
+
+fn read_u32(bytes: &[u8]) -> Result<u32, CodecError> {
+   let bytes: [u8; 4] = bytes.try_into().map_err(|_| CodecError::Truncated)?;
+   Ok(u32::from_le_bytes(bytes))
+}
+
+macro_rules! fixed_integer {
+   ($type:ty, $size:expr) => {
+      impl WireValue for $type {
+         fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+            Ok(self.to_le_bytes().to_vec())
+         }
+
+         fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
+            let bytes: [u8; $size] = payload.try_into().map_err(|_| CodecError::TypeMismatch)?;
+            Ok(<$type>::from_le_bytes(bytes))
+         }
+      }
+   };
+}
+
+fixed_integer!(i8, 1);
+fixed_integer!(i16, 2);
+fixed_integer!(i32, 4);
+fixed_integer!(i64, 8);
+
+impl WireValue for bool {
+   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+      Ok(vec![if *self { 1 } else { 0 }])
+   }
+
+   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
+      match payload {
+         [0] => Ok(false),
+         [1] => Ok(true),
+         [_] => Err(CodecError::InvalidBoolean),
+         _ => Err(CodecError::TypeMismatch),
+      }
+   }
+}
+
+impl WireValue for f32 {
+   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+      Ok(self.to_bits().to_le_bytes().to_vec())
+   }
+
+   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
+      let bytes: [u8; 4] = payload.try_into().map_err(|_| CodecError::TypeMismatch)?;
+      let bits = u32::from_le_bytes(bytes);
+      Ok(Self::from_bits(bits))
+   }
+}
+
+impl WireValue for f64 {
+   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+      Ok(self.to_bits().to_le_bytes().to_vec())
+   }
+
+   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
+      let bits = u64::from_le_bytes(payload.try_into().map_err(|_| CodecError::TypeMismatch)?);
+      Ok(Self::from_bits(bits))
+   }
+}
+
+impl WireValue for Complex32 {
+   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+      let mut output = Vec::with_capacity(8);
+      output.extend_from_slice(&self.real.to_bits().to_le_bytes());
+      output.extend_from_slice(&self.imag.to_bits().to_le_bytes());
+      Ok(output)
+   }
+
+   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
+      if payload.len() != 8 {
+         return Err(CodecError::TypeMismatch);
+      }
+      Ok(Self {
+         real: f32::from_bits(read_u32(&payload[..4])?),
+         imag: f32::from_bits(read_u32(&payload[4..])?),
+      })
+   }
+}
+
+impl WireValue for Complex64 {
+   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+      let mut output = Vec::with_capacity(16);
+      output.extend_from_slice(&self.real.to_bits().to_le_bytes());
+      output.extend_from_slice(&self.imag.to_bits().to_le_bytes());
+      Ok(output)
+   }
+
+   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
+      if payload.len() != 16 {
+         return Err(CodecError::TypeMismatch);
+      }
+      let real = u64::from_le_bytes(payload[..8].try_into().map_err(|_| CodecError::Truncated)?);
+      let imag = u64::from_le_bytes(payload[8..].try_into().map_err(|_| CodecError::Truncated)?);
+      Ok(Self {
+         real: f64::from_bits(real),
+         imag: f64::from_bits(imag),
+      })
+   }
+}
+
+impl WireValue for String {
+   fn encode_payload(&self) -> Result<Vec<u8>, CodecError> {
+      Ok(self.as_bytes().to_vec())
+   }
+
+   fn decode_payload(payload: &[u8]) -> Result<Self, CodecError> {
+      String::from_utf8(payload.to_vec()).map_err(|_| CodecError::InvalidUtf8)
+   }
+}
