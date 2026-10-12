@@ -177,9 +177,18 @@ changes, malformed catalogues, and unsigned field ID / signed enum boundaries.
 
 Include the generated header, `sdl_registry.h`, `type_engine.h`, and
 `sdl_context.h`. Register types **before** preparing typed contexts.
+The process-wide registry grows as needed. Generated `register_all_types()` and
+`register_<schema>_types()` return `bool`: check for allocation failure or a
+conflicting type name. Re-registering the same static descriptor succeeds;
+registering another descriptor with the same logical name fails. Descriptors
+must remain valid for the lifetime of the process. Regenerate C bindings to use
+the checked registration API.
 
 ```c
-register_all_types();
+if (!register_all_types()) {
+   /* Handle registration failure before using typed codecs. */
+   return EXIT_FAILURE;
+}
 const char *types[] = { "Packet" };
 size_t description_size = 0, data_size = 0;
 char *description = type_description(types, 1, &description_size);

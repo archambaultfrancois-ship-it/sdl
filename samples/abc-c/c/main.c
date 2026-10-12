@@ -275,7 +275,10 @@ int main(void) {
    int solver_started = 0;
    int display_started = 0;
 
-   register_all_types();
+   if (!register_all_types()) {
+      fputs("Could not register SDL types\n", stderr);
+      return 1;
+   }
    /* Two local socket pairs form the input -> solver -> display pipeline. */
    if (socketpair(AF_UNIX, SOCK_STREAM, 0, input_pair) != 0) {
       perror("socketpair");

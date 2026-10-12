@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'gen'))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'runtime/python'))
 
 from c_backend import CBackend, generate_c
 from generator import MsgParser, canonical_type_descriptor
@@ -14,6 +15,88 @@ from ada_backend import AdaBackend, generate_ada
 
 
 class GeneratorValidationTests(unittest.TestCase):
+   def test_01_schema_enum_rejects_trailing_tokens(self):
+      for suffix in ('unexpected tokens', 'SECOND = 2;', '}'):
+         with self.subTest(suffix=suffix):
+            with self.assertRaisesRegex(ValueError, 'invalid enum entry'):
+               MsgParser().parse_text('enum State {\n READY = 1; ' + suffix + '\n}\n')
+      parser = MsgParser()
+      parser.parse_text('enum State {\n READY = 1; // comment\n}\nmessage Packet {\n State state;\n}\n')
+      self.assertEqual(parser.enums['State'].pairs, [('READY', '1')])
+
+   def test_03_limits_message_depth_and_shared_subtypes(self):
+      from sdl_runtime import prepare
+
+      def chain(count, leaf_first=False):
+         declarations = ['message M%04d {\n %s\n}\n' % (index,
+            'M%04d child;' % (index + 1) if index + 1 < count else 'int32 value;')
+            for index in range(count)]
+         return ''.join(reversed(declarations) if leaf_first else declarations)
+
+      for leaf_first in (False, True):
+         parser = MsgParser()
+         parser.parse_text(chain(65, leaf_first))
+         prepare(canonical_type_descriptor(parser))
+         for count in (66, 1500):
+            with self.subTest(count=count, leaf_first=leaf_first):
+               with self.assertRaisesRegex(ValueError, 'message dependency nesting exceeds 64 levels'):
+                  MsgParser().parse_text(chain(count, leaf_first))
+      # The child was already visited at depth zero before this new root.
+      with self.assertRaisesRegex(ValueError, 'message dependency nesting exceeds 64 levels'):
+         MsgParser().parse_text(chain(65, True) + 'message Root {\n M0000 left;\n M0000 right;\n}\n')
+
+   def test_02_backend_c_registration_growth_and_conflicts(self):
+      import os
+      import shlex
+      import shutil
+      import subprocess
+      compiler = shlex.split(os.environ.get('CC', 'cc'))
+      if not compiler or not shutil.which(compiler[0]):
+         self.skipTest('C compiler is unavailable')
+      repo = pathlib.Path(__file__).resolve().parents[2]
+      with tempfile.TemporaryDirectory() as temporary:
+         root = pathlib.Path(temporary)
+         schema = root / 'registry_test.sdl'
+         schema.write_text(''.join('message M%03d {\n}\n' % i for i in range(257)))
+         output = root / 'generated'
+         generate_c(str(schema), str(output))
+         check = root / 'check.c'
+         check.write_text('''#include "sdl_registry.h"
+#include "type_registry.h"
+#include "type_private.h"
+#include <assert.h>
+#include <string.h>
+int main(int argc, char **argv) {
+   static SdlTypeDesc conflict;
+   const SdlTypeDesc *last;
+   (void)argv;
+   if (argc > 1) {
+      conflict.kind = SDL_TYPE_STRUCT;
+      conflict.name = "M256";
+      assert(sdl_register_type(&conflict));
+      assert(!register_all_types());
+      assert(sdl_lookup_type("M000"));
+      assert(sdl_lookup_type("M256") == &conflict);
+      assert(!register_all_types());
+   } else {
+      assert(register_all_types());
+      last = sdl_lookup_type("M256");
+      assert(last && !strcmp(last->name, "M256"));
+      assert(register_all_types());
+      assert(sdl_lookup_type("M256") == last);
+   }
+   return 0;
+}
+''')
+         executable = root / 'registry-check'
+         command = compiler + ['-std=c99', '-I' + str(repo / 'runtime/c'),
+            '-I' + str(output), str(repo / 'runtime/c/type_registry.c'),
+            str(output / 'registry_test.c'), str(output / 'sdl_registry.c'),
+            str(check), '-o', str(executable)]
+         subprocess.run(command, check=True, capture_output=True, text=True)
+         subprocess.run([str(executable)], check=True)
+         subprocess.run([str(executable), 'conflict'], check=True)
+
    def test_01_schema_compact_catalogue_and_nested_hash(self):
       import hashlib
       source = '''struct Position {

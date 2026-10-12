@@ -63,6 +63,9 @@ per-value Python objects; `encode_into` writes into caller storage. `make bench`
 prints these buffer measurements separately; `make bench-python-buffers` runs
 only that comparison. See [benchmarks](docs/benchmarks.md) for the API and limits.
 Set `SDL_PYTHON_NO_NATIVE=1` before preparing contexts to compare the Python path.
+On Android/Termux, the native build links explicitly to the invoking CPython's
+shared library. The build also checks that the resulting extension can be
+imported, so loader errors fail `make python-native` immediately.
 
 MATLAB has an optional MEX adapter for the complete `BenchPayload` and `BenchRecordBatch` messages.
 Build it with `make matlab-mex`, then run `make test-matlab bench-matlab`.

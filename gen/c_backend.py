@@ -202,7 +202,7 @@ class CBackend:
             str(len(canonical_type_descriptor(self.schema, name))) + 'U\n')
 
 
-      header.append('\nvoid register_' + identifier + '_types(void);\n\n#endif\n')
+      header.append('\nbool register_' + identifier + '_types(void);\n\n#endif\n')
       for name in self.schema.message_order:
          c_name = c_identifier(name)
          fields = sorted(self.schema.messages[name].fields, key=lambda item: item.index)
@@ -271,9 +271,10 @@ class CBackend:
             c_name.upper() + '_SCHEMA_DESCRIPTOR, sizeof(' + c_name.upper() +
             '_SCHEMA_DESCRIPTOR),\n')
          source.append('   { { ' + str(len(fields)) + ', ' + c_name.lower() + '_fields } }\n};\n\n')
-      source.append('void register_' + identifier + '_types(void) {\n')
+      source.append('bool register_' + identifier + '_types(void) {\n')
       for name in self.schema.message_order:
-         source.append('   (void)sdl_register_type(&' + c_identifier(name).upper() + '_DESC);\n')
+         source.append('   if (!sdl_register_type(&' + c_identifier(name).upper() + '_DESC)) return false;\n')
+      source.append('   return true;\n')
       source.append('}\n')
       return ''.join(header), ''.join(source)
 
@@ -308,14 +309,16 @@ def generate_c(input_path, output_dir):
    registry_header = [
       '/* Generated registry for SDL files in the input directory. */\n',
       '#ifndef SDL_REGISTRY_H\n#define SDL_REGISTRY_H\n\n',
-      'void register_all_types(void);\n\n#endif\n']
+      '#include <stdbool.h>\n\n',
+      'bool register_all_types(void);\n\n#endif\n']
    registry_source = ['/* Generated registry for SDL files in the input directory. */\n',
       '#include "sdl_registry.h"\n']
    for base_name, unused_identifier in generated:
       registry_source.append('#include "' + base_name + '.h"\n')
-   registry_source.append('\nvoid register_all_types(void) {\n')
+   registry_source.append('\nbool register_all_types(void) {\n')
    for unused_base_name, identifier in generated:
-      registry_source.append('   register_' + identifier + '_types();\n')
+      registry_source.append('   if (!register_' + identifier + '_types()) return false;\n')
+   registry_source.append('   return true;\n')
    registry_source.append('}\n')
    with open(os.path.join(output_dir, 'sdl_registry.h'), 'w', encoding='utf-8') as output_file:
       output_file.write(''.join(registry_header))

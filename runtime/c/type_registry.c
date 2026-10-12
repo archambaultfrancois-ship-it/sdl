@@ -1,11 +1,11 @@
 #include "type_private.h"
 #include "type_registry.h"
+#include <stdlib.h>
 #include <string.h>
 
-#define SDL_REGISTRY_LIMIT 256
-
-static const SdlTypeDesc *registry[SDL_REGISTRY_LIMIT];
+static const SdlTypeDesc **registry;
 static size_t registry_count;
+static size_t registry_capacity;
 
 bool sdl_register_type(const SdlTypeDesc *type) {
    size_t i;
@@ -13,11 +13,22 @@ bool sdl_register_type(const SdlTypeDesc *type) {
    if (type == NULL || type->name == NULL || type->kind != SDL_TYPE_STRUCT)
       return false;
    for (i = 0; i < registry_count; ++i) {
-      if (registry[i] == type || strcmp(registry[i]->name, type->name) == 0)
+      if (registry[i] == type)
+         return true;
+      if (strcmp(registry[i]->name, type->name) == 0)
          return false;
    }
-   if (registry_count == SDL_REGISTRY_LIMIT)
-      return false;
+   if (registry_count == registry_capacity) {
+      size_t capacity = registry_capacity ? registry_capacity * 2 : 256;
+      const SdlTypeDesc **resized;
+      if (capacity < registry_capacity || capacity > SIZE_MAX / sizeof(*registry))
+         return false;
+      resized = realloc(registry, capacity * sizeof(*registry));
+      if (resized == NULL)
+         return false;
+      registry = resized;
+      registry_capacity = capacity;
+   }
    registry[registry_count++] = type;
    return true;
 }

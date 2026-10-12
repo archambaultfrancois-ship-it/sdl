@@ -120,7 +120,10 @@ int main(int argc, char **argv) {
    size_t description_size;
    const char *types[] = {"RadioCapture"};
    char *text;
-   register_all_types();
+   if (!register_all_types()) {
+      fputs("Could not register SDL types\n", stderr);
+      return 2;
+   }
    text = type_description(types, 1, &description_size);
    if (!text)
       return 2;

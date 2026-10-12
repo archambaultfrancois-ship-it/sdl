@@ -15,6 +15,33 @@
 
 static const unsigned char fixture[] = {1,   1,   1,   255, 254, 5,  195, 169,
                                         116, 195, 169, 2,   1,   44, 255, 255};
+static void registry_cases(void) {
+   static SdlTypeDesc types[1025];
+   static char names[1025][32];
+   SdlTypeDesc conflicting = {0};
+   size_t i;
+   assert(!sdl_register_type(NULL));
+   assert(!sdl_register_type(&SDL_INT32_DESC));
+   assert(register_all_types());
+   for (i = 0; i < 1025; ++i) {
+      snprintf(names[i], sizeof(names[i]), "RegistryTest%zu", i);
+      types[i].kind = SDL_TYPE_STRUCT;
+      types[i].name = names[i];
+      assert(sdl_register_type(&types[i]));
+   }
+   for (i = 0; i < 1025; ++i) {
+      assert(sdl_lookup_type(names[i]) == &types[i]);
+      assert(sdl_register_type(&types[i]));
+   }
+   conflicting.kind = SDL_TYPE_STRUCT;
+   conflicting.name = names[0];
+   assert(!sdl_register_type(&conflicting));
+   assert(sdl_lookup_type(names[0]) == &types[0]);
+   conflicting.name = "Packet";
+   assert(!sdl_register_type(&conflicting));
+   assert(register_all_types());
+   assert(!sdl_lookup_type("RegistryTestMissing"));
+}
 static void envelope_cases(void) {
    const unsigned char payload[]={1,0};
    const uint32_t ids[]={0,0x89abcdefu,0xffffffffu};
@@ -506,7 +533,7 @@ static void invalid(void) {
    }
 }
 int main(void) {
-   register_all_types();
+   assert(register_all_types());
    envelope_cases();
    packet_cases();
    evolution();
@@ -515,6 +542,7 @@ int main(void) {
    wire_word_arrays();
    invalid();
    graph_limits();
+   registry_cases();
    puts("C SDL2 codec, evolution, malformed input and storage checks passed.");
    return 0;
 }

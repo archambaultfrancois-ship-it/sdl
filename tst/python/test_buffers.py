@@ -11,21 +11,11 @@ from benchmark import BenchPayload
 from bench_cases import BenchRecordBatch, BenchRecord, BenchPose, BenchVector
 
 
-MIXED_DESCRIPTOR = '''SDL2
-message MixedBatch {
-  1: packed MixedRecord records;
-}
-message MixedNested {
-  1: required MixedBatch batch;
-}
-message MixedRecord {
-  1: required bool flag;
-  2: required int16 small;
-  3: required int64 large;
-  4: required fl32[2] vector;
-  5: required c64 sample;
-}
-'''
+MIXED_DESCRIPTOR = (
+   'SDL2|MixedBatch{1+:MixedRecord:records;}'
+   '|MixedNested{1:MixedBatch:batch;}'
+   '|MixedRecord{1:bool:flag;2:int16:small;3:int64:large;'
+   '4:fl32[2]:vector;5:c64:sample;}')
 
 
 class MixedRecord(sdl.SdlMessage):

@@ -13,6 +13,8 @@ BENCH_ITERATIONS ?= 200
 BUILD_DIR := build
 GENERATED_DIR := $(BUILD_DIR)/generated
 C_GENERATED_DIR := $(GENERATED_DIR)/c
+C_RUNTIME_HEADERS := $(wildcard runtime/c/*.h)
+C_GENERATED_HEADERS := $(wildcard $(C_GENERATED_DIR)/*.h)
 RUST_GENERATED_DIR := $(GENERATED_DIR)/rust
 PYTHON_GENERATED_DIR := $(GENERATED_DIR)/python
 matlab_generated_dir := $(GENERATED_DIR)/matlab
@@ -108,11 +110,11 @@ $(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/
 
 $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/empty_message.h $(C_GENERATED_DIR)/sdl_registry.h: $(GENERATED_DIR)/.stamp
 
-$(BUILD_DIR)/sdl_utest: runtime/c/sdl_representation.inc runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c runtime/c/sdl_dynamic.h runtime/c/sdl_context.h tst/main.c $(GENERATED_DIR)/.stamp $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/empty_message.h $(C_GENERATED_DIR)/sdl_registry.h
+$(BUILD_DIR)/sdl_utest: runtime/c/sdl_representation.inc runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c $(C_RUNTIME_HEADERS) $(C_GENERATED_HEADERS) tst/main.c $(GENERATED_DIR)/.stamp $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/empty_message.h $(C_GENERATED_DIR)/sdl_registry.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -Iruntime/c -I$(C_GENERATED_DIR) runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c $(C_GENERATED_DIR)/*.c tst/main.c -lm -o $@
 
-$(BUILD_DIR)/sdl_bench: runtime/c/sdl_representation.inc runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c runtime/c/sdl_dynamic.h runtime/c/sdl_context.h tst/bench.c $(GENERATED_DIR)/.stamp $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/sdl_registry.h
+$(BUILD_DIR)/sdl_bench: runtime/c/sdl_representation.inc runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c $(C_RUNTIME_HEADERS) $(C_GENERATED_HEADERS) tst/bench.c $(GENERATED_DIR)/.stamp $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/sdl_registry.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -Iruntime/c -I$(C_GENERATED_DIR) runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c $(C_GENERATED_DIR)/*.c tst/bench.c -lm -o $@
 

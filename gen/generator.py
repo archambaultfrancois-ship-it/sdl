@@ -8,6 +8,7 @@ import sys
 
 
 MAX_SCHEMA_DESCRIPTOR_SIZE = 1024 * 1024
+MAX_SCHEMA_NESTING = 64
 
 
 WIRE_KEYS = ('bits', 'encoding', 'align', 'pad_after')
@@ -176,7 +177,7 @@ class MsgParser:
             current_msg = frame['parent']
             continue
          if current_enum is not None:
-            match = re.match(r'(\w+)\s*=\s*(-?[0-9]+)\s*;', line)
+            match = re.fullmatch(r'(\w+)\s*=\s*(-?[0-9]+)\s*;', line)
             if not match:
                raise ValueError('invalid enum entry: ' + line)
             current_enum.pairs.append((match.group(1), match.group(2)))
@@ -199,7 +200,6 @@ class MsgParser:
       if current_msg is not None:
          raise ValueError('unterminated message declaration: ' + current_msg.name)
       self.validate()
-      self._order_embedded_messages()
 
    @staticmethod
    def _field_index(message, explicit_index):
@@ -210,24 +210,30 @@ class MsgParser:
    def _order_embedded_messages(self):
       ordered = []
       visiting = set()
-      visited = set()
+      visited = {}
 
-      def visit(name):
+      def visit(name, depth):
+         if depth > MAX_SCHEMA_NESTING:
+            raise ValueError('message dependency nesting exceeds 64 levels: ' + name)
          if name in visited:
-            return
+            if depth + visited[name] > MAX_SCHEMA_NESTING:
+               raise ValueError('message dependency nesting exceeds 64 levels: ' + name)
+            return visited[name]
          if name in visiting:
             raise ValueError('recursive message dependency involving ' + name)
          visiting.add(name)
          message = self.messages[name]
+         height = 0
          for field in message.fields:
             if field.type_name in self.messages:
-               visit(field.type_name)
+               height = max(height, 1 + visit(field.type_name, depth + 1))
          visiting.remove(name)
-         visited.add(name)
+         visited[name] = height
          ordered.append(name)
+         return height
 
       for name in self.message_order:
-         visit(name)
+         visit(name, 0)
       self.message_order = ordered
 
    def validate(self):
@@ -250,6 +256,7 @@ class MsgParser:
             raise ValueError('generated type identifier collision: ' + type_name +
                ' and ' + generated_symbols[symbol])
          generated_symbols[symbol] = type_name
+      self._order_embedded_messages()
       for message in self.messages.values():
          if len(message.fields) > 0xFFFF:
             raise ValueError('too many fields in ' + message.name +

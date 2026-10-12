@@ -112,7 +112,10 @@ int main(void) {
    BenchPayload packed = {0};
    float complex samples[5000];
    size_t i;
-   register_all_types();
+   if (!register_all_types()) {
+      fputs("Could not register SDL types\n", stderr);
+      return 1;
+   }
    small.active = true;
    small.sequence = 123;
    small.code = -2;

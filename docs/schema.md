@@ -31,6 +31,10 @@ items end with semicolons. When the generator reads a directory, each `.sdl`
 file is parsed as a separate schema: types referenced by a message must be
 declared in the same file. Type names must also remain unique across all files
 after C identifier normalization, including case folding.
+Message dependencies must be acyclic and contain at most 64 nested message
+references along any path. The generator checks this limit before emitting
+bindings, including paths through shared subtypes. Text after an enum item's
+semicolon must be whitespace or a `//` comment.
 
 ```sdl
 enum State {
