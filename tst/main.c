@@ -17,6 +17,8 @@ static void test_codec_cases(void) {
    CodecCases *decoded;
    uint8_t *encoded;
    uint8_t *extended;
+   uint8_t *invalid;
+   CodecCases *invalid_decoded;
    size_t encoded_size = 0;
    size_t extended_size;
    size_t decode_size;
@@ -29,6 +31,8 @@ static void test_codec_cases(void) {
    float complex point_values[2];
    uint8_t unknown_field[8] = { 0xE7, 0x03, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00 };
    const uint8_t unknown_payload[3] = { 0xA1, 0xB2, 0xC3 };
+   uint8_t invalid_bool_field[9] = { 17, 0, 0, 0, 1, 0, 0, 0, 2 };
+   bool bool_flags[3] = { true, false, true };
 
    memset(&input, 0, sizeof(input));
    input.has_tiny = true;
@@ -62,6 +66,11 @@ static void test_codec_cases(void) {
    memcpy(&point_values[0], points[0], sizeof(points[0]));
    memcpy(&point_values[1], points[1], sizeof(points[1]));
    input.points = point_values;
+   input.required_enabled = true;
+   input.has_optional_enabled = true;
+   input.optional_enabled = false;
+   input.bool_flags_count = 3;
+   input.bool_flags = bool_flags;
 
    encoded = (uint8_t *)type_encode("CodecCases", &input, &encoded_size);
    assert(encoded != NULL);
@@ -102,8 +111,22 @@ static void test_codec_cases(void) {
    assert(memcmp(decoded->points, point_values, sizeof(point_values)) == 0);
    assert(decoded->empty_values_count == 0);
    assert(decoded->empty_values == NULL);
+   assert(decoded->required_enabled);
+   assert(decoded->has_optional_enabled && !decoded->optional_enabled);
+   assert(decoded->bool_flags_count == 3);
+   assert(decoded->bool_flags[0] && !decoded->bool_flags[1] && decoded->bool_flags[2]);
    type_free(decoded);
    type_free(extended);
+
+   extended_size = encoded_size + sizeof(invalid_bool_field);
+   invalid = (uint8_t *)malloc(extended_size);
+   assert(invalid != NULL);
+   memcpy(invalid, encoded, encoded_size);
+   memcpy(invalid + encoded_size, invalid_bool_field, sizeof(invalid_bool_field));
+   decode_size = extended_size;
+   invalid_decoded = (CodecCases *)type_decode(invalid, &decode_size);
+   assert(invalid_decoded == NULL);
+   type_free(invalid);
    type_free(encoded);
 
    memset(&absent, 0, sizeof(absent));
@@ -119,6 +142,9 @@ static void test_codec_cases(void) {
    assert(!decoded->has_point && !decoded->has_position);
    assert(!decoded->has_state && !decoded->has_empty_text);
    assert(decoded->required_zero == 0);
+   assert(!decoded->required_enabled);
+   assert(!decoded->has_optional_enabled && !decoded->optional_enabled);
+   assert(decoded->bool_flags_count == 0 && decoded->bool_flags == NULL);
    assert(decoded->samples_count == 0 && decoded->samples == NULL);
    assert(decoded->measurements_count == 0 && decoded->measurements == NULL);
    assert(decoded->labels_count == 0 && decoded->labels == NULL);
