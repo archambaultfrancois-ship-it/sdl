@@ -6,6 +6,7 @@ import argparse
 import os
 import sys
 import math
+import warnings
 from decimal import Decimal
 
 
@@ -346,6 +347,27 @@ class MsgParser:
             values.add(numeric_value)
       for root_name in self.message_order:
          canonical_type_descriptor(self, root_name)
+      self._warn_packed_encodings()
+
+   def _warn_packed_encodings(self):
+      encoding_sources = {}
+      for name in self.message_order:
+         for field in self.messages[name].fields:
+            source = None
+            if 'encoding' in field.wire:
+               source = (field.name, field.wire['encoding'])
+            elif field.type_name in encoding_sources:
+               path, encoding = encoding_sources[field.type_name]
+               source = (field.name + '.' + path, encoding)
+            if source is None:
+               continue
+            encoding_sources.setdefault(name, source)
+            if field.modifier == 'packed':
+               path, encoding = source
+               warnings.warn('packed field ' + name + '.' + field.name +
+                  ' uses wire(encoding=' + encoding + ') at ' + name + '.' + path +
+                  '; transmitted element size may vary and representation conversion '
+                  'may reduce runtime optimizations', UserWarning, stacklevel=3)
 
    def fixed_wire_size(self, type_name, active=None):
       primitive_sizes = {

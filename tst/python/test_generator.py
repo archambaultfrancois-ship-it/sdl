@@ -2,6 +2,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+import warnings
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'gen'))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'runtime/python'))
@@ -15,6 +16,85 @@ from ada_backend import AdaBackend, generate_ada
 
 
 class GeneratorValidationTests(unittest.TestCase):
+   def test_01_schema_packed_encodings_warn_without_rejecting_schema(self):
+      for type_name, encoding in (('uint64', 'varint'), ('int32', 'varint'),
+            ('int64', 'zigzag'), ('State', 'varint'), ('State', 'zigzag')):
+         with self.subTest(type=type_name, encoding=encoding):
+            source = 'enum State {\n ZERO = 0;\n}\nmessage Batch {\n packed ' + \
+               type_name + ' values wire(encoding=' + encoding + ');\n}\n'
+            with warnings.catch_warnings(record=True) as caught:
+               warnings.simplefilter('always')
+               parser = MsgParser()
+               parser.parse_text(source)
+            self.assertEqual(len(caught), 1)
+            message = str(caught[0].message)
+            self.assertIn('packed field Batch.values', message)
+            self.assertIn('wire(encoding=' + encoding + ') at Batch.values', message)
+            self.assertIn('may reduce runtime optimizations', message)
+            self.assertIn(b'@' + (b'v' if encoding == 'varint' else b'z'),
+               canonical_type_descriptor(parser))
+
+   def test_01_schema_packed_nested_encoding_warning_reports_field_path(self):
+      source = '''message Batch {
+ packed Record records;
+}
+message Record {
+ Leaf[2] points;
+}
+message Leaf {
+ struct {
+   int64 value wire(encoding=zigzag);
+ } inner;
+}
+'''
+      with warnings.catch_warnings(record=True) as caught:
+         warnings.simplefilter('always')
+         MsgParser().parse_text(source)
+      self.assertEqual(len(caught), 1)
+      self.assertIn('packed field Batch.records', str(caught[0].message))
+      self.assertIn('wire(encoding=zigzag) at Batch.records.points.inner.value',
+         str(caught[0].message))
+
+   def test_01_schema_packed_encoding_warning_excludes_unaffected_fields(self):
+      source = '''message Item {
+ int32 value wire(encoding=zigzag);
+}
+message Batch {
+ uint64 counter wire(encoding=varint);
+ repeated Item items;
+ packed uint32 ordinary;
+ packed int16 narrow wire(bits=12,align=4,pad_after=1);
+ packed fl32 quantized wire(bits=12,q=0.25);
+}
+'''
+      with warnings.catch_warnings(record=True) as caught:
+         warnings.simplefilter('always')
+         MsgParser().parse_text(source)
+      self.assertEqual(caught, [])
+      invalid = 'message Item {\n optional int32 value wire(encoding=zigzag);\n}\n' + \
+         'message Batch {\n packed Item items;\n}\n'
+      with warnings.catch_warnings(record=True) as caught:
+         warnings.simplefilter('always')
+         with self.assertRaisesRegex(ValueError, 'packed field type must have a fixed wire size'):
+            MsgParser().parse_text(invalid)
+      self.assertEqual(caught, [])
+
+   def test_02_backend_packed_encoding_warning_once_for_multiple_backends(self):
+      import subprocess
+      repo = pathlib.Path(__file__).resolve().parents[2]
+      with tempfile.TemporaryDirectory() as temporary:
+         root = pathlib.Path(temporary)
+         source = root / 'warning.sdl'
+         source.write_text('message Batch {\n packed uint64 values wire(encoding=varint);\n}\n')
+         result = subprocess.run([sys.executable, str(repo / 'gen/generator.py'),
+            '-c', '-rust', '-python', '-java', '-ada', '-matlab', str(source),
+            str(root / 'generated')], capture_output=True, text=True)
+         self.assertEqual(result.returncode, 0, result.stderr)
+         self.assertEqual(result.stderr.count('UserWarning: packed field Batch.values'), 1,
+            result.stderr)
+         for backend in ('c', 'rust', 'python', 'java', 'ada', 'matlab'):
+            self.assertTrue(any((root / 'generated' / backend).iterdir()), backend)
+
    def test_02_backend_automatic_fixed_codecs_without_packed(self):
       from ada_direct import DirectCodecs
       from matlab_backend import MatlabBackend

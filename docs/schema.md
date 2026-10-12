@@ -367,7 +367,13 @@ Low-level generated fixed codecs describe that ordinary layout. Use the public
 context-based message encode/decode APIs to apply representation clauses.
 Fixed-array and `packed` eligibility is checked against the ordinary logical
 layout; a custom varint clause can make the actual transmitted element width
-variable. Conversion buffers are limited to 64 MiB, each sequence or array dimension to
+variable. The generator warns when a `packed` field uses `encoding=varint` or
+`encoding=zigzag`, either directly or in a nested element field. The warning
+identifies the packed field and the encoding source: transmitted element sizes
+may vary, and representation conversion can reduce runtime optimizations.
+Generation still succeeds.
+
+Conversion buffers are limited to 64 MiB, each sequence or array dimension to
 1,048,576 elements, and nesting to 64. Python native packed views are unavailable
 for contexts containing custom representations. Native memory alignment clauses
 are separate from `wire(align=...)` and are not implemented here.
