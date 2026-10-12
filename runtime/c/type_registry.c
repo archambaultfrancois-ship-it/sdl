@@ -1,4 +1,5 @@
 #include "type_private.h"
+#include "type_registry.h"
 
 #define SDL_REGISTRY_LIMIT 256
 
