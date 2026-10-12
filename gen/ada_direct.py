@@ -2,7 +2,7 @@
 from math import prod
 from ada_backend import typ, stem, quote
 
-WIDTHS = {'bool': 1, 'int8': 1, 'int16': 2, 'int32': 4, 'int64': 8,
+WIDTHS = {'uint8':1,'uint16':2,'uint32':4,'uint64':8,'bool': 1, 'int8': 1, 'int16': 2, 'int32': 4, 'int64': 8,
           'fl32': 4, 'fl64': 8, 'c32': 8, 'c64': 16}
 
 

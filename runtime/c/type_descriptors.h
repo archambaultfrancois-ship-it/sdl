@@ -17,7 +17,8 @@ typedef enum {
    SDL_TYPE_ENUM,
    SDL_TYPE_STRING,
    SDL_TYPE_STRUCT,
-   SDL_TYPE_ARRAY
+   SDL_TYPE_ARRAY,
+   SDL_TYPE_UINT8, SDL_TYPE_UINT16, SDL_TYPE_UINT32, SDL_TYPE_UINT64
 } SdlTypeKind;
 
 typedef struct SdlTypeDesc SdlTypeDesc;
@@ -63,6 +64,10 @@ struct SdlTypeDesc {
 };
 
 extern const SdlTypeDesc SDL_BOOL_DESC;
+extern const SdlTypeDesc SDL_UINT8_DESC;
+extern const SdlTypeDesc SDL_UINT16_DESC;
+extern const SdlTypeDesc SDL_UINT32_DESC;
+extern const SdlTypeDesc SDL_UINT64_DESC;
 extern const SdlTypeDesc SDL_INT8_DESC;
 extern const SdlTypeDesc SDL_INT16_DESC;
 extern const SdlTypeDesc SDL_INT32_DESC;

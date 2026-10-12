@@ -9,6 +9,7 @@ pub enum DynamicValue {
     Null,
     Bool(bool),
     Integer(i64),
+    Unsigned(u64),
     Float(f64),
     Complex32(Complex32),
     Complex64(Complex64),
@@ -35,6 +36,7 @@ pub struct FieldDesc {
     pub modifier: u8,
     pub type_name: String,
     pub dimensions: Vec<usize>,
+    pub wire: crate::representation::WireOptions,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -98,7 +100,7 @@ pub(crate) fn parse_descriptor(text: &str) -> Result<SchemaDesc, CodecError> {
                     .ok_or(CodecError::InvalidDescriptor)?
                     .split(' ')
                     .collect();
-                if row.len() != 4 || fields.len() >= 65535 {
+                if !(row.len() == 4 || row.len() == 5) || fields.len() >= 65535 {
                     return Err(CodecError::InvalidDescriptor);
                 }
                 let id = number(
@@ -127,8 +129,9 @@ pub(crate) fn parse_descriptor(text: &str) -> Result<SchemaDesc, CodecError> {
                     }
                     dimensions.push(n as usize);
                 }
+                let wire = if row.len()==5 { crate::representation::WireOptions::parse(row[4].strip_prefix("wire(").and_then(|s|s.strip_suffix(");")).ok_or(CodecError::InvalidDescriptor)?)? } else { Default::default() };
                 let field_name = row[3]
-                    .strip_suffix(';')
+                    .strip_suffix(';').or_else(|| if row.len()==5 {Some(row[3])}else{None})
                     .ok_or(CodecError::InvalidDescriptor)?
                     .to_owned();
                 if id <= previous_id
@@ -146,6 +149,7 @@ pub(crate) fn parse_descriptor(text: &str) -> Result<SchemaDesc, CodecError> {
                     modifier,
                     type_name,
                     dimensions,
+                    wire,
                 });
             }
             messages.insert(name, MessageDesc { fields });
@@ -226,6 +230,7 @@ pub(crate) fn parse_descriptor(text: &str) -> Result<SchemaDesc, CodecError> {
             }
         }
     }
+    for m in schema.messages.values() { for f in &m.fields { f.wire.validate(&f.type_name,schema.enums.contains_key(&f.type_name))?; } }
     let mut visiting = HashSet::new();
     let mut visited = HashMap::new();
     for name in schema.messages.keys() {
@@ -275,14 +280,14 @@ fn validate_message_dependencies(
 fn is_builtin_type(name: &str) -> bool {
     matches!(
         name,
-        "bool" | "int8" | "int16" | "int32" | "int64" | "fl32" | "fl64" | "c32" | "c64" | "string"
+        "bool" | "int8" | "uint8" | "int16" | "uint16" | "int32" | "uint32" | "int64" | "uint64" | "fl32" | "fl64" | "c32" | "c64" | "string"
     )
 }
 
 fn known_type(name: &str, schema: &SchemaDesc) -> bool {
     matches!(
         name,
-        "bool" | "int8" | "int16" | "int32" | "int64" | "fl32" | "fl64" | "c32" | "c64" | "string"
+        "bool" | "int8" | "uint8" | "int16" | "uint16" | "int32" | "uint32" | "int64" | "uint64" | "fl32" | "fl64" | "c32" | "c64" | "string"
     ) || schema.messages.contains_key(name)
         || schema.enums.contains_key(name)
 }
@@ -310,10 +315,10 @@ fn fixed_type_size_cached(
     }
     let result = (|| {
         let primitive = match name {
-            "bool" | "int8" => Some(1),
-            "int16" => Some(2),
-            "int32" | "fl32" => Some(4),
-            "int64" | "fl64" => Some(8),
+            "bool" | "int8" | "uint8" => Some(1),
+            "int16" | "uint16" => Some(2),
+            "int32" | "uint32" | "fl32" => Some(4),
+            "int64" | "uint64" | "fl64" => Some(8),
             "c32" => Some(8),
             "c64" => Some(16),
             "string" => return None,
@@ -362,12 +367,12 @@ pub(crate) fn render(schema: &SchemaDesc) -> String {
         for f in &schema.messages[name].fields {
             let dims: String = f.dimensions.iter().map(|n| format!("[{}]", n)).collect();
             text.push_str(&format!(
-                "  {}: {} {}{} {};\n",
+                "  {}: {} {}{} {}{};\n",
                 f.id,
                 ["required", "optional", "repeated", "packed"][f.modifier as usize],
                 f.type_name,
                 dims,
-                f.name
+                f.name, f.wire.suffix()
             ));
         }
         text.push_str("}\n");
@@ -388,7 +393,8 @@ pub fn decode_dynamic(
     context: &crate::wire::Context,
     data: &[u8],
 ) -> Result<DynamicMessage, CodecError> {
-    let mut reader = crate::wire::Reader::new(context, data);
+    let normalized = context.normalize(data)?;
+    let mut reader = crate::wire::Reader::new(context, normalized.as_ref());
     let name = reader.root()?.to_owned();
     let result = read_message(&name, &mut reader)?;
     reader.finish()?;
@@ -457,9 +463,13 @@ fn read_value(
     }
     Ok(match name {
         "bool" => DynamicValue::Bool(bool::decode_value(r, name)?),
+        "uint8" => DynamicValue::Unsigned(u8::decode_value(r, name)? as u64),
         "int8" => DynamicValue::Integer(i8::decode_value(r, name)? as i64),
+        "uint16" => DynamicValue::Unsigned(u16::decode_value(r, name)? as u64),
         "int16" => DynamicValue::Integer(i16::decode_value(r, name)? as i64),
+        "uint32" => DynamicValue::Unsigned(u32::decode_value(r, name)? as u64),
         "int32" => DynamicValue::Integer(i32::decode_value(r, name)? as i64),
+        "uint64" => DynamicValue::Unsigned(u64::decode_value(r, name)? as u64),
         "int64" => DynamicValue::Integer(i64::decode_value(r, name)?),
         "fl32" => DynamicValue::Float(f32::decode_value(r, name)? as f64),
         "fl64" => DynamicValue::Float(f64::decode_value(r, name)?),

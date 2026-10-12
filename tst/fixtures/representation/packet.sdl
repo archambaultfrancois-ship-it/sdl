@@ -1,0 +1,8 @@
+message Packet {
+ bool active wire(bits=1);
+ bool alarm wire(bits=1);
+ int16 level wire(bits=6);
+ uint64 counter wire(encoding=varint);
+ int64 delta wire(encoding=zigzag);
+ fl64 value wire(align=8,pad_after=2);
+}

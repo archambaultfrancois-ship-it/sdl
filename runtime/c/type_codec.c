@@ -74,13 +74,17 @@ static size_t fixed_wire_size_depth(const SdlTypeDesc *type, const SdlTypeDesc *
    }
    switch (type->kind) {
    case SDL_TYPE_BOOL:
+   case SDL_TYPE_UINT8:
    case SDL_TYPE_INT8:
       return 1;
+   case SDL_TYPE_UINT16:
    case SDL_TYPE_INT16:
       return 2;
+   case SDL_TYPE_UINT32:
    case SDL_TYPE_INT32:
    case SDL_TYPE_FLOAT32:
       return 4;
+   case SDL_TYPE_UINT64:
    case SDL_TYPE_INT64:
    case SDL_TYPE_FLOAT64:
       return 8;

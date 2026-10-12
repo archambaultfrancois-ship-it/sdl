@@ -68,8 +68,8 @@ class PythonBackend:
 
    def _python_type(self, type_name):
       types = {
-         'bool': 'bool', 'int8': 'int', 'int16': 'int', 'int32': 'int',
-         'int64': 'int', 'fl32': 'float', 'fl64': 'float',
+         'bool': 'bool', 'int8': 'int', 'uint8': 'int', 'int16': 'int', 'uint16': 'int', 'int32': 'int', 'uint32': 'int',
+         'int64': 'int', 'uint64': 'int', 'fl32': 'float', 'fl64': 'float',
          'c32': 'Complex32', 'c64': 'Complex64', 'string': 'str',
       }
       return types.get(type_name, c_identifier(type_name))

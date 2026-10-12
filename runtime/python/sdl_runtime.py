@@ -4,6 +4,7 @@ import hashlib
 from collections import namedtuple
 import re
 import struct
+import sdl_representation as _representation
 import json
 import os
 import math
@@ -22,7 +23,7 @@ from enum import IntEnum
 _WIRE_PREFIX = '>'
 _MAX_DESCRIPTOR_SIZE = 1024 * 1024
 _PRIMITIVE_WIRE_SIZES = {
-   'bool': 1, 'int8': 1, 'int16': 2, 'int32': 4, 'int64': 8,
+   'bool': 1, 'int8': 1, 'uint8': 1, 'int16': 2, 'uint16': 2, 'int32': 4, 'uint32': 4, 'int64': 8, 'uint64': 8,
    'fl32': 4, 'fl64': 8, 'c32': 8, 'c64': 16,
 }
 _BUILTIN_TYPES = frozenset(tuple(_PRIMITIVE_WIRE_SIZES) + ('string',))
@@ -112,10 +113,10 @@ class SdlDynamicMessage:
 def default_value(type_name, namespace):
    defaults = {
       'bool': False,
-      'int8': 0,
-      'int16': 0,
-      'int32': 0,
-      'int64': 0,
+      'int8': 0, 'uint8': 0,
+      'int16': 0, 'uint16': 0,
+      'int32': 0, 'uint32': 0,
+      'int64': 0, 'uint64': 0,
       'fl32': 0.0,
       'fl64': 0.0,
       'c32': Complex32(),
@@ -137,8 +138,8 @@ def default_value(type_name, namespace):
 
 def _pack_value(type_name, value, namespace=None):
    formats = {
-      'int8': _WIRE_PREFIX + 'b', 'int16': _WIRE_PREFIX + 'h',
-      'int32': _WIRE_PREFIX + 'i', 'int64': _WIRE_PREFIX + 'q',
+      'int8': _WIRE_PREFIX + 'b', 'uint8': _WIRE_PREFIX + 'B', 'int16': _WIRE_PREFIX + 'h', 'uint16': _WIRE_PREFIX + 'H',
+      'int32': _WIRE_PREFIX + 'i', 'uint32': _WIRE_PREFIX + 'I', 'int64': _WIRE_PREFIX + 'q', 'uint64': _WIRE_PREFIX + 'Q',
       'fl32': _WIRE_PREFIX + 'f', 'fl64': _WIRE_PREFIX + 'd',
    }
    if type_name == 'bool':
@@ -175,8 +176,8 @@ def _pack_value(type_name, value, namespace=None):
 
 def _unpack_value(type_name, payload, namespace):
    formats = {
-      'int8': _WIRE_PREFIX + 'b', 'int16': _WIRE_PREFIX + 'h',
-      'int32': _WIRE_PREFIX + 'i', 'int64': _WIRE_PREFIX + 'q',
+      'int8': _WIRE_PREFIX + 'b', 'uint8': _WIRE_PREFIX + 'B', 'int16': _WIRE_PREFIX + 'h', 'uint16': _WIRE_PREFIX + 'H',
+      'int32': _WIRE_PREFIX + 'i', 'uint32': _WIRE_PREFIX + 'I', 'int64': _WIRE_PREFIX + 'q', 'uint64': _WIRE_PREFIX + 'Q',
       'fl32': _WIRE_PREFIX + 'f', 'fl64': _WIRE_PREFIX + 'd',
    }
    if type_name == 'bool':
@@ -279,7 +280,7 @@ def _validate_dynamic_descriptor(descriptor):
       names = set()
       previous_field_id = 0
       for field in entry[1]:
-         if (not isinstance(field, dict) or set(field) !=
+         if (not isinstance(field, dict) or set(field) - {'wire_text', 'wire'} !=
                {'id', 'name', 'modifier', 'type', 'dimensions'}):
             raise CodecError('invalid field declaration in descriptor')
          field_id = field['id']
@@ -480,7 +481,7 @@ def display(message, indent_width=3):
 
 _NAME = r'[\w$]+'
 _FIELD = re.compile(r'  ([0-9]+): (required|optional|repeated|packed) (' + _NAME +
-   r')((?:\[[0-9]+\])*) (' + _NAME + r');')
+   r')((?:\[[0-9]+\])*) (' + _NAME + r')(?: wire\(([^()]*)\))?;')
 
 
 def _parse_description(text):
@@ -517,7 +518,7 @@ def _parse_description(text):
          match = _FIELD.fullmatch(line)
          if not match:
             raise CodecError('invalid field declaration')
-         field_id, modifier, type_name, dimensions, name = match.groups()
+         field_id, modifier, type_name, dimensions, name, wire = match.groups()
          if max(len(name.encode('utf-8')), len(type_name.encode('utf-8'))) > 65535:
             raise CodecError('identifier exceeds limit')
          try:
@@ -528,7 +529,7 @@ def _parse_description(text):
          if len(dims) > 255 or len(current[1]) >= 65535:
             raise CodecError('too many fields or dimensions')
          current[1].append(dict(id=field_id, modifier=modifier,
-            type=type_name, dimensions=dims, name=name))
+            type=type_name, dimensions=dims, name=name, wire_text=wire))
       else:
          match = re.fullmatch(r'  (' + _NAME + r') = (-?[0-9]+);', line)
          if not match:
@@ -542,7 +543,16 @@ def _parse_description(text):
          current[1].append([match[1], number])
    if current is not None:
       raise CodecError('unclosed declaration')
-   return _validate_dynamic_descriptor(declarations)
+   messages, enums = _validate_dynamic_descriptor(declarations)
+   try:
+      for fields in messages.values():
+         for f in fields:
+            wire = f.pop('wire_text', None)
+            if wire is not None:
+               f['wire'] = _representation.options(wire, f['type'], f['type'] in enums)
+   except ValueError as error:
+      raise CodecError(str(error)) from error
+   return messages, enums
 
 
 def _render_description(messages, enums):
@@ -551,8 +561,8 @@ def _render_description(messages, enums):
       lines.append('message ' + name + ' {')
       for f in messages[name]:
          dims = ''.join('[%d]' % n for n in f['dimensions'])
-         lines.append('  %d: %s %s%s %s;' %
-            (f['id'], f['modifier'], f['type'], dims, f['name']))
+         lines.append('  %d: %s %s%s %s%s;' %
+            (f['id'], f['modifier'], f['type'], dims, f['name'], _representation.suffix(f.get('wire', {}))))
       lines.append('}')
    for name in sorted(enums, key=lambda value: value.encode('utf-8')):
       lines.append('enum ' + name + ' {')
@@ -715,6 +725,7 @@ class Context:
    """Prepared catalogue; independent of transport and message buffers."""
    def __init__(self, text, local_types=()):
       self.messages, self.enums = _parse_description(text)
+      self.has_representation = any(f.get('wire') for fields in self.messages.values() for f in fields)
       self.names = tuple(sorted(self.messages, key=lambda name: name.encode('utf-8')))
       self.ids = {name: i + 1 for i, name in enumerate(self.names)}
       self.classes = _classes(local_types)
@@ -745,7 +756,7 @@ class Context:
                   self.packed_codecs[key] = plan
       self.native_packed = {}
       self.native_layouts = {}
-      self.native_enabled = _sdl_native is not None and not os.environ.get('SDL_PYTHON_NO_NATIVE')
+      self.native_enabled = _sdl_native is not None and not os.environ.get('SDL_PYTHON_NO_NATIVE') and not self.has_representation
       if self.native_enabled:
          for fields in self.messages.values():
             for field in fields:
@@ -958,8 +969,8 @@ def _fixed_codec(ctx, name, dimensions=()):
    Object construction preserves the public list/message API. Incompatible
    catalogues use the generic decoder so schema evolution remains supported.
    """
-   formats = {'bool': 'B', 'int8': 'b', 'int16': 'h', 'int32': 'i',
-      'int64': 'q', 'fl32': 'f', 'fl64': 'd', 'c32': 'ff', 'c64': 'dd'}
+   formats = {'bool': 'B', 'int8': 'b', 'uint8': 'B', 'int16': 'h', 'uint16': 'H', 'int32': 'i', 'uint32': 'I',
+      'int64': 'q', 'uint64': 'Q', 'fl32': 'f', 'fl64': 'd', 'c32': 'ff', 'c64': 'dd'}
 
    def node(type_name, dimensions=()):
       if dimensions:
@@ -1138,7 +1149,7 @@ def _write_message(ctx, name, message, output):
       else:
          values = (value,)
       # One struct conversion per numeric array instead of one per element.
-      fmt = {'int8':'b', 'int16':'h', 'int32':'i', 'int64':'q', 'fl32':'f', 'fl64':'d'}.get(f['type'])
+      fmt = {'int8':'b', 'uint8': 'B', 'int16':'h', 'uint16': 'H', 'int32':'i', 'uint32': 'I', 'int64':'q', 'uint64': 'Q', 'fl32':'f', 'fl64':'d'}.get(f['type'])
       plan = ctx.packed_codecs.get((f['type'], tuple(f['dimensions']))) if modifier in ('packed', 'repeated') else None
       native = ctx.native_packed.get((f['type'], tuple(f['dimensions']))) if modifier in ('packed', 'repeated') else None
       if isinstance(value, PackedArray) and modifier in ('packed', 'repeated'):
@@ -1202,7 +1213,16 @@ def encode(ctx, message):
    except KeyError as error:
       raise CodecError('message is not in the catalogue') from error
    _write_message(ctx, message._SDL_NAME, message, output)
-   return bytes(output)
+   return _transform(ctx, bytes(output), True)
+
+
+def _transform(ctx, data, encoding):
+   if not ctx.has_representation:
+      return data
+   try:
+      return _representation.transform(ctx.messages, ctx.enums, ctx.names, data, encoding)
+   except (ValueError, OverflowError) as error:
+      raise CodecError(str(error)) from error
 
 
 class _BufferWriter:
@@ -1235,6 +1255,11 @@ def encode_into(ctx, message, buffer, offset=0):
       raise CodecError('encode_into expects a prepared context and an SDL message')
    if type(offset) is not int or offset < 0:
       raise CodecError('invalid output offset')
+   if ctx.has_representation:
+      output = _BufferWriter(buffer, offset)
+      data = encode(ctx, message)
+      output.extend(data)
+      return len(data)
    native = ctx.native_messages.get(message._SDL_NAME)
    if native is not None:
       try:
@@ -1306,7 +1331,7 @@ def _read_message(ctx, name, reader, dynamic=False, skip=False):
       local = fields.get(f['id'])
       discard = skip or (not dynamic and local is None)
       values = []
-      fmt = {'int8':'b', 'int16':'h', 'int32':'i', 'int64':'q', 'fl32':'f', 'fl64':'d'}.get(f['type'])
+      fmt = {'int8':'b', 'uint8': 'B', 'int16':'h', 'uint16': 'H', 'int32':'i', 'uint32': 'I', 'int64':'q', 'uint64': 'Q', 'fl32':'f', 'fl64':'d'}.get(f['type'])
       plan = ctx.packed_codecs.get((f['type'], tuple(f['dimensions']))) if modifier in ('packed', 'repeated') and not dynamic else None
       native = ctx.native_packed.get((f['type'], tuple(f['dimensions']))) if modifier in ('packed', 'repeated') and not dynamic else None
       if native is not None and reader.packed == 'view' and modifier == 'packed' and not discard:
@@ -1355,6 +1380,7 @@ def _read_message(ctx, name, reader, dynamic=False, skip=False):
 
 
 def _decode(ctx, data, dynamic, packed='objects'):
+   data = _transform(ctx, data, False)
    if packed not in ('objects', 'view'):
       raise CodecError('packed must be objects or view')
    if packed == 'view':

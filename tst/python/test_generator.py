@@ -14,6 +14,169 @@ from ada_backend import AdaBackend, generate_ada
 
 
 class GeneratorValidationTests(unittest.TestCase):
+   def test_01_schema_message_keyword_aliases(self):
+      source = """message Child {
+ int32 value;
+}
+message Packet {
+ Child child;
+ optional struct {
+   bool active;
+ } details;
+}
+"""
+      canonical = MsgParser()
+      canonical.parse_text(source)
+      for keyword in ('message', 'structure', 'struct'):
+         variant = source.replace('message ', keyword + ' ').replace('optional struct {', 'optional ' + keyword + ' {')
+         with self.subTest(keyword=keyword):
+            parser = MsgParser()
+            parser.parse_text(variant)
+            self.assertEqual(canonical_type_descriptor(parser), canonical_type_descriptor(canonical))
+            self.assertEqual(parser.message_order, canonical.message_order)
+            for malformed, error in (
+               (keyword + ' Packet\n', 'unexpected SDL statement'),
+               (keyword + ' Packet {\n', 'unterminated message'),
+               ('message Packet {\n}\n' + keyword + ' Packet {\n}\n', 'duplicate type name'),
+               ('enum State {\n' + keyword + ' Packet {\n', 'missing closing brace'),
+            ):
+               with self.assertRaisesRegex(ValueError, error):
+                  MsgParser().parse_text(malformed)
+
+   def test_02_backend_message_aliases_produce_identical_outputs(self):
+      from matlab_backend import generate_matlab
+      source = """message Child {
+ int32 value;
+}
+message Packet {
+ Child child;
+ optional struct {
+   bool active;
+ } details;
+}
+"""
+      with tempfile.TemporaryDirectory() as temporary:
+         root = pathlib.Path(temporary)
+         schema = root / 'packet.sdl'
+         for generate in (generate_c, generate_rust, generate_python, generate_java, generate_ada, generate_matlab):
+            with self.subTest(backend=generate.__name__):
+               schema.write_text(source)
+               generate(str(schema), str(root / 'canonical'))
+               outputs = lambda directory: {str(p.relative_to(directory)): p.read_bytes() for p in directory.rglob('*') if p.is_file()}
+               for keyword in ('message', 'structure', 'struct'):
+                  schema.write_text(source.replace('message ', keyword + ' ').replace('optional struct {', 'optional ' + keyword + ' {'))
+                  generate(str(schema), str(root / 'alias'))
+                  self.assertEqual(outputs(root / 'canonical'), outputs(root / 'alias'))
+
+   def test_01_schema_required_is_default(self):
+      parser = MsgParser()
+      parser.parse_text("""
+enum State {
+ READY = 1;
+}
+message Child {
+ bool active;
+}
+message Packet {
+ 1: int32 value;
+ State state;
+ Child child;
+ int16[2] samples;
+ optional string label;
+ repeated Child children;
+ packed int16 readings;
+ struct {
+   int32 inner;
+   5: struct {
+      bool active;
+   } nested;
+ } details;
+}
+""")
+      fields = parser.messages['Packet'].fields
+      self.assertEqual([f.index for f in fields], list(range(1, 9)))
+      self.assertEqual([f.modifier for f in fields],
+         ['required'] * 4 + ['optional', 'repeated', 'packed', 'required'])
+      self.assertEqual(parser.messages['Packet$1'].fields[0].modifier, 'required')
+      self.assertEqual(parser.messages['Packet$1'].fields[1].modifier, 'required')
+      self.assertEqual(parser.messages['Packet$2'].fields[0].modifier, 'required')
+      self.assertIn('  1: required int32 value;', canonical_type_descriptor(parser).decode())
+      with self.assertRaisesRegex(ValueError, 'invalid field declaration'):
+         MsgParser().parse_text('message Packet {\noptional required bool value;\n}\n')
+
+   def test_01_schema_implicit_field_numbers(self):
+      parser = MsgParser()
+      parser.parse_text("""
+message Packet {
+ required int32 first;
+ optional string second;
+ 10: repeated int16 third;
+ packed int16 fourth;
+ 5: required bool fifth;
+ required int32[2] sixth;
+}
+message Other {
+ required bool first;
+}
+""")
+      self.assertEqual([f.index for f in parser.messages['Packet'].fields], [1, 2, 10, 11, 5, 6])
+      self.assertEqual(parser.messages['Other'].fields[0].index, 1)
+      self.assertIn('  11: packed int16 fourth;', canonical_type_descriptor(parser).decode())
+
+   def test_01_schema_implicit_nested_numbers(self):
+      parser = MsgParser()
+      parser.parse_text("""
+message Envelope {
+ required bool flag;
+ optional struct {
+   required int32 value;
+   required struct {
+      required bool flag;
+   } inner;
+   required int32 tail;
+ } data;
+ required string label;
+}
+""")
+      self.assertEqual([f.index for f in parser.messages['Envelope'].fields], [1, 2, 3])
+      self.assertEqual([f.index for f in parser.messages['Envelope$1'].fields], [1, 2, 3])
+      self.assertEqual(parser.messages['Envelope$2'].fields[0].index, 1)
+
+   def test_01_schema_implicit_number_conflicts_and_overflow(self):
+      for fields, error in (
+         ('required bool a;\n1: required bool b;', 'duplicate field ID'),
+         ('2: required bool a;\n1: required bool b;\nrequired bool c;', 'duplicate field ID'),
+         ('4294967295: required bool a;\nrequired bool b;', 'nonzero uint32'),
+      ):
+         with self.subTest(fields=fields), self.assertRaisesRegex(ValueError, error):
+            MsgParser().parse_text('message Packet {\n' + fields + '\n}\n')
+
+   def test_02_backend_implicit_numbers_produce_identical_outputs(self):
+      from matlab_backend import generate_matlab
+      explicit = """message Packet {
+ 1: required int32 value;
+ 2: optional struct {
+   1: required bool flag;
+ } details;
+ 3: packed int16 samples;
+}
+"""
+      variants = (explicit.replace('required ', ''),
+         explicit.replace('1: ', '').replace('2: ', '').replace('3: ', ''),
+         explicit.replace('required ', '').replace('1: ', '').replace('2: ', '').replace('3: ', ''))
+      with tempfile.TemporaryDirectory() as temporary:
+         root = pathlib.Path(temporary)
+         for generate in (generate_c, generate_rust, generate_python, generate_java, generate_ada, generate_matlab):
+            with self.subTest(backend=generate.__name__):
+               schema = root / 'packet.sdl'
+               schema.write_text(explicit)
+               generate(str(schema), str(root / 'explicit'))
+               outputs = lambda directory: {str(p.relative_to(directory)): p.read_bytes() for p in directory.rglob('*') if p.is_file()}
+               for implicit in variants:
+                  schema.write_text(implicit)
+                  generate(str(schema), str(root / 'implicit'))
+                  self.assertEqual(outputs(root / 'explicit'), outputs(root / 'implicit'))
+
    def test_01_schema_01_message_and_enum_braces_are_required_and_balanced(self):
       malformed_schemas = (
          ('message Packet\n   1: required int32 value;\n}\n',

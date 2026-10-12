@@ -1,0 +1,7 @@
+message Unsigned {
+ uint8 tiny;
+ uint16 small;
+ uint32 medium;
+ uint64 large;
+ packed uint64 values;
+}

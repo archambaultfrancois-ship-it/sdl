@@ -13,3 +13,6 @@ pub use wire::{
     Complex32, Complex64, Context, Reader, SdlDisplay, SdlMessage, TypeInfo, TypedMessage,
     WireValue,
 };
+
+mod representation;
+pub use representation::WireOptions;

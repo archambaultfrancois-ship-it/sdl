@@ -24,9 +24,15 @@ ULEB128(message_type_id) | field_1_value | field_2_value | ...
 Message IDs are 1-based positions of **all message declarations** in the
 catalogue, sorted by UTF-8 name bytes; enums receive no message IDs. Fields
 follow ascending field ID. Nested messages carry only their fields. Data
-contains no catalogue, hash, field IDs, field lengths, alignment, or padding.
+contains no catalogue, hash, field IDs, or field lengths. Ordinary values have
+no alignment or padding; explicit `wire(...)` clauses may insert zero padding.
 
 ## Catalogue text
+
+Source schemas may omit field IDs and the `required` modifier. The generator
+resolves these defaults before rendering the catalogue; catalogue fields always
+include both a numeric ID and an explicit modifier. Equivalent explicit and
+implicit source schemas therefore produce identical catalogue bytes and hashes.
 
 The canonical rendering uses:
 
@@ -35,6 +41,9 @@ The canonical rendering uses:
 - `message Name {` or `enum Name {`, LF, declaration body, `}`, LF.
 - Exactly two spaces before field/item declarations and no blank lines.
 - Fields as `ID: modifier Type[dim] field;`, sorted by numeric field ID.
+  An optional canonical ` wire(...)` follows the field name, before the semicolon;
+  options use order `bits`, `encoding`, `align`, `pad_after` with comma separators
+  and no internal spaces. See [representation rules](schema.md#field-wire-representation).
 - Enum items as `NAME = signed_decimal;`, in declaration order.
 - UTF-8 text, LF after every line, no BOM and no NUL terminator.
 
@@ -64,6 +73,11 @@ resolve a collision. See [runtime APIs](runtime.md#catalogue-identity-and-messag
 
 ## Values
 
+The table gives ordinary byte layouts. Field `wire(...)` clauses override the
+integer encoding or add alignment/padding according to the catalogue. Clauses
+also apply to scalar array elements; nested message bodies reset alignment.
+
+
 | Value | Wire representation |
 | --- | --- |
 | Required | Value directly, including a variable-size string or message |
@@ -72,7 +86,7 @@ resolve a collision. See [runtime APIs](runtime.md#catalogue-identity-and-messag
 | Packed | Same representation as repeated; element must have fixed wire size |
 | Fixed array | Elements in row-major order, dimensions from catalogue, no count |
 | Bool | One byte, exactly 0 or 1 |
-| int8/int16/int32/int64 | 1/2/4/8 bytes, signed two's complement, big endian |
+| int8/int16/int32/int64, uint8/uint16/uint32/uint64 | 1/2/4/8 bytes, signed two's complement or unsigned binary, big endian |
 | Enum | Signed int32 big endian; value must belong to the declared enum |
 | fl32/fl64 | 4/8 bytes, IEEE-754 binary32/binary64, big endian |
 | c32/c64 | Real component followed by imaginary component, each fl32/fl64 |

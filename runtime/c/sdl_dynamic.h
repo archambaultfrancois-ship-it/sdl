@@ -17,7 +17,8 @@ typedef enum {
    SDL_DYNAMIC_STRING,
    SDL_DYNAMIC_ENUM,
    SDL_DYNAMIC_ARRAY,
-   SDL_DYNAMIC_MESSAGE
+   SDL_DYNAMIC_MESSAGE,
+   SDL_DYNAMIC_UNSIGNED
 } SdlDynamicKind;
 
 typedef struct {
@@ -46,6 +47,7 @@ struct SdlDynamicValue {
    union {
       bool boolean;
       int64_t integer;
+      uint64_t unsigned_integer;
       double floating;
       SdlDynamicComplex complex_value;
       SdlDynamicString string;

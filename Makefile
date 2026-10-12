@@ -50,6 +50,7 @@ test:
 	@$(MAKE) --no-print-directory CHECK_SILENT= test-matlab
 	@$(MAKE) --no-print-directory CHECK_SILENT= test-java
 	@$(MAKE) --no-print-directory CHECK_SILENT= test-ada
+	@$(MAKE) --no-print-directory CHECK_SILENT= test-representation
 
 test-c: $(BUILD_DIR)/sdl_utest
 	@if [ -z "$(CHECK_SILENT)" ]; then echo "=== Component C: generated typed codec, runtime storage, then wire limits ==="; fi
@@ -100,18 +101,18 @@ bench-java: $(GENERATED_DIR)/.stamp
 	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $(JAVA_GENERATED_DIR)/*.java tst/java/*.java
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaBench
 
-$(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py gen/ada_backend.py gen/ada_direct.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m runtime/matlab/sdl_mex_context.m Makefile
+$(GENERATED_DIR)/.stamp: sdl $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py gen/ada_backend.py gen/ada_direct.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m runtime/matlab/sdl_mex_context.m runtime/matlab/sdl_representation.m Makefile
 	mkdir -p $(GENERATED_DIR)
 	$(PYTHON) gen/generator.py -c -rust -python -matlab -java -ada sdl $(GENERATED_DIR)
 	touch $@
 
 $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/empty_message.h $(C_GENERATED_DIR)/sdl_registry.h: $(GENERATED_DIR)/.stamp
 
-$(BUILD_DIR)/sdl_utest: runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c runtime/c/sdl_dynamic.h runtime/c/sdl_context.h tst/main.c $(GENERATED_DIR)/.stamp $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/empty_message.h $(C_GENERATED_DIR)/sdl_registry.h
+$(BUILD_DIR)/sdl_utest: runtime/c/sdl_representation.inc runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c runtime/c/sdl_dynamic.h runtime/c/sdl_context.h tst/main.c $(GENERATED_DIR)/.stamp $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/empty_message.h $(C_GENERATED_DIR)/sdl_registry.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -Iruntime/c -I$(C_GENERATED_DIR) runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c $(C_GENERATED_DIR)/*.c tst/main.c -lm -o $@
 
-$(BUILD_DIR)/sdl_bench: runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c runtime/c/sdl_dynamic.h runtime/c/sdl_context.h tst/bench.c $(GENERATED_DIR)/.stamp $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/sdl_registry.h
+$(BUILD_DIR)/sdl_bench: runtime/c/sdl_representation.inc runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c runtime/c/sdl_dynamic.h runtime/c/sdl_context.h tst/bench.c $(GENERATED_DIR)/.stamp $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/sdl_registry.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -Iruntime/c -I$(C_GENERATED_DIR) runtime/c/type_engine.c runtime/c/type_registry.c runtime/c/type_codec.c runtime/c/sdl_wire.c runtime/c/sdl_dynamic.c runtime/c/type_display.c $(C_GENERATED_DIR)/*.c tst/bench.c -lm -o $@
 
@@ -122,7 +123,7 @@ clean:
 
 # GNAT's native runtime in the supplied installation lacks generic bodies.
 # The complete sjlj runtime is used by default; ADA_RTS=native is supported.
-build/ada/%.o: %.c $(wildcard runtime/c/*.h)
+build/ada/%.o: %.c $(wildcard runtime/c/*.h) runtime/c/sdl_representation.inc
 	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -Iruntime/c -c $< -o $@
 
@@ -141,3 +142,7 @@ bench-ada: build/ada/sdl_ada_bench
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) ./build/ada/sdl_ada_bench
 
 .PHONY: test-ada bench-ada
+
+.PHONY: test-representation
+test-representation:
+	$(RUN_TEST) $(PYTHON) tst/run_representation.py --gnatmake "$(GNATMAKE)" $(if $(matlab_available),--matlab "$(matlab)")

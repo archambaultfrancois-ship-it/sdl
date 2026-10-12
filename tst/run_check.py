@@ -13,6 +13,7 @@ BACKENDS = (
    ("Matlab", "test-matlab"),
    ("Java", "test-java"),
    ("Ada", "test-ada"),
+   ("Wire", "test-representation"),
 )
 BAR_WIDTH = 24
 

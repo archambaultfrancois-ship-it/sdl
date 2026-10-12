@@ -44,15 +44,15 @@ class CBackend:
       self.schema = schema
 
    def _c_type(self, name):
-      return {'bool': 'bool', 'int8': 'int8_t', 'int16': 'int16_t', 'int32': 'int32_t',
-         'int64': 'int64_t', 'fl32': 'float', 'fl64': 'double',
+      return {'bool': 'bool', 'int8': 'int8_t', 'uint8': 'uint8_t', 'int16': 'int16_t', 'uint16': 'uint16_t', 'int32': 'int32_t', 'uint32': 'uint32_t',
+         'int64': 'int64_t', 'uint64': 'uint64_t', 'fl32': 'float', 'fl64': 'double',
          'c32': 'float complex', 'c64': 'double complex',
          'string': 'const char *'}.get(name, c_identifier(name))
 
    def _type_desc(self, name):
-      descriptors = {'bool': 'SDL_BOOL_DESC', 'int8': 'SDL_INT8_DESC',
-         'int16': 'SDL_INT16_DESC', 'int32': 'SDL_INT32_DESC',
-         'int64': 'SDL_INT64_DESC', 'fl32': 'SDL_FLOAT32_DESC',
+      descriptors = {'bool': 'SDL_BOOL_DESC', 'int8': 'SDL_INT8_DESC', 'uint8': 'SDL_UINT8_DESC',
+         'int16': 'SDL_INT16_DESC', 'uint16': 'SDL_UINT16_DESC', 'int32': 'SDL_INT32_DESC', 'uint32': 'SDL_UINT32_DESC',
+         'int64': 'SDL_INT64_DESC', 'uint64': 'SDL_UINT64_DESC', 'fl32': 'SDL_FLOAT32_DESC',
          'fl64': 'SDL_FLOAT64_DESC', 'c32': 'SDL_COMPLEX32_DESC',
          'c64': 'SDL_COMPLEX64_DESC', 'string': 'SDL_STRING_DESC'}
       if name in descriptors:

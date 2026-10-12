@@ -48,6 +48,8 @@ SdlCompatibilityDiagnostic *type_compare_catalogues(
    const char *root, bool require_required);
 const char *type_compatibility_code_name(SdlCompatibilityCode code);
 void type_compatibility_free(SdlCompatibilityDiagnostic *diagnostic);
+/* Convert between ordinary byte layout and field wire clauses; owned result. */
+void *type_wire_transform(const SdlContext *, const void *, size_t, bool, size_t *);
 SdlContext *type_prepare(const void *description, size_t size);
 void type_context_free(SdlContext *context);
 size_t type_encode_size(const SdlContext *context, const char *type, const void *value);

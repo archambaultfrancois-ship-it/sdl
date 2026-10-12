@@ -224,6 +224,10 @@ static int render_value(SdlDisplayBuffer *buffer, const SdlTypeDesc *type,
       memcpy(&part, value, sizeof(part));
       return append_text(buffer, part ? "true" : "false");
    }
+   case SDL_TYPE_UINT8: { uint8_t part; memcpy(&part, value, sizeof(part)); return append_format(buffer, "%" PRIu8, part); }
+   case SDL_TYPE_UINT16: { uint16_t part; memcpy(&part, value, sizeof(part)); return append_format(buffer, "%" PRIu16, part); }
+   case SDL_TYPE_UINT32: { uint32_t part; memcpy(&part, value, sizeof(part)); return append_format(buffer, "%" PRIu32, part); }
+   case SDL_TYPE_UINT64: { uint64_t part; memcpy(&part, value, sizeof(part)); return append_format(buffer, "%" PRIu64, part); }
    case SDL_TYPE_INT8: {
       int8_t part;
       memcpy(&part, value, sizeof(part));

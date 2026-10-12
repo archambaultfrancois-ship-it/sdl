@@ -32,7 +32,7 @@ case 'prepare'
  s=parse_catalogue(varargin{1});types={};if numel(varargin)>1,types=varargin{2};end;if ischar(types),types={types};end
  localmessages=containers.Map();localenums=containers.Map();
  for k=1:numel(types),local=parse_catalogue(feval(types{k},'description'));[localmessages,localenums]=merge_schema(localmessages,localenums,local);end
- s.mex=exist('sdl_packed_mex','file')==3&&isempty(getenv('SDL_MATLAB_NO_MEX'));
+ s.mex=~s.representation&&exist('sdl_packed_mex','file')==3&&isempty(getenv('SDL_MATLAB_NO_MEX'));
  s.local=containers.Map();s.bindings=containers.Map();s.sizes=containers.Map();s.exact=containers.Map();s.exact_cache=containers.Map();
  names=keys(localmessages);
  for k=1:numel(names),fn=identifier(names{k});if exist(fn,'file'),s.local(names{k})=feval(fn,'fields');end,end
@@ -75,7 +75,7 @@ case 'encode'
   varargout{1}=sdl_packed_mex('encode',ctx.native_id,value);return;
  end
  id=find(strcmp(ctx.names,name),1);if isempty(id),error('SDL:SchemaMismatch','unknown type');end
- body=write_message(ctx,name,value);varargout{1}=[count_bytes(id);body(:)];
+ body=write_message(ctx,name,value);data=[count_bytes(id);body(:)];if ctx.representation,data=sdl_representation('transform',ctx,data,true);end;varargout{1}=data;
 case 'decode'
  ctx=varargin{1};
  if ctx.native_id~=0&&(strcmp(ctx.native_name,'BenchPayload')||(~isempty(varargin{2})&&varargin{2}(1)==5))
@@ -83,7 +83,7 @@ case 'decode'
   varargout{1}=sdl_packed_mex('decode',ctx.native_id,data);
   if nargout>1,varargout{2}=ctx.native_name;end;return;
  end
- data=uint8(varargin{2}(:));[id,pos]=read_count(data,1);if id<1||id>numel(ctx.names),error('SDL:Malformed','unknown message ID');end
+ data=uint8(varargin{2}(:));if ctx.representation,data=sdl_representation('transform',ctx,data,false);end;[id,pos]=read_count(data,1);if id<1||id>numel(ctx.names),error('SDL:Malformed','unknown message ID');end
  name=ctx.names{id};[value,pos]=read_message(ctx,name,data,pos,0,false);
  if pos~=numel(data)+1,error('SDL:Malformed','trailing bytes');end
  varargout{1}=value;if nargout>1,varargout{2}=name;end
@@ -104,11 +104,12 @@ while i<numel(lines)
  if strcmp(kind,'message')
   ordered={previousm,name};if strcmp(previousm,name)||(~isempty(previousm)&&~isequal(sort(ordered),ordered)),error('SDL:Descriptor','message order');end;previousm=name;fields={};ids=[];names={};if s.messages.Count>=65535,error('SDL:Descriptor','message limit');end
   while i<numel(lines)&&~strcmp(lines{i},'}')
-   f=regexp(lines{i},'^  ([0-9]+): (required|optional|repeated|packed) ([\w$]+)((?:\[[0-9]+\])*) ([\w$]+);$','tokens','once');if isempty(f),error('SDL:Descriptor','invalid field');end
+   clause=regexp(lines{i},' wire\(([^()]*)\);$','tokens','once');wire=struct();field_line=lines{i};if ~isempty(clause),wire=sdl_representation('parse',clause{1});field_line=regexprep(field_line,' wire\([^()]*\);$',';');end
+   f=regexp(field_line,'^  ([0-9]+): (required|optional|repeated|packed) ([\w$]+)((?:\[[0-9]+\])*) ([\w$]+);$','tokens','once');if isempty(f),error('SDL:Descriptor','invalid field');end
    if numel(unicode2native(f{3},'UTF-8'))>65535||numel(unicode2native(f{5},'UTF-8'))>65535,error('SDL:Descriptor','identifier limit');end
    id=decimal(f{1});dims=regexp(f{4},'\[([0-9]+)\]','tokens');dimensions=zeros(1,numel(dims));for z=1:numel(dims),dimensions(z)=decimal(dims{z}{1});end
    if id==0||(~isempty(ids)&&id<=ids(end))||any(strcmp(names,f{5}))||numel(dimensions)>255||any(dimensions==0)||(~isempty(dimensions)&&~strcmp(f{2},'required'))||numel(fields)>=65535,error('SDL:Descriptor','invalid field metadata');end
-   fields{end+1}=struct('id',uint32(id),'name',f{5},'modifier',f{2},'type',f{3},'dims',dimensions);ids(end+1)=id;names{end+1}=f{5};i=i+1;
+   fields{end+1}=struct('id',uint32(id),'name',f{5},'modifier',f{2},'type',f{3},'dims',dimensions,'wire',wire);ids(end+1)=id;names{end+1}=f{5};i=i+1;
   end
   s.messages(name)=fields;
  else
@@ -123,12 +124,12 @@ while i<numel(lines)
  end
  if i>=numel(lines)||~strcmp(lines{i},'}'),error('SDL:Descriptor','unclosed declaration');end;i=i+1;
 end
-s.names=sort(keys(s.messages));if isempty(s.names),error('SDL:Descriptor','empty catalogue');end
+s.representation=false;s.names=sort(keys(s.messages));if isempty(s.names),error('SDL:Descriptor','empty catalogue');end
 for k=1:numel(s.names)
  name=s.names{k};if primitive_size(name)>0||strcmp(name,'string')||isKey(s.enums,name),error('SDL:Descriptor','ambiguous type');end
  fields=s.messages(name);
  for j=1:numel(fields)
-  f=fields{j};if primitive_size(f.type)==0&&~strcmp(f.type,'string')&&~isKey(s.messages,f.type)&&~isKey(s.enums,f.type),error('SDL:Descriptor','unknown type');end
+  f=fields{j};sdl_representation('validate',f.wire,f.type,isKey(s.enums,f.type));s.representation=s.representation||~isempty(fieldnames(f.wire));if primitive_size(f.type)==0&&~strcmp(f.type,'string')&&~isKey(s.messages,f.type)&&~isKey(s.enums,f.type),error('SDL:Descriptor','unknown type');end
   if ~isempty(f.dims)||strcmp(f.modifier,'packed'),n=fixed_size(s,f.type,{},0);if n<=0||n*prod(f.dims)>4294967295,error('SDL:Descriptor','variable or oversized fixed element');end,end
  end
  visit(s,name,{},0);
@@ -162,7 +163,7 @@ names=keys(s.enums);for k=1:numel(names),n=names{k};if isKey(enums,n)&&~isequal(
 end
 function text=render_schema(messages,enums)
 text=sprintf('SDL2\n');names=sort(keys(messages));for k=1:numel(names),name=names{k};text=[text sprintf('message %s {\n',name)];fields=messages(name);
- for j=1:numel(fields),f=fields{j};dims='';for n=f.dims,dims=[dims sprintf('[%.0f]',n)];end;text=[text sprintf('  %.0f: %s %s%s %s;\n',f.id,f.modifier,f.type,dims,f.name)];end;text=[text sprintf('}\n')];
+ for j=1:numel(fields),f=fields{j};dims='';for n=f.dims,dims=[dims sprintf('[%.0f]',n)];end;text=[text sprintf('  %.0f: %s %s%s %s%s;\n',f.id,f.modifier,f.type,dims,f.name,sdl_representation('suffix',f.wire))];end;text=[text sprintf('}\n')];
 end
 names=sort(keys(enums));for k=1:numel(names),name=names{k};e=enums(name);text=[text sprintf('enum %s {\n',name)];for j=1:numel(e.names),text=[text sprintf('  %s = %.0f;\n',e.names{j},e.values(j))];end;text=[text sprintf('}\n')];end
 parse_catalogue(text);
@@ -247,15 +248,17 @@ elseif any(strcmp(t,{'c32','c64'}))
  raw=[nums(:)';imags(:)'];b=typecast(raw(:),'uint8'); unit=type_size(t)/2;
 else
  if iscell(values),nums=cell2mat(values(:)');else,nums=values(:);end
+ check_unsigned(t,nums);
  if strcmp(t,'bool'),if any(nums(:)~=0 & nums(:)~=1),error('SDL:InvalidValue','invalid bool');end;b=uint8(logical(nums));elseif strcmp(t,'fl32'),b=typecast(single(nums),'uint8');elseif strcmp(t,'fl64'),b=typecast(double(nums),'uint8');else,b=typecast(cast(nums,t),'uint8');end;unit=type_size(t);
 end
 if host_little()&&unit>1,b=reshape(b,unit,[]);b=flipud(b);b=b(:);end
 b=uint8(b(:));
 end
 function b=pack_raw(t,x)
+check_unsigned(t,x);
 switch t
 case 'bool',b=uint8(logical(x));
-case {'int8','int16','int32','int64'},b=typecast(cast(x,t),'uint8');
+case {'int8','int16','int32','int64','uint8','uint16','uint32','uint64'},b=typecast(cast(x,t),'uint8');
 case {'fl32','fl64'},if strcmp(t,'fl32'),x=single(x);else,x=double(x);end;b=typecast(x,'uint8');
 case {'c32','c64'},if strcmp(t,'c32'),z=single([real(x),imag(x)]);else,z=double([real(x),imag(x)]);end;b=typecast(z,'uint8');
 end
@@ -273,7 +276,7 @@ if host_little()
 end
 switch t
 case 'bool',if b(1)>1,error('SDL:Malformed','invalid bool');end;x=logical(b(1));
-case {'int8','int16','int32','int64'},x=typecast(uint8(b),t);
+case {'int8','int16','int32','int64','uint8','uint16','uint32','uint64'},x=typecast(uint8(b),t);
 case {'fl32','fl64'},if strcmp(t,'fl32'),x=typecast(uint8(b),'single');else,x=typecast(uint8(b),'double');end
 case {'c32','c64'},if strcmp(t,'c32'),z=typecast(uint8(b),'single');else,z=typecast(uint8(b),'double');end;x=complex(z(1),z(2));
 case 'string',if isempty(b),x='';else,x=native2unicode(uint8(b(:))','UTF-8');end
@@ -378,8 +381,8 @@ if skip,value=[];end
 end
 function n=primitive_size(t)
 switch t
-case {'bool','int8'},n=1;case 'int16',n=2;case {'int32','fl32'},n=4;
-case {'int64','fl64','c32'},n=8;case 'c64',n=16;otherwise,n=0;
+case {'bool','int8','uint8'},n=1;case {'int16','uint16'},n=2;case {'int32','uint32','fl32'},n=4;
+case {'int64','uint64','fl64','c32'},n=8;case 'c64',n=16;otherwise,n=0;
 end
 end
 function n=type_size(t),n=primitive_size(t);if n==0&&~strcmp(t,'string'),n=4;end,end
@@ -494,4 +497,12 @@ elseif isKey(p.messages,name)
  end
 end
 checked(name)=true;
+end
+
+function check_unsigned(t,x)
+if strncmp(t,'uint',4)&&~isa(x,t)
+ if ~isnumeric(x)||any(x(:)<0)||any(x(:)>intmax(t))||any(~isfinite(x(:)))||any(x(:)~=fix(x(:)))
+  error('SDL:InvalidValue','unsigned value outside native range');
+ end
+end
 end

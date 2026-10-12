@@ -1,0 +1,11 @@
+message Child {
+ int8 delta wire(bits=3);
+ uint8 level wire(bits=5);
+}
+message Arrays {
+ int16[2][2] matrix wire(bits=12);
+ packed uint8 flags wire(bits=3);
+ optional int8 code wire(bits=4);
+ Child child wire(align=4,pad_after=1);
+ string label wire(align=4,pad_after=1);
+}

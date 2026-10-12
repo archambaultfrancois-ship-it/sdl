@@ -202,8 +202,12 @@ pub struct Context {
     emissions: BTreeMap<String, bool>,
     sizes: BTreeMap<String, Option<usize>>,
     fixed_matches: HashSet<String>,
+    has_representation: bool,
 }
 impl Context {
+    pub(crate) fn normalize<'a>(&self, data: &'a [u8]) -> Result<std::borrow::Cow<'a,[u8]>,CodecError> {
+        if self.has_representation { Ok(std::borrow::Cow::Owned(crate::representation::transform(&self.schema,&self.names,data,false)?)) } else { Ok(std::borrow::Cow::Borrowed(data)) }
+    }
     /// Logical names in wire ID order, excluding enums.
     pub fn message_names(&self) -> &[String] { &self.names }
 }
@@ -286,7 +290,9 @@ pub fn prepare(text: &str, types: &[TypeInfo]) -> Result<Context, CodecError> {
     let fixed_matches = fixed_cache.into_iter().filter_map(|(name, matches)| {
         if matches { Some(name) } else { None }
     }).collect();
+    let has_representation=schema.messages.values().any(|m|m.fields.iter().any(|f|f.wire!=Default::default()));
     Ok(Context {
+        has_representation,
         schema,
         names,
         locals,
@@ -300,7 +306,7 @@ pub fn prepare(text: &str, types: &[TypeInfo]) -> Result<Context, CodecError> {
 // decoder and its remote/local validation rules.
 fn fixed_match(schema: &SchemaDesc, local: &SchemaDesc, name: &str,
                cache: &mut BTreeMap<String, bool>) -> bool {
-    if matches!(name, "bool" | "int8" | "int16" | "int32" | "int64" |
+    if matches!(name, "bool" | "int8" | "uint8" | "int16" | "uint16" | "int32" | "uint32" | "int64" | "uint64" |
                 "fl32" | "fl64" | "c32" | "c64") {
         return true;
     }
@@ -391,13 +397,15 @@ pub fn encode<T: SdlMessage>(ctx: &Context, value: &T) -> Result<Vec<u8>, CodecE
     .map_err(|_| CodecError::LengthOverflow)?;
     write_count(id, &mut out)?;
     value.encode_value(&mut out)?;
+    if ctx.has_representation { return crate::representation::transform(&ctx.schema,&ctx.names,&out,true); }
     Ok(out)
 }
 pub fn decode<T: SdlMessage>(ctx: &Context, data: &[u8]) -> Result<T, CodecError> {
     if ctx.locals.get(T::NAME).map(|info| info.type_id) != Some(std::any::TypeId::of::<T>()) {
         return Err(CodecError::TypeMismatch);
     }
-    let mut r = Reader::new(ctx, data);
+    let normalized=ctx.normalize(data)?;
+    let mut r = Reader::new(ctx, normalized.as_ref());
     if r.root()? != T::NAME {
         return Err(CodecError::TypeMismatch);
     }
@@ -410,7 +418,8 @@ pub struct TypedMessage {
     pub value: Box<dyn std::any::Any>,
 }
 pub fn decode_any(ctx: &Context, data: &[u8]) -> Result<TypedMessage, CodecError> {
-    let mut r = Reader::new(ctx, data);
+    let normalized=ctx.normalize(data)?;
+    let mut r = Reader::new(ctx, normalized.as_ref());
     let name = r.root()?.to_owned();
     let info = ctx.locals.get(&name).ok_or(CodecError::TypeMismatch)?;
     let value = (info.decoder)(&mut r)?;
@@ -495,7 +504,7 @@ impl<'a> Reader<'a> {
             .ok_or(CodecError::TypeMismatch)
     }
     pub fn fixed_compatible(&self, name: &str) -> bool {
-        matches!(name, "bool" | "int8" | "int16" | "int32" | "int64" |
+        matches!(name, "bool" | "int8" | "uint8" | "int16" | "uint16" | "int32" | "uint32" | "int64" | "uint64" |
                  "fl32" | "fl64" | "c32" | "c64") || self.context.fixed_matches.contains(name)
     }
     pub fn decode_sequence<T: WireValue>(&mut self, name: &str, count: usize)
@@ -527,10 +536,10 @@ impl<'a> Reader<'a> {
             return Err(CodecError::TypeMismatch);
         }
         let size = match f.type_name.as_str() {
-            "bool" | "int8" => Some(1),
-            "int16" => Some(2),
-            "int32" | "fl32" => Some(4),
-            "int64" | "fl64" | "c32" => Some(8),
+            "bool" | "int8" | "uint8" => Some(1),
+            "int16" | "uint16" => Some(2),
+            "int32" | "uint32" | "fl32" => Some(4),
+            "int64" | "uint64" | "fl64" | "c32" => Some(8),
             "c64" => Some(16),
             _ => self.context.sizes.get(&f.type_name).copied().flatten(),
         };
@@ -615,10 +624,10 @@ impl<'a> Reader<'a> {
             return Ok(());
         }
         let n = match name {
-            "int8" => 1,
-            "int16" => 2,
-            "int32" | "fl32" => 4,
-            "int64" | "fl64" | "c32" => 8,
+            "int8" | "uint8" => 1,
+            "int16" | "uint16" => 2,
+            "int32" | "uint32" | "fl32" => 4,
+            "int64" | "uint64" | "fl64" | "c32" => 8,
             "c64" => 16,
             _ => return Err(CodecError::TypeMismatch),
         };
@@ -643,7 +652,7 @@ macro_rules! numeric {
       fn encoded_size(&self)->Result<usize,CodecError>{Ok(std::mem::size_of::<Self>())}
    })*};
 }
-numeric!(i8, i16, i32, i64, f32, f64);
+numeric!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64);
 impl WireValue for bool {
     const FIXED_SIZE: Option<usize> = Some(1);
     #[inline]

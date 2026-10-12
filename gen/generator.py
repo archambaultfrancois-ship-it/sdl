@@ -10,6 +10,48 @@ import sys
 MAX_SCHEMA_DESCRIPTOR_SIZE = 1024 * 1024
 
 
+WIRE_KEYS = ('bits', 'encoding', 'align', 'pad_after')
+
+
+def parse_wire_options(text):
+   options = {}
+   if text is None:
+      return options
+   for item in text.split(','):
+      match = re.fullmatch(r'\s*(bits|encoding|align|pad_after)\s*=\s*([A-Za-z]+|[0-9]+)\s*', item)
+      if not match or match[1] in options:
+         raise ValueError('invalid or duplicate wire option: ' + item)
+      key, value = match.groups()
+      if key == 'encoding':
+         if value not in ('varint', 'zigzag'):
+            raise ValueError('unknown wire encoding: ' + value)
+      else:
+         if not value.isascii() or not value.isdecimal():
+            raise ValueError('wire option requires an integer: ' + key)
+         value = int(value)
+      options[key] = value
+   return options
+
+
+def wire_suffix(options):
+   return ' wire(' + ','.join(key + '=' + str(options[key]) for key in WIRE_KEYS if key in options) + ')' if options else ''
+
+
+def validate_wire_options(options, type_name, enum=False):
+   width = {'bool': 1, 'int8': 8, 'uint8': 8, 'int16': 16, 'uint16': 16, 'int32': 32, 'uint32': 32, 'int64': 64, 'uint64': 64}.get(type_name, 32 if enum else 0)
+   if 'bits' in options and not 1 <= options['bits'] <= width:
+      raise ValueError('wire bits must fit an integer, bool, or enum type: ' + type_name)
+   if options.get('encoding') == 'zigzag' and type_name.startswith('uint'):
+      raise ValueError('zigzag requires a signed integer or enum')
+   if 'encoding' in options and (not width or type_name == 'bool' or 'bits' in options):
+      raise ValueError('wire encoding requires an integer or enum and excludes bits')
+   align = options.get('align', 1)
+   if align < 1 or align > 256 or align & (align - 1):
+      raise ValueError('wire align must be a power of two from 1 to 256')
+   if not 0 <= options.get('pad_after', 0) <= 65535:
+      raise ValueError('wire pad_after must fit uint16')
+
+
 def canonical_type_descriptor(schema, root_name=None):
    """Canonical SDL2 UTF-8 catalogue (all declarations in this schema)."""
    if root_name is not None and root_name not in schema.messages:
@@ -19,8 +61,8 @@ def canonical_type_descriptor(schema, root_name=None):
       lines.append('message ' + name + ' {')
       for field in sorted(schema.messages[name].fields, key=lambda item: item.index):
          dimensions = ''.join('[' + str(n) + ']' for n in field.array_dimensions)
-         lines.append('  %d: %s %s%s %s;' %
-            (field.index, field.modifier, field.type_name, dimensions, field.name))
+         lines.append('  %d: %s %s%s %s%s;' %
+            (field.index, field.modifier, field.type_name, dimensions, field.name, wire_suffix(field.wire)))
       lines.append('}')
    for name in sorted(schema.enums, key=lambda value: value.encode('utf-8')):
       lines.append('enum ' + name + ' {')
@@ -41,12 +83,13 @@ def c_identifier(value):
 
 
 class Field:
-   def __init__(self, index, modifier, type_name, name, array_dimensions=None):
+   def __init__(self, index, modifier, type_name, name, array_dimensions=None, wire=None):
       self.index = int(index)
       self.modifier = modifier
       self.type_name = type_name
       self.name = name
       self.array_dimensions = array_dimensions or []
+      self.wire = wire or {}
 
 
 class Message:
@@ -62,7 +105,7 @@ class Enum:
 
 
 class MsgParser:
-   BUILTINS = {'bool', 'int8', 'int16', 'int32', 'int64', 'fl32', 'fl64',
+   BUILTINS = {'uint8', 'uint16', 'uint32', 'uint64', 'bool', 'int8', 'int16', 'int32', 'int64', 'fl32', 'fl64',
       'c32', 'c64', 'string'}
 
    def __init__(self):
@@ -90,7 +133,7 @@ class MsgParser:
             self.enums[name] = current_enum
             current_msg = None
             continue
-         match = re.match(r'message\s+(\w+)\s*\{$', line)
+         match = re.match(r'(?:message|structure|struct)\s+(\w+)\s*\{$', line)
          if match:
             if current_enum is not None or current_msg is not None:
                raise ValueError('missing closing brace before declaration: ' + line)
@@ -110,21 +153,21 @@ class MsgParser:
             current_enum = None
             current_msg = None
             continue
-         match = re.match(r'([0-9]+):\s+(optional|required|repeated|packed)\s+struct\s*\{\s*$', line)
+         match = re.match(r'(?:([0-9]+):\s+)?(?:(optional|required|repeated|packed)\s+)?(?:message|structure|struct)\s*\{\s*$', line)
          if match and current_msg is not None:
             root_name = anonymous_stack[0]['root'] if anonymous_stack else current_msg.name
             anonymous_counters[root_name] = anonymous_counters.get(root_name, 0) + 1
             anonymous_name = root_name + '$' + str(anonymous_counters[root_name])
             anonymous_stack.append({
                'parent': current_msg,
-               'field_id': match.group(1),
-               'modifier': match.group(2),
+               'field_id': self._field_index(current_msg, match.group(1)),
+               'modifier': match.group(2) or 'required',
                'message': Message(anonymous_name),
                'root': root_name,
             })
             current_msg = anonymous_stack[-1]['message']
             continue
-         match = re.match(r'}\s+(\w+)\s*;', line)
+         match = re.match(r'}\s+(\w+)(?:\s+wire\(([^()]*)\))?\s*;$', line)
          if match and anonymous_stack:
             frame = anonymous_stack.pop()
             anonymous_message = frame['message']
@@ -132,7 +175,7 @@ class MsgParser:
             self.message_order.append(anonymous_message.name)
             field_name = match.group(1)
             frame['parent'].fields.append(Field(frame['field_id'],
-               frame['modifier'], anonymous_message.name, field_name))
+               frame['modifier'], anonymous_message.name, field_name, wire=parse_wire_options(match.group(2))))
             current_msg = frame['parent']
             continue
          if current_enum is not None:
@@ -142,14 +185,14 @@ class MsgParser:
             current_enum.pairs.append((match.group(1), match.group(2)))
             continue
          if current_msg is not None:
-            match = re.match(r'([0-9]+):\s+(optional|required|repeated|packed)\s+(\w+(?:\[[0-9]+\])*)\s+(\w+)\s*;', line)
+            match = re.match(r'(?:([0-9]+):\s+)?(?:(optional|required|repeated|packed)\s+)?(\w+(?:\[[0-9]+\])*)\s+(\w+)(?:\s+wire\(([^()]*)\))?\s*;$', line)
             if not match:
                raise ValueError('invalid field declaration: ' + line)
             declared_type = match.group(3)
             type_name = re.match(r'\w+', declared_type).group(0)
             dimensions = [int(value) for value in re.findall(r'\[([0-9]+)\]', declared_type)]
-            current_msg.fields.append(Field(match.group(1), match.group(2),
-               type_name, match.group(4), dimensions))
+            current_msg.fields.append(Field(self._field_index(current_msg, match.group(1)), match.group(2) or 'required',
+               type_name, match.group(4), dimensions, parse_wire_options(match.group(5))))
             continue
          raise ValueError('unexpected SDL statement: ' + line)
       if anonymous_stack:
@@ -160,6 +203,12 @@ class MsgParser:
          raise ValueError('unterminated message declaration: ' + current_msg.name)
       self.validate()
       self._order_embedded_messages()
+
+   @staticmethod
+   def _field_index(message, explicit_index):
+      if explicit_index is not None:
+         return int(explicit_index)
+      return message.fields[-1].index + 1 if message.fields else 1
 
    def _order_embedded_messages(self):
       ordered = []
@@ -211,6 +260,7 @@ class MsgParser:
          ids = set()
          names = set()
          for field in message.fields:
+            validate_wire_options(field.wire, field.type_name, field.type_name in self.enums)
             validate_text(field.name, 'field name in ' + message.name)
             validate_text(field.type_name, 'field type name in ' + message.name)
             if len(field.array_dimensions) > 0xFF:
@@ -268,7 +318,7 @@ class MsgParser:
 
    def fixed_wire_size(self, type_name, active=None):
       primitive_sizes = {
-         'bool': 1, 'int8': 1, 'int16': 2, 'int32': 4, 'int64': 8,
+         'bool': 1, 'int8': 1, 'uint8': 1, 'int16': 2, 'uint16': 2, 'int32': 4, 'uint32': 4, 'int64': 8, 'uint64': 8,
          'fl32': 4, 'fl64': 8, 'c32': 8, 'c64': 16,
       }
       if type_name in primitive_sizes:

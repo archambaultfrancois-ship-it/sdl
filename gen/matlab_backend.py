@@ -92,9 +92,9 @@ class MatlabBackend:
    def _packed_empty(self, type_name):
       if type_name in self.schema.enums:
          return 'int32(zeros(0,1))'
-      return {'bool':'false(0,1)','int8':'int8(zeros(0,1))',
-         'int16':'int16(zeros(0,1))','int32':'int32(zeros(0,1))',
-         'int64':'int64(zeros(0,1))','fl32':'single(zeros(0,1))',
+      return {'bool':'false(0,1)','int8':'int8(zeros(0,1))', 'uint8': 'uint8(zeros(0,1))',
+         'int16':'int16(zeros(0,1))', 'uint16': 'uint16(zeros(0,1))','int32':'int32(zeros(0,1))', 'uint32': 'uint32(zeros(0,1))',
+         'int64':'int64(zeros(0,1))', 'uint64': 'uint64(zeros(0,1))','fl32':'single(zeros(0,1))',
          'fl64':'zeros(0,1)','c32':'complex(single(zeros(0,1)))',
          'c64':'complex(zeros(0,1))'}[type_name]
 
@@ -113,8 +113,8 @@ class MatlabBackend:
       return ''.join(out)
 
    def _default(self, type_name):
-      primitive = {'bool':'false','int8':'int8(0)','int16':'int16(0)',
-         'int32':'int32(0)','int64':'int64(0)','fl32':'single(0)',
+      primitive = {'bool':'false','int8':'int8(0)', 'uint8': 'uint8(0)','int16':'int16(0)', 'uint16': 'uint16(0)',
+         'int32':'int32(0)', 'uint32': 'uint32(0)','int64':'int64(0)', 'uint64': 'uint64(0)','fl32':'single(0)',
          'fl64':'double(0)','c32':'complex(single(0))','c64':'complex(0)',
          'string':"''"}
       if type_name in self.schema.enums:
@@ -185,7 +185,7 @@ def generate_matlab(input_path, output_dir):
    schemas = parse_schemas(input_path)
    for unused_base, unused_identifier, schema in schemas:
       for name in list(schema.messages) + list(schema.enums):
-         if matlab_identifier(name) in ('sdl_matlab_runtime', 'sdl_mex_context'):
+         if matlab_identifier(name) in ('sdl_matlab_runtime', 'sdl_mex_context', 'sdl_representation'):
             raise ValueError('Matlab type conflicts with runtime helper: ' + name)
    os.makedirs(output_dir, exist_ok=True)
    clear_generated_outputs(output_dir, ('.m',),
@@ -193,6 +193,10 @@ def generate_matlab(input_path, output_dir):
    with open(os.path.join(output_dir, 'sdl_matlab_runtime.m'), 'w',
          encoding='utf-8') as runtime:
       runtime.write(_runtime_source())
+   representation_path = os.path.join(os.path.dirname(__file__), '..', 'runtime', 'matlab', 'sdl_representation.m')
+   with open(representation_path, encoding='utf-8') as source:
+      with open(os.path.join(output_dir, 'sdl_representation.m'), 'w', encoding='utf-8') as output:
+         output.write(source.read())
    context_path = os.path.join(os.path.dirname(__file__), '..', 'runtime', 'matlab', 'sdl_mex_context.m')
    with open(context_path, encoding='utf-8') as source:
       with open(os.path.join(output_dir, 'sdl_mex_context.m'), 'w', encoding='utf-8') as output:

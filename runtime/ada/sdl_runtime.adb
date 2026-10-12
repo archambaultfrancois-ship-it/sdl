@@ -36,10 +36,14 @@ package body SDL_Runtime is
      with Import, Convention => C, External_Name => "sdl_ada_direct";
    function C_Validate (P, D : System.Address; N : Interfaces.C.size_t) return Interfaces.C.int with Import, Convention => C, External_Name => "sdl_ada_validate";
    function C_Decode (P, D : System.Address; N : Interfaces.C.size_t) return Value with Import, Convention => C, External_Name => "sdl_ada_decode";
+   function C_Represent (P, D : System.Address; N : Interfaces.C.size_t; Size : out Interfaces.C.size_t) return System.Address with Import, Convention => C, External_Name => "sdl_ada_represent";
+   function C_Buffer_Byte (P : System.Address; I : Interfaces.C.size_t) return Unsigned_8 with Import, Convention => C, External_Name => "sdl_ada_buffer_byte";
+   procedure C_Buffer_Free (P : System.Address) with Import, Convention => C, External_Name => "sdl_ada_buffer_free";
    function C_Name (Tree : Value) return Interfaces.C.Strings.chars_ptr with Import, Convention => C, External_Name => "sdl_ada_name";
    function C_Field (P, T : System.Address; Id : Unsigned_32) return Value with Import, Convention => C, External_Name => "sdl_ada_field";
    function C_Kind (V : Value) return Interfaces.C.int with Import, Convention => C, External_Name => "sdl_ada_kind";
    function C_Integer (V : Value) return Int64 with Import, Convention => C, External_Name => "sdl_ada_integer";
+   function C_Unsigned (V : Value) return Unsigned_64 with Import, Convention => C, External_Name => "sdl_ada_unsigned";
    function C_Float (V : Value) return Float64 with Import, Convention => C, External_Name => "sdl_ada_float";
    function C_Re (V : Value) return Float64 with Import, Convention => C, External_Name => "sdl_ada_real";
    function C_Im (V : Value) return Float64 with Import, Convention => C, External_Name => "sdl_ada_imag";
@@ -136,6 +140,19 @@ package body SDL_Runtime is
    begin if Id = 0 then raise Codec_Error with "unknown message"; end if; return Id; end;
    procedure Check_Encode (C : Context; Name : String) is
    begin if C_Exact (C.Handle, Interfaces.C.To_C (Name)) = 0 then raise Codec_Error with "encoding requires matching fields"; end if; end;
+   function Represent (C : Context; Data : Bytes) return Bytes is
+      N : Interfaces.C.size_t;
+      P : System.Address := C_Represent (C.Handle, Data'Address, Data'Length, N);
+   begin
+      if P = System.Null_Address then raise Codec_Error with "invalid wire representation"; end if;
+      declare Result : Bytes (1 .. Natural (N)); begin
+         for I in Result'Range loop Result (I) := C_Buffer_Byte (P, Interfaces.C.size_t (I - 1)); end loop;
+         C_Buffer_Free (P); P := System.Null_Address; return Result;
+      end;
+   exception when others =>
+      if P /= System.Null_Address then C_Buffer_Free (P); end if;
+      raise;
+   end;
    procedure Check_Wire (C : Context; Data : Bytes) is
    begin if C_Validate (C.Handle, Data'Address, Data'Length) = 0 then raise Codec_Error with "invalid message"; end if; end;
    function Decode_Tree (C : Context; Data : Bytes) return Value is
@@ -303,4 +320,20 @@ package body SDL_Runtime is
          V := To_Unbounded_String (S);
       end;
    end;
+   function Read (V : Value) return Unsigned_8 is begin Expect (V, 9); return Unsigned_8 (C_Unsigned (V)); end;
+   procedure Write (B : in out Buffer; V : Unsigned_8) is begin Word (B, Unsigned_64 (V), 1); end;
+   procedure Put (Data : in out Bytes; Position : in out Natural; V : Unsigned_8) is begin Put_Word (Data, Position, Unsigned_64 (V), 1); end;
+   procedure Get (Data : Bytes; Position : in out Natural; V : out Unsigned_8) is begin V := Unsigned_8 (Get_Word (Data, Position, 1)); end;
+   function Read (V : Value) return Unsigned_16 is begin Expect (V, 9); return Unsigned_16 (C_Unsigned (V)); end;
+   procedure Write (B : in out Buffer; V : Unsigned_16) is begin Word (B, Unsigned_64 (V), 2); end;
+   procedure Put (Data : in out Bytes; Position : in out Natural; V : Unsigned_16) is begin Put_Word (Data, Position, Unsigned_64 (V), 2); end;
+   procedure Get (Data : Bytes; Position : in out Natural; V : out Unsigned_16) is begin V := Unsigned_16 (Get_Word (Data, Position, 2)); end;
+   function Read (V : Value) return Unsigned_32 is begin Expect (V, 9); return Unsigned_32 (C_Unsigned (V)); end;
+   procedure Write (B : in out Buffer; V : Unsigned_32) is begin Word (B, Unsigned_64 (V), 4); end;
+   procedure Put (Data : in out Bytes; Position : in out Natural; V : Unsigned_32) is begin Put_Word (Data, Position, Unsigned_64 (V), 4); end;
+   procedure Get (Data : Bytes; Position : in out Natural; V : out Unsigned_32) is begin V := Unsigned_32 (Get_Word (Data, Position, 4)); end;
+   function Read (V : Value) return Unsigned_64 is begin Expect (V, 9); return Unsigned_64 (C_Unsigned (V)); end;
+   procedure Write (B : in out Buffer; V : Unsigned_64) is begin Word (B, Unsigned_64 (V), 8); end;
+   procedure Put (Data : in out Bytes; Position : in out Natural; V : Unsigned_64) is begin Put_Word (Data, Position, Unsigned_64 (V), 8); end;
+   procedure Get (Data : Bytes; Position : in out Natural; V : out Unsigned_64) is begin V := Unsigned_64 (Get_Word (Data, Position, 8)); end;
 end SDL_Runtime;

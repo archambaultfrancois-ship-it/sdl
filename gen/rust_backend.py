@@ -88,10 +88,10 @@ class RustBackend:
    def _rust_type(self, name):
       mapping = {
          'bool': 'bool',
-         'int8': 'i8',
-         'int16': 'i16',
-         'int32': 'i32',
-         'int64': 'i64',
+         'int8': 'i8', 'uint8': 'u8',
+         'int16': 'i16', 'uint16': 'u16',
+         'int32': 'i32', 'uint32': 'u32',
+         'int64': 'i64', 'uint64': 'u64',
          'fl32': 'f32',
          'fl64': 'f64',
          'c32': 'Complex32',

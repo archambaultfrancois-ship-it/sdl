@@ -14,8 +14,8 @@ def typ(name):
    return 'T_' + stem(name)
 
 
-PRIMITIVES = {'bool': 'Boolean', 'int8': 'Int8', 'int16': 'Int16',
-   'int32': 'Int32', 'int64': 'Int64', 'fl32': 'Float32', 'fl64': 'Float64',
+PRIMITIVES = {'bool': 'Boolean', 'int8': 'Int8', 'uint8': 'Unsigned_8', 'int16': 'Int16', 'uint16': 'Unsigned_16',
+   'int32': 'Int32', 'uint32': 'Unsigned_32', 'int64': 'Int64', 'uint64': 'Unsigned_64', 'fl32': 'Float32', 'fl64': 'Float64',
    'c32': 'Complex32', 'c64': 'Complex64', 'string': 'Text'}
 
 
@@ -180,7 +180,7 @@ class AdaBackend:
                out.append(self.read(f.type_name,f.array_dimensions,'Result.F_'+stem(f.name),'V'))
             out.append('      end if;\n')
          out.append('      return Result;\n   end;\n')
-         out.append('   function Encode (C : Context; M : '+typ(name)+') return Bytes is\n      B : Buffer;\n   begin\n'+direct.encode(name)+'      Put_Count (B, Message_Id (C, '+quote(name)+'));\n      Write_'+typ(name)+' (C, B, M);\n      declare Data : constant Bytes := To_Bytes (B); begin Check_Wire (C, Data); return Data; end;\n   exception when Constraint_Error => raise Codec_Error with "encoding range error";\n   end;\n')
+         out.append('   function Encode (C : Context; M : '+typ(name)+') return Bytes is\n      B : Buffer;\n   begin\n'+direct.encode(name)+'      Put_Count (B, Message_Id (C, '+quote(name)+'));\n      Write_'+typ(name)+' (C, B, M);\n      declare Data : constant Bytes := Represent (C, To_Bytes (B)); begin Check_Wire (C, Data); return Data; end;\n   exception when Constraint_Error => raise Codec_Error with "encoding range error";\n   end;\n')
          out.append('   function Decode (C : Context; Data : Bytes) return '+typ(name)+' is\n      Tree : Value := System.Null_Address;\n   begin\n'+direct.decode(name)+'      Tree := Decode_Tree (C, Data);\n      declare Result : constant '+typ(name)+' := Read_'+typ(name)+' (C, Tree); begin Free_Tree (Tree); Tree := System.Null_Address; return Result; end;\n   exception when Constraint_Error => Free_Tree (Tree); raise Codec_Error with "decoding range error"; when others => Free_Tree (Tree); raise;\n   end;\n')
       out.append('end '+self.package+';\n')
       return ''.join(out)

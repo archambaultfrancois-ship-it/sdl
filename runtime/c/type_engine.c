@@ -15,6 +15,10 @@ const SdlTypeDesc SDL_INT32_DESC = {
     SDL_TYPE_INT32, sizeof(int32_t), sizeof(int32_t), "int32", NULL, 0, {{0, NULL}}};
 const SdlTypeDesc SDL_INT64_DESC = {
     SDL_TYPE_INT64, sizeof(int64_t), sizeof(int64_t), "int64", NULL, 0, {{0, NULL}}};
+const SdlTypeDesc SDL_UINT8_DESC = {SDL_TYPE_UINT8, sizeof(uint8_t), sizeof(uint8_t), "uint8", NULL, 0, {{0, NULL}}};
+const SdlTypeDesc SDL_UINT16_DESC = {SDL_TYPE_UINT16, sizeof(uint16_t), sizeof(uint16_t), "uint16", NULL, 0, {{0, NULL}}};
+const SdlTypeDesc SDL_UINT32_DESC = {SDL_TYPE_UINT32, sizeof(uint32_t), sizeof(uint32_t), "uint32", NULL, 0, {{0, NULL}}};
+const SdlTypeDesc SDL_UINT64_DESC = {SDL_TYPE_UINT64, sizeof(uint64_t), sizeof(uint64_t), "uint64", NULL, 0, {{0, NULL}}};
 const SdlTypeDesc SDL_FLOAT32_DESC = {
     SDL_TYPE_FLOAT32, sizeof(float), sizeof(float), "float32", NULL, 0, {{0, NULL}}};
 const SdlTypeDesc SDL_FLOAT64_DESC = {

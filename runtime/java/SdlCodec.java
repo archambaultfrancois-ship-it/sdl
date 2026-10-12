@@ -88,6 +88,7 @@ public final class SdlCodec {
       int wireValue();
    }
    public static final class Field {
+      private WireOptions wire = new WireOptions();
       public final long id;
       public final String name, modifier, typeName;
       public final Class<?> valueClass;
@@ -220,7 +221,9 @@ public final class SdlCodec {
       for (int i = 0; i < fs.length; i++) {
          if (i > 0)
             s.append(", ");
-         s.append(fs[i].name).append('=').append(get(m, fs[i].name));
+         Object v=get(m,fs[i].name);
+         s.append(fs[i].name).append('=');
+         if(v instanceof Number && fs[i].typeName.startsWith("uint"))s.append(unsignedString(((Number)v).longValue(),wireSize(fs[i].typeName)*8));else s.append(v);
       }
       return s.append('}').toString();
    }
@@ -274,11 +277,14 @@ public final class SdlCodec {
    }
    public static final class Context {
       private final Schema schema, localSchema;
+      private final boolean hasRepresentation;
       private final String[] names;
       private final Map<String, Binding> bindings = new HashMap<String, Binding>();
       private final Map<String, FixedCodec> fixed = new HashMap<String, FixedCodec>();
       private final Map<String, Integer> sizes = new HashMap<String, Integer>();
       private Context(Schema schema, Schema local) {
+         boolean represented=false;for(Declaration d:schema.messages.values())for(Field f:d.fields)represented|=!f.wire.suffix().isEmpty();
+         this.hasRepresentation=represented;
          this.schema = schema;
          this.localSchema = local;
          this.names = schema.messages.keySet().toArray(new String[0]);
@@ -302,7 +308,7 @@ public final class SdlCodec {
    private static final Pattern HEAD = Pattern.compile("(message|enum) (" + IDENT + ") \\{");
    private static final Pattern FIELD =
        Pattern.compile("  ([0-9]+): (required|optional|repeated|packed) (" + IDENT +
-                       ")((?:\\[[0-9]+\\])*) (" + IDENT + ");");
+                       ")((?:\\[[0-9]+\\])*) (" + IDENT + ")(?: wire\\(([^()]*)\\))?;");
    private static final Pattern ITEM = Pattern.compile("  (" + IDENT + ") = (-?[0-9]+);");
    private static long number(String s) {
       try {
@@ -362,7 +368,9 @@ public final class SdlCodec {
                   ds[j] = dims.get(j);
                if (ds.length > 0 && !f.group(2).equals("required"))
                   throw malformed("array cardinality");
-               d.fields.add(new Field(id, f.group(5), f.group(2), f.group(3), null, ds, false));
+               Field field=new Field(id,f.group(5),f.group(2),f.group(3),null,ds,false);
+               field.wire=WireOptions.parse(f.group(6));
+               d.fields.add(field);
             }
             if (i == lines.length)
                throw malformed("unclosed message");
@@ -418,6 +426,7 @@ public final class SdlCodec {
       Map<String, Integer> heights = new HashMap<String, Integer>();
       for (String type : schema.messages.keySet())
          visit(schema, type, new HashSet<String>(), heights, 0);
+      for(Declaration d:schema.messages.values())for(Field f:d.fields)f.wire.validate(f.typeName,schema.enums.containsKey(f.typeName));
       return schema;
    }
    private static int visit(Schema s, String name, HashSet<String> active,
@@ -484,7 +493,7 @@ public final class SdlCodec {
       return total;
    }
    private static boolean sameField(Field a, Field b) {
-      return a.id == b.id && a.name.equals(b.name) && a.typeName.equals(b.typeName) &&
+      return a.wire.suffix().equals(b.wire.suffix()) && a.id == b.id && a.name.equals(b.name) && a.typeName.equals(b.typeName) &&
           a.modifier.equals(b.modifier) && Arrays.equals(a.dimensions, b.dimensions);
    }
    private static boolean sameDeclaration(Declaration a, Declaration b) {
@@ -521,7 +530,7 @@ public final class SdlCodec {
                 .append(f.typeName);
             for (int n : f.dimensions)
                out.append('[').append(n).append(']');
-            out.append(' ').append(f.name).append(";\n");
+            out.append(' ').append(f.name).append(f.wire.suffix()).append(";\n");
          }
          out.append("}\n");
       }
@@ -740,14 +749,14 @@ public final class SdlCodec {
             putWord(sink.bytes,p,a[i]?1:0,1);
          sink.offset+=a.length;
       }
-      else if(name.equals("int8")) {
+      else if((name.equals("int8") || name.equals("uint8"))) {
          byte[] a=(byte[])value;
          sink.count(a.length); sink.reserve(a.length);
          if(sink.bytes!=null) for(int i=0,p=sink.offset;i<a.length;i++,p+=1)
             putWord(sink.bytes,p,a[i],1);
          sink.offset+=a.length;
       }
-      else if(name.equals("int16")) {
+      else if((name.equals("int16") || name.equals("uint16"))) {
          short[] a=(short[])value;
          if(a.length>Integer.MAX_VALUE/2) throw malformed("array overflow");
          sink.count(a.length); sink.reserve(a.length*2);
@@ -755,7 +764,7 @@ public final class SdlCodec {
             putWord(sink.bytes,p,a[i],2);
          sink.offset+=a.length*2;
       }
-      else if(name.equals("int32")) {
+      else if((name.equals("int32") || name.equals("uint32"))) {
          int[] a=(int[])value;
          if(a.length>Integer.MAX_VALUE/4) throw malformed("array overflow");
          sink.count(a.length); sink.reserve(a.length*4);
@@ -763,7 +772,7 @@ public final class SdlCodec {
             putWord(sink.bytes,p,a[i],4);
          sink.offset+=a.length*4;
       }
-      else if(name.equals("int64")) {
+      else if((name.equals("int64") || name.equals("uint64"))) {
          long[] a=(long[])value;
          if(a.length>Integer.MAX_VALUE/8) throw malformed("array overflow");
          sink.count(a.length); sink.reserve(a.length*8);
@@ -795,22 +804,22 @@ public final class SdlCodec {
          for(int i=0,p=r.offset;i<count;i++,p+=1) a[i]=getBool(r.bytes,p);
          r.offset+=count; return a;
       }
-      else if(name.equals("int8")) {
+      else if((name.equals("int8") || name.equals("uint8"))) {
          byte[] a=new byte[count];
          for(int i=0,p=r.offset;i<count;i++,p+=1) a[i]=(byte)getWord(r.bytes,p,1);
          r.offset+=count; return a;
       }
-      else if(name.equals("int16")) {
+      else if((name.equals("int16") || name.equals("uint16"))) {
          short[] a=new short[count];
          for(int i=0,p=r.offset;i<count;i++,p+=2) a[i]=(short)getWord(r.bytes,p,2);
          r.offset+=count*2; return a;
       }
-      else if(name.equals("int32")) {
+      else if((name.equals("int32") || name.equals("uint32"))) {
          int[] a=new int[count];
          for(int i=0,p=r.offset;i<count;i++,p+=4) a[i]=(int)getWord(r.bytes,p,4);
          r.offset+=count*4; return a;
       }
-      else if(name.equals("int64")) {
+      else if((name.equals("int64") || name.equals("uint64"))) {
          long[] a=new long[count];
          for(int i=0,p=r.offset;i<count;i++,p+=8) a[i]=(long)getWord(r.bytes,p,8);
          r.offset+=count*8; return a;
@@ -1000,7 +1009,7 @@ public final class SdlCodec {
       Sink sink = new Sink(bytes);
       sink.count(id);
       writeMessage(ctx, name, value, sink);
-      return bytes;
+      return repTransform(ctx,bytes,true);
    }
    private static final class Cursor {
       final byte[] bytes;
@@ -1201,13 +1210,13 @@ public final class SdlCodec {
       long n = r.integer(wireSize(name));
       if (skip)
          return null;
-      if (name.equals("int8"))
+      if ((name.equals("int8") || name.equals("uint8")))
          return Byte.valueOf((byte)n);
-      if (name.equals("int16"))
+      if ((name.equals("int16") || name.equals("uint16")))
          return Short.valueOf((short)n);
-      if (name.equals("int32"))
+      if ((name.equals("int32") || name.equals("uint32")))
          return Integer.valueOf((int)n);
-      if (name.equals("int64"))
+      if ((name.equals("int64") || name.equals("uint64")))
          return Long.valueOf(n);
       if (name.equals("fl32"))
          return Float.valueOf(Float.intBitsToFloat((int)n));
@@ -1216,6 +1225,7 @@ public final class SdlCodec {
       throw malformed("unknown primitive");
    }
    public static Message decode(Context ctx, byte[] bytes) {
+      bytes=repTransform(ctx,bytes,false);
       Cursor r = new Cursor(bytes);
       long id = r.count();
       if (id < 1 || id > ctx.names.length)
@@ -1226,16 +1236,88 @@ public final class SdlCodec {
       return result;
    }
    private static int wireSize(String name) {
-      if (name.equals("bool") || name.equals("int8"))
+      if (name.equals("bool") || (name.equals("int8") || name.equals("uint8")))
          return 1;
-      if (name.equals("int16"))
+      if ((name.equals("int16") || name.equals("uint16")))
          return 2;
-      if (name.equals("int32") || name.equals("fl32"))
+      if ((name.equals("int32") || name.equals("uint32")) || name.equals("fl32"))
          return 4;
-      if (name.equals("int64") || name.equals("fl64") || name.equals("c32"))
+      if ((name.equals("int64") || name.equals("uint64")) || name.equals("fl64") || name.equals("c32"))
          return 8;
       if (name.equals("c64"))
          return 16;
       return 0;
    }
+   private static final class WireOptions {
+      int bits, align, pad; String encoding; boolean presentAlign, presentPad;
+      static WireOptions parse(String text) {
+         WireOptions w=new WireOptions(); if(text==null)return w;
+         java.util.HashSet<String> seen=new java.util.HashSet<String>();
+         for(String item:text.split(",",-1)) {
+            String[] pair=item.split("=",-1);
+            if(pair.length!=2||!seen.add(pair[0]))throw malformed("invalid wire option");
+            String k=pair[0],v=pair[1];
+            if(k.equals("encoding")){if(!v.equals("varint")&&!v.equals("zigzag"))throw malformed("invalid wire encoding");w.encoding=v;}
+            else {
+               if(!v.matches("[0-9]+"))throw malformed("invalid wire integer");
+               long n=number(v);if(n>Integer.MAX_VALUE)throw malformed("wire option overflow");
+               if(k.equals("bits")){if(n==0)throw malformed("zero bit width");w.bits=(int)n;}
+               else if(k.equals("align")){w.align=(int)n;w.presentAlign=true;}
+               else if(k.equals("pad_after")){w.pad=(int)n;w.presentPad=true;}
+               else throw malformed("unknown wire option");
+            }
+         } return w;
+      }
+      void validate(String t,boolean enumeration){
+         int width=t.equals("bool")?1:t.startsWith("int")||t.startsWith("uint")?wireSize(t)*8:enumeration?32:0;
+         if(bits>width||encoding!=null&&(width==0||t.equals("bool")||bits!=0||encoding.equals("zigzag")&&t.startsWith("uint"))||presentAlign&&(align<1||align>256||(align&(align-1))!=0)||pad>65535)throw malformed("invalid wire representation");
+      }
+      String suffix(){java.util.List<String> p=new java.util.ArrayList<String>();if(bits!=0)p.add("bits="+bits);if(encoding!=null)p.add("encoding="+encoding);if(presentAlign)p.add("align="+align);if(presentPad)p.add("pad_after="+pad);if(p.isEmpty())return "";StringBuilder s=new StringBuilder(" wire(");for(String v:p){if(s.length()>6)s.append(',');s.append(v);}return s.append(')').toString();}
+   }
+   private static final class RepStream {
+      final byte[] input; final ByteArrayOutputStream output=new ByteArrayOutputStream(); int bit, pending;
+      RepStream(byte[] input){this.input=input;}
+      long bits(int width,long value){
+         if(width>64||bit>64*1024*1024*8-width)throw malformed("representation buffer limit");
+         if(input!=null){if((long)bit+width>(long)input.length*8)throw malformed("truncated representation");value=0;for(int i=0;i<width;i++){value=(value<<1)|((input[bit/8]>>>(7-bit%8))&1);bit++;}}
+         else for(int i=width-1;i>=0;i--){pending|=((value>>>i)&1)<<(7-bit%8);bit++;if(bit%8==0){output.write(pending);pending=0;}}
+         return value;
+      }
+      void zeros(int n){while(n>0){int k=Math.min(n,64);if(bits(k,0)!=0)throw malformed("nonzero wire padding");n-=k;}}
+      void align(){zeros((8-bit%8)%8);}
+      long varint(long value,int width){
+         if(input!=null){value=0;for(int i=0;i<(width+6)/7;i++){long b=bits(8,0);if(i==9&&b>1)throw malformed("varint overflow");value|=(b&127)<<(7*i);if(width<64&&(value>>>width)!=0)throw malformed("varint overflow");if(b<128){if(i>0&&b==0)throw malformed("noncanonical varint");return value;}}throw malformed("varint overflow");}
+         long original=value;do{bits(8,(value&127)|((value&~127L)!=0?128:0));value>>>=7;}while(value!=0);return original;
+      }
+   }
+   private static void repCopy(RepStream source,RepStream dest,int n){if(n<0||source.bit%8!=0||dest.bit%8!=0||n>source.input.length-source.bit/8)throw malformed("truncated representation");if(n>64*1024*1024-dest.bit/8)throw malformed("representation buffer limit");dest.output.write(source.input,source.bit/8,n);source.bit+=n*8;dest.bit+=n*8;}
+   private static long repCount(RepStream plain,RepStream custom,boolean encode){long n=(encode?plain:custom).varint(0,32);(encode?custom:plain).varint(n,32);return n;}
+   private static void repValue(Schema schema,Field f,int dim,RepStream plain,RepStream custom,boolean encode,int depth){
+      if(dim<f.dimensions.length){if(f.dimensions[dim]>1048576)throw malformed("representation array limit");for(int i=0;i<f.dimensions[dim];i++)repValue(schema,f,dim+1,plain,custom,encode,depth);return;}
+      if(schema.messages.containsKey(f.typeName)){repMessage(schema,f.typeName,plain,custom,encode,depth+1);return;}
+      if(f.typeName.equals("string")){long n=repCount(plain,custom,encode);if(n>Integer.MAX_VALUE)throw malformed("string too large");repCopy(encode?plain:custom,encode?custom:plain,(int)n);return;}
+      int size=wireSize(f.typeName);if(size==0)size=4;WireOptions w=f.wire;
+      if(w.bits==0&&w.encoding==null){repCopy(encode?plain:custom,encode?custom:plain,size);return;}
+      int width=size*8,bits=w.bits==0?width:w.bits;boolean signed=f.typeName.startsWith("int")||schema.enums.containsKey(f.typeName);
+      if(encode){long n=plain.bits(width,0);if(signed&&width<64)n=(n<<(64-width))>>(64-width);
+         if(w.bits!=0){long narrow=signed?(n<<(64-bits))>>(64-bits):bits==64?n:n&((1L<<bits)-1);if(narrow!=n)throw malformed("value outside wire bit range");custom.bits(bits,n);}
+         else{if(w.encoding.equals("zigzag"))n=(n<<1)^(n>>63);else if(signed&&n<0)throw malformed("negative varint");custom.varint(n,64);}
+      }else{long n=w.bits!=0?custom.bits(bits,0):custom.varint(0,width);
+         if(w.bits!=0&&signed&&bits<64)n=(n<<(64-bits))>>(64-bits);
+         else if("zigzag".equals(w.encoding))n=(n>>>1)^-(n&1);
+         else if(w.bits==0&&signed&&(n<0||width<64&&n>=(1L<<(width-1))))throw malformed("varint exceeds signed range");plain.bits(width,n);
+      }
+   }
+   private static void repMessage(Schema schema,String name,RepStream plain,RepStream custom,boolean encode,int depth){
+      if(depth>64)throw malformed("representation nesting limit");int base=custom.bit;
+      for(Field f:schema.messages.get(name).fields){WireOptions w=f.wire;if(w.bits==0||!f.modifier.equals("required")||w.presentAlign)custom.align();if(w.presentAlign){int offset=(custom.bit-base)/8;custom.zeros((w.align-offset%w.align)%w.align*8);}long n=f.modifier.equals("required")?1:repCount(plain,custom,encode);if(n>1048576||f.modifier.equals("optional")&&n>1)throw malformed("invalid representation count");for(long i=0;i<n;i++)repValue(schema,f,0,plain,custom,encode,depth);if(w.pad>0){custom.align();custom.zeros(w.pad*8);}}
+      custom.align();
+   }
+   private static byte[] repTransform(Context ctx,byte[] data,boolean encode){
+      if(!ctx.hasRepresentation)return data;RepStream source=new RepStream(data),dest=new RepStream(null);RepStream plain=encode?source:dest,custom=encode?dest:source;long id=repCount(plain,custom,encode);if(id<1||id>ctx.names.length)throw malformed("unknown representation message ID");repMessage(ctx.schema,ctx.names[(int)id-1],plain,custom,encode,0);if((long)source.bit!=(long)data.length*8)throw malformed("trailing representation bytes");return dest.output.toByteArray();
+   }
+   /** Interpret raw Java primitive bits as an unsigned decimal value (Java 7). */
+   public static String unsignedString(long value,int width){if(width!=8&&width!=16&&width!=32&&width!=64)throw malformed("invalid unsigned width");if(width<64)return Long.toString(value&((1L<<width)-1));if(value>=0)return Long.toString(value);return java.math.BigInteger.valueOf(value&Long.MAX_VALUE).setBit(63).toString();}
+   public static int compareUnsigned(long a,long b,int width){if(width==64){a^=Long.MIN_VALUE;b^=Long.MIN_VALUE;}else if(width==8||width==16||width==32){long mask=(1L<<width)-1;a&=mask;b&=mask;}else throw malformed("invalid unsigned width");return a<b?-1:a==b?0:1;}
+
 }

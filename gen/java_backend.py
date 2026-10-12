@@ -71,22 +71,22 @@ class JavaBackend:
             seen.add(result)
 
    def _type(self, name):
-      builtin = {'bool':'Boolean', 'int8':'Byte', 'int16':'Short',
-         'int32':'Integer', 'int64':'Long', 'fl32':'Float', 'fl64':'Double',
+      builtin = {'bool':'Boolean', 'int8':'Byte', 'uint8': 'Byte', 'int16':'Short', 'uint16': 'Short',
+         'int32':'Integer', 'uint32': 'Integer', 'int64':'Long', 'uint64': 'Long', 'fl32':'Float', 'fl64':'Double',
          'c32':'SdlCodec.Complex32', 'c64':'SdlCodec.Complex64',
          'string':'String'}
       return builtin.get(name, self.outer_name + '.' + java_type_name(name))
 
    def _primitive(self, name):
-      return {'bool':'boolean','int8':'byte','int16':'short','int32':'int',
-         'int64':'long','fl32':'float','fl64':'double'}.get(name)
+      return {'bool':'boolean','int8':'byte', 'uint8': 'byte','int16':'short', 'uint16': 'short','int32':'int', 'uint32': 'int',
+         'int64':'long', 'uint64': 'long','fl32':'float','fl64':'double'}.get(name)
 
    def _array_type(self, name):
       return self._primitive(name) or self._type(name)
 
    def _fixed_size(self, name, active=None):
       if name in self._fixed_sizes: return self._fixed_sizes[name]
-      sizes = {'bool':1,'int8':1,'int16':2,'int32':4,'int64':8,
+      sizes = {'bool':1,'int8':1, 'uint8': 1,'int16':2, 'uint16': 2,'int32':4, 'uint32': 4,'int64':8, 'uint64': 8,
          'fl32':4,'fl64':8,'c32':8,'c64':16}
       if name in sizes: return sizes[name]
       if name in self.schema.enums: return 4
@@ -181,9 +181,9 @@ class JavaBackend:
          return self.outer_name + '.' + java_type_name(type_name) + '.' + java_identifier(first)
       if type_name in self.schema.messages:
          return 'new ' + self.outer_name + '.' + java_type_name(type_name) + '()'
-      return {'bool':'Boolean.FALSE','int8':'Byte.valueOf((byte)0)',
-         'int16':'Short.valueOf((short)0)','int32':'Integer.valueOf(0)',
-         'int64':'Long.valueOf(0L)','fl32':'Float.valueOf(0.0f)',
+      return {'bool':'Boolean.FALSE','int8':'Byte.valueOf((byte)0)', 'uint8': 'Byte.valueOf((byte)0)',
+         'int16':'Short.valueOf((short)0)', 'uint16': 'Short.valueOf((short)0)','int32':'Integer.valueOf(0)', 'uint32': 'Integer.valueOf(0)',
+         'int64':'Long.valueOf(0L)', 'uint64': 'Long.valueOf(0L)','fl32':'Float.valueOf(0.0f)',
          'fl64':'Double.valueOf(0.0)','c32':'new SdlCodec.Complex32()',
          'c64':'new SdlCodec.Complex64()','string':'""'}[type_name]
 

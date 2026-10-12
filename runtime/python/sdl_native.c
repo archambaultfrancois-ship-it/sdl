@@ -5,7 +5,7 @@
 #include <string.h>
 #include <math.h>
 
-typedef enum { BOOL, I8, I16, I32, I64, F32, F64, C32, C64, ARRAY, RECORD } Kind;
+typedef enum { BOOL, I8, I16, I32, I64, F32, F64, C32, C64, ARRAY, RECORD, U8, U16, U32, U64 } Kind;
 typedef struct Node {
    Kind kind;
    size_t size, length;
@@ -42,6 +42,12 @@ static Node *compile_node(PyObject *spec,int depth) {
          if(!n->real_name||!n->imag_name)goto fail;
       }
       return n;
+   }
+   { const char *utypes[]={"uint8","uint16","uint32","uint64"};
+      for(i=0;i<4;i++)if(!strcmp(kind,utypes[i])) {
+         if(PyTuple_GET_SIZE(spec)!=1)goto invalid;
+         n->kind=(Kind)(U8+i);n->size=(size_t)1<<i;n->swap_unit=n->size;return n;
+      }
    }
    if(!strcmp(kind,"array")) {
       Py_ssize_t count;
@@ -118,6 +124,14 @@ static int write_node(const Node *n,PyObject *v,uint8_t *out) {
       }return 0;
    }
    if(n->kind==BOOL){if(!PyBool_Check(v)){PyErr_SetString(PyExc_TypeError,"Boolean field requires bool");return -1;}out[0]=(v==Py_True);return 0;}
+   if(n->kind>=U8 && n->kind<=U64){
+      PyObject *index=PyNumber_Index(v);unsigned long long x;
+      if(!index)return -1;
+      x=PyLong_AsUnsignedLongLong(index);Py_DECREF(index);if(PyErr_Occurred())return -1;
+      if(n->size<8&&(x>>(8*n->size))){PyErr_SetString(PyExc_OverflowError,"Packed unsigned overflow");return -1;}
+      for(i=0;i<n->size;i++)out[i]=(uint8_t)(x>>(8*(n->size-1-i)));
+      return 0;
+   }
    if(n->kind>=I8 && n->kind<=I64){
       PyObject *index=PyNumber_Index(v);long long x;int bits=(int)n->size*8;
       if(!index)return -1;
@@ -164,6 +178,9 @@ static PyObject *read_node(const Node *n,const uint8_t *in){
       }return out;
    }
    if(n->kind==BOOL){if(in[0]>1){PyErr_SetString(PyExc_ValueError,"Invalid boolean value");return NULL;}return PyBool_FromLong(in[0]);}
+   if(n->kind>=U8&&n->kind<=U64){
+      uint64_t bits=0;for(i=0;i<n->size;i++)bits=(bits<<8)|in[i];return PyLong_FromUnsignedLongLong(bits);
+   }
    if(n->kind>=I8&&n->kind<=I64){
       uint64_t bits=0;int64_t signed_value;
       for(i=0;i<n->size;i++)bits=(bits<<8)|in[i];

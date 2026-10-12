@@ -8,6 +8,20 @@ prepares that catalogue separately from message data. Each data buffer carries
 a compact message type ID followed by positional values. Numbers use big endian.
 Field IDs remain in the catalogue to support schema evolution.
 
+In source schemas, field IDs may be omitted: numbering starts at 1 and continues
+with the previous field's ID plus one, including after an explicit ID. Omitting
+the modifier defaults to `required`, so `int32 value;` as a first field is
+equivalent to `1: required int32 value;`. Both defaults apply independently to
+nested messages as well. See [automatic field numbers](docs/schema.md#automatic-field-numbers)
+and [field modifiers](docs/schema.md#field-types-and-modifiers) for examples and
+the implications for schema evolution.
+
+Source schemas also support `uint8` through `uint64` and per-field `wire(...)`
+clauses for bit widths, varint/ZigZag encoding, alignment, and padding. For example,
+`int32 value wire(bits=12);` encodes values from -2048 through 2047 in 12 bits.
+See [unsigned integers](docs/schema.md#unsigned-integers) and
+[field wire representation](docs/schema.md#field-wire-representation).
+
 ## Generate bindings
 
 ```sh

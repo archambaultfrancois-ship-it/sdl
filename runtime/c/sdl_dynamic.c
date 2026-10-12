@@ -29,6 +29,7 @@ typedef struct {
    char *type_name;
    uint8_t dimension_count;
    uint32_t *dimensions;
+   unsigned wire_flags, wire_bits, wire_encoding, wire_align, wire_pad;
    const SdlFieldDesc *local;
    const SdlFixedPlan *record_plan;
 } SdlDynamicFieldDesc;
@@ -76,7 +77,7 @@ static char *copy_string(const char *value) {
 }
 
 static bool is_builtin_type(const char *name) {
-   static const char *const names[] = {"bool", "int8", "int16", "int32", "int64",
+   static const char *const names[] = {"bool", "uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32", "int64",
                                        "fl32", "fl64", "c32",   "c64",   "string"};
    size_t i;
    for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
@@ -234,6 +235,7 @@ static bool validate_message_dependencies(const SdlDynamicSchema *schema, size_t
 
 struct SdlContext {
    SdlDynamicSchema schema;
+   bool has_representation;
 };
 
 typedef struct {
@@ -248,8 +250,8 @@ static char *token(Lexer *l) {
    if (l->p == l->end)
       return NULL;
    start = l->p++;
-   if (strchr("{}[]:;=", *start) == NULL)
-      while (l->p < l->end && *l->p != ' ' && *l->p != '\n' && strchr("{}[]:;=", *l->p) == NULL)
+   if (strchr("{}[]:;=(),", *start) == NULL)
+      while (l->p < l->end && *l->p != ' ' && *l->p != '\n' && strchr("{}[]:;=(),", *l->p) == NULL)
          ++l->p;
    n = (size_t)(l->p - start);
    out = (char *)malloc(n + 1);
@@ -298,6 +300,54 @@ static bool identifier(const char *s) {
          return false;
    }
    return true;
+}
+static bool parse_wire(Lexer *l, SdlDynamicFieldDesc *f) {
+   const char *saved = l->p;
+   char *t = token(l);
+   if (!t || strcmp(t, "wire")) { free(t); l->p = saved; return true; }
+   free(t);
+   if (!expect(l, "(")) return false;
+   for (;;) {
+      unsigned flag = 0; uint32_t n = 0;
+      t = token(l);
+      if (!t) return false;
+      if (!strcmp(t,"bits")) flag=1;
+      else if (!strcmp(t,"encoding")) flag=2;
+      else if (!strcmp(t,"align")) flag=4;
+      else if (!strcmp(t,"pad_after")) flag=8;
+      free(t);
+      if (!flag || (f->wire_flags & flag) || !expect(l,"=")) return false;
+      f->wire_flags |= flag;
+      if (flag == 2) {
+         t=token(l); if (!t) return false;
+         if (!strcmp(t,"varint")) f->wire_encoding=1;
+         else if (!strcmp(t,"zigzag")) f->wire_encoding=2;
+         free(t); if (!f->wire_encoding) return false;
+      } else {
+         if (!number(l,&n)) return false;
+         if (flag==1) f->wire_bits=n;
+         else if(flag==4) f->wire_align=n;
+         else f->wire_pad=n;
+      }
+      t=token(l); if(!t) return false;
+      if(!strcmp(t,")")){free(t);return true;}
+      if(strcmp(t,",")){free(t);return false;}
+      free(t);
+   }
+}
+static bool valid_wire(const SdlDynamicSchema *s, const SdlDynamicFieldDesc *f) {
+   unsigned width=0;
+   const char *t=f->type_name;
+   if(!strcmp(t,"bool")) width=1;
+   else if(!strcmp(t,"int8")||!strcmp(t,"uint8")) width=8;
+   else if(!strcmp(t,"int16")||!strcmp(t,"uint16")) width=16;
+   else if(!strcmp(t,"int32")||!strcmp(t,"uint32")||schema_enum(s,t)) width=32;
+   else if(!strcmp(t,"int64")||!strcmp(t,"uint64")) width=64;
+   if((f->wire_flags&1)&&(!f->wire_bits||f->wire_bits>width)) return false;
+   if((f->wire_flags&2)&&(!width||!strcmp(t,"bool")||(f->wire_flags&1)||
+       (f->wire_encoding==2&&!strncmp(t,"uint",4)))) return false;
+   if((f->wire_flags&4)&&(!f->wire_align||f->wire_align>256||(f->wire_align&(f->wire_align-1)))) return false;
+   return f->wire_pad<=65535;
 }
 static bool parse_descriptor(const uint8_t *data, size_t size, SdlDynamicSchema *schema) {
    Lexer l;
@@ -412,7 +462,7 @@ static bool parse_descriptor(const uint8_t *data, size_t size, SdlDynamicSchema 
                }
             }
             f->name = token(&l);
-            if (!identifier(f->name) || !expect(&l, ";") || (f->dimension_count && f->modifier)) {
+            if (!identifier(f->name) || !parse_wire(&l, f) || !expect(&l, ";") || (f->dimension_count && f->modifier)) {
                free(kind);
                goto fail;
             }
@@ -500,6 +550,9 @@ static bool parse_descriptor(const uint8_t *data, size_t size, SdlDynamicSchema 
    for (i = 0; i < schema->enum_count; ++i)
       if (schema_message(schema, schema->enums[i].name))
          goto fail;
+   for(i=0;i<schema->message_count;++i)
+      for(j=0;j<schema->messages[i].field_count;++j)
+         if(!valid_wire(schema,&schema->messages[i].fields[j])) goto fail;
    dependency_states = (uint8_t *)calloc(schema->message_count, sizeof(*dependency_states));
    if (!dependency_states)
       goto fail;
@@ -513,9 +566,9 @@ static bool parse_descriptor(const uint8_t *data, size_t size, SdlDynamicSchema 
       for (j = 0; j < message->field_count; ++j) {
          const SdlDynamicFieldDesc *field = &message->fields[j];
          bool known =
-             strcmp(field->type_name, "bool") == 0 || strcmp(field->type_name, "int8") == 0 ||
-             strcmp(field->type_name, "int16") == 0 || strcmp(field->type_name, "int32") == 0 ||
-             strcmp(field->type_name, "int64") == 0 || strcmp(field->type_name, "fl32") == 0 ||
+             strcmp(field->type_name, "bool") == 0 || (strcmp(field->type_name, "int8") == 0 || strcmp(field->type_name, "uint8") == 0) ||
+             (strcmp(field->type_name, "int16") == 0 || strcmp(field->type_name, "uint16") == 0) || (strcmp(field->type_name, "int32") == 0 || strcmp(field->type_name, "uint32") == 0) ||
+             (strcmp(field->type_name, "int64") == 0 || strcmp(field->type_name, "uint64") == 0) || strcmp(field->type_name, "fl32") == 0 ||
              strcmp(field->type_name, "fl64") == 0 || strcmp(field->type_name, "c32") == 0 ||
              strcmp(field->type_name, "c64") == 0 || strcmp(field->type_name, "string") == 0 ||
              schema_message_const(schema, field->type_name) != NULL ||
@@ -556,13 +609,13 @@ static const SdlDynamicEnumItem *enum_item(const SdlDynamicSchema *schema, const
 }
 
 static size_t primitive_size(const char *type_name) {
-   if (strcmp(type_name, "bool") == 0 || strcmp(type_name, "int8") == 0)
+   if (strcmp(type_name, "bool") == 0 || (strcmp(type_name, "int8") == 0 || strcmp(type_name, "uint8") == 0))
       return 1;
-   if (strcmp(type_name, "int16") == 0)
+   if ((strcmp(type_name, "int16") == 0 || strcmp(type_name, "uint16") == 0))
       return 2;
-   if (strcmp(type_name, "int32") == 0 || strcmp(type_name, "fl32") == 0)
+   if ((strcmp(type_name, "int32") == 0 || strcmp(type_name, "uint32") == 0) || strcmp(type_name, "fl32") == 0)
       return 4;
-   if (strcmp(type_name, "int64") == 0 || strcmp(type_name, "fl64") == 0)
+   if ((strcmp(type_name, "int64") == 0 || strcmp(type_name, "uint64") == 0) || strcmp(type_name, "fl64") == 0)
       return 8;
    if (strcmp(type_name, "c32") == 0)
       return 8;
@@ -749,6 +802,11 @@ SdlContext *type_prepare(const void *text, size_t size) {
    if (!parse_descriptor((const uint8_t *)text, size, &c->schema) || !bind_schema(&c->schema)) {
       type_context_free(c);
       return NULL;
+   }
+   for (i = 0; i < c->schema.message_count; ++i) {
+      size_t j;
+      for(j=0;j<c->schema.messages[i].field_count;++j)
+         c->has_representation |= c->schema.messages[i].fields[j].wire_flags != 0;
    }
    for (i = 0; i < c->schema.message_count; ++i)
       emission_match(&c->schema, &c->schema.messages[i], 0);
@@ -1004,7 +1062,7 @@ static bool emission_match(const SdlDynamicSchema *s, const SdlDynamicMessageDes
    s->messages[m - s->messages].can_encode = true;
    return true;
 }
-size_t type_encode_size(const SdlContext *c, const char *name, const void *value) {
+static size_t type_encode_size_plain(const SdlContext *c, const char *name, const void *value) {
    const SdlDynamicMessageDesc *m;
    Writer w = {NULL, 0, 0};
    if (!c || !name || !value)
@@ -1015,13 +1073,13 @@ size_t type_encode_size(const SdlContext *c, const char *name, const void *value
       return 0;
    return w.offset;
 }
-void *type_encode(const SdlContext *c, const char *name, const void *value, size_t *size) {
+void *type_encode_plain(const SdlContext *c, const char *name, const void *value, size_t *size) {
    Writer w;
    const SdlDynamicMessageDesc *m;
    if (!size)
       return NULL;
    *size = 0;
-   w.size = type_encode_size(c, name, value);
+   w.size = type_encode_size_plain(c, name, value);
    if (!w.size)
       return NULL;
    w.data = (uint8_t *)malloc(w.size);
@@ -1058,7 +1116,7 @@ static bool reserve_pool(Pool *p, size_t n, size_t alignment, void **out) {
    return true;
 }
 static const SdlTypeDesc *primitive_native(const char *name) {
-   const SdlTypeDesc *const ts[] = {&SDL_BOOL_DESC,    &SDL_INT8_DESC,      &SDL_INT16_DESC,
+   const SdlTypeDesc *const ts[] = {&SDL_UINT8_DESC, &SDL_UINT16_DESC, &SDL_UINT32_DESC, &SDL_UINT64_DESC, &SDL_BOOL_DESC,    &SDL_INT8_DESC,      &SDL_INT16_DESC,
                                     &SDL_INT32_DESC,   &SDL_INT64_DESC,     &SDL_FLOAT32_DESC,
                                     &SDL_FLOAT64_DESC, &SDL_COMPLEX32_DESC, &SDL_COMPLEX64_DESC};
    size_t i;
@@ -1275,7 +1333,7 @@ static const SdlDynamicMessageDesc *start_message(const SdlContext *c, const voi
       return NULL;
    return &c->schema.messages[id - 1];
 }
-size_t type_decode_size(const SdlContext *c, const void *data, size_t size) {
+static size_t type_decode_size_plain(const SdlContext *c, const void *data, size_t size) {
    SdlDynamicReader r;
    Pool p = {NULL, 0};
    const SdlDynamicMessageDesc *m = start_message(c, data, size, &r);
@@ -1284,8 +1342,8 @@ size_t type_decode_size(const SdlContext *c, const void *data, size_t size) {
       return 0;
    return m->local->size + p.used;
 }
-void *type_decode(const SdlContext *c, const void *data, size_t size) {
-   size_t n = type_decode_size(c, data, size);
+void *type_decode_plain(const SdlContext *c, const void *data, size_t size) {
+   size_t n = type_decode_size_plain(c, data, size);
    SdlDynamicReader r;
    const SdlDynamicMessageDesc *m;
    void *out;
@@ -1311,7 +1369,7 @@ static bool same_message(const SdlDynamicMessageDesc *a, const SdlDynamicMessage
       return false;
    for (i = 0; i < a->field_count; ++i) {
       const SdlDynamicFieldDesc *x = &a->fields[i], *y = &b->fields[i];
-      if (x->id != y->id || x->modifier != y->modifier || strcmp(x->name, y->name) ||
+      if (x->wire_flags != y->wire_flags || x->wire_bits != y->wire_bits || x->wire_encoding != y->wire_encoding || x->wire_align != y->wire_align || x->wire_pad != y->wire_pad || x->id != y->id || x->modifier != y->modifier || strcmp(x->name, y->name) ||
           strcmp(x->type_name, y->type_name) || x->dimension_count != y->dimension_count)
          return false;
       for (j = 0; j < x->dimension_count; ++j)
@@ -1342,6 +1400,19 @@ static bool decimal_out(Writer *w, long long n) {
    snprintf(b, sizeof(b), "%lld", n);
    return text_out(w, b);
 }
+static bool render_wire(const SdlDynamicFieldDesc *f, Writer *w) {
+   unsigned flag; bool first=true;
+   if(!f->wire_flags) return true;
+   if(!text_out(w," wire(")) return false;
+   for(flag=1;flag<=8;flag*=2) if(f->wire_flags&flag) {
+      if(!first&&!text_out(w,",")) return false;
+      first=false;
+      if(!text_out(w,flag==1?"bits=":flag==2?"encoding=":flag==4?"align=":"pad_after=")) return false;
+      if(flag==2) { if(!text_out(w,f->wire_encoding==1?"varint":"zigzag")) return false; }
+      else if(!decimal_out(w,flag==1?f->wire_bits:flag==4?f->wire_align:f->wire_pad)) return false;
+   }
+   return text_out(w,")");
+}
 static bool render_schema(const SdlDynamicSchema *s, Writer *w) {
    size_t i, j, k;
    const char *mods[] = {"required", "optional", "repeated", "packed"};
@@ -1359,7 +1430,7 @@ static bool render_schema(const SdlDynamicSchema *s, Writer *w) {
          for (k = 0; k < f->dimension_count; ++k)
             if (!text_out(w, "[") || !decimal_out(w, f->dimensions[k]) || !text_out(w, "]"))
                return false;
-         if (!text_out(w, " ") || !text_out(w, f->name) || !text_out(w, ";\n"))
+         if (!text_out(w, " ") || !text_out(w, f->name) || !render_wire(f, w) || !text_out(w, ";\n"))
             return false;
       }
       if (!text_out(w, "}\n"))
@@ -1495,6 +1566,11 @@ static void decode_value(const char *type_name, const uint8_t *data, size_t size
          return;
       value->kind = SDL_DYNAMIC_BOOL;
       value->value.boolean = data[0] != 0;
+   } else if (!strncmp(type_name, "uint", 4)) {
+      size_t i; uint64_t n = 0;
+      for (i = 0; i < size; ++i) n = (n << 8) | data[i];
+      value->kind = SDL_DYNAMIC_UNSIGNED;
+      value->value.unsigned_integer = n;
    } else if (strcmp(type_name, "int8") == 0) {
       int8_t part;
       memcpy(&part, data, sizeof(part));
@@ -1629,7 +1705,7 @@ static bool dynamic_value(const SdlDynamicSchema *s, const char *name, const uin
    decode_value(name, bytes, n, s, depth, out);
    return out->kind != SDL_DYNAMIC_NULL;
 }
-SdlDynamicMessage *type_decode_dynamic(const SdlContext *c, const void *data, size_t size) {
+SdlDynamicMessage *type_decode_dynamic_plain(const SdlContext *c, const void *data, size_t size) {
    SdlDynamicReader r, check;
    const SdlDynamicMessageDesc *m = start_message(c, data, size, &r);
    SdlDynamicMessage *out;
@@ -1647,7 +1723,7 @@ SdlDynamicMessage *type_decode_dynamic(const SdlContext *c, const void *data, si
 }
 
 /* Descriptor-only queries used by foreign-language typed bindings. */
-bool type_context_validate(const SdlContext *c, const void *data, size_t size) {
+static bool type_context_validate_plain(const SdlContext *c, const void *data, size_t size) {
    SdlDynamicReader r;
    const SdlDynamicMessageDesc *m = start_message(c, data, size, &r);
    return m && read_native_message(&c->schema, m, NULL, &r, NULL, 0) && r.offset == size;
@@ -1963,7 +2039,7 @@ uint8_t *type_context_direct_layouts(const SdlContext *remote, const SdlContext 
    }
    for (i = 0; i < *count; ++i) {
       const SdlDynamicMessageDesc *m = schema_message_const(&local->schema, remote->schema.messages[i].name);
-      flags[i] = m && direct_layout_match(remote, local, m, memo);
+      flags[i] = !remote->has_representation && !local->has_representation && m && direct_layout_match(remote, local, m, memo);
    }
    free(memo);
    return flags;
@@ -1985,3 +2061,5 @@ bool type_envelope_unpack(const void *data,size_t size,uint32_t *id,const void *
    *id=((uint32_t)p[5]<<24)|((uint32_t)p[6]<<16)|((uint32_t)p[7]<<8)|p[8];
    *payload=p+9;*payload_size=size-9;return true;
 }
+
+#include "sdl_representation.inc"

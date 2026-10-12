@@ -1,0 +1,8 @@
+struct BitRecord {
+ int16 value wire(bits=12);
+ bool flag wire(bits=1);
+}
+struct Records {
+ packed BitRecord items;
+ uint8 tail;
+}

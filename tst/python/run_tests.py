@@ -8,6 +8,7 @@ import test_codec
 import test_generator
 import test_native
 import test_buffers
+import test_representation
 
 
 PHASES = (
@@ -15,6 +16,7 @@ PHASES = (
       (test_codec.CodecTests, ("test_01_codec_",)),
       (test_native.NativeTests, ("test_01_codec_",)),
       (test_buffers.BufferTests, ("test_01_codec_",)),
+      (test_representation.RepresentationTests, ("test_01_codec_",)),
    )),
    ("SDL schema parser and backend validation", (
       (test_generator.GeneratorValidationTests,
@@ -24,6 +26,7 @@ PHASES = (
       (test_codec.CodecTests, ("test_02_invalid_",)),
       (test_native.NativeTests, ("test_02_invalid_",)),
       (test_buffers.BufferTests, ("test_02_invalid_",)),
+      (test_representation.RepresentationTests, ("test_02_invalid_",)),
    )),
    ("Boundary and size-limit cases (final phase)", (
       (test_codec.CodecTests, ("test_03_limits_",)),

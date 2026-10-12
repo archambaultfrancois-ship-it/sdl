@@ -41,3 +41,9 @@ size_t sdl_ada_length(const SdlDynamicValue *v){return v->value.array.count;}
 const void *sdl_ada_item(const SdlDynamicValue *v,size_t index){return index<v->value.array.count?v->value.array.items+index:NULL;}
 void *sdl_ada_message(const SdlDynamicValue *v){return v->value.message;}
 int sdl_ada_utf8(const void *data,size_t size){return sdl_wire_valid_utf8(data,size);}
+
+uint64_t sdl_ada_unsigned(const SdlDynamicValue *v){return v->value.unsigned_integer;}
+
+void *sdl_ada_represent(AdaContext *c,const void *data,size_t size,size_t *n){return c?type_wire_transform(c->remote,data,size,true,n):NULL;}
+uint8_t sdl_ada_buffer_byte(const uint8_t *p,size_t i){return p[i];}
+void sdl_ada_buffer_free(void *p){free(p);}
