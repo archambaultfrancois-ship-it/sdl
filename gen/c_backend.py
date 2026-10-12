@@ -28,6 +28,10 @@ class CBackend:
          return '&SDL_ENUM_' + name.upper() + '_DESC'
       return '&' + name.upper() + '_DESC'
 
+   @staticmethod
+   def _array_desc(message_name, field_name):
+      return '&' + message_name.lower() + '_' + field_name.lower() + '_array_desc_0'
+
    def generate_files(self, base_name):
       identifier = c_identifier(base_name)
       header = [
@@ -62,6 +66,9 @@ class CBackend:
             if field.modifier in ('repeated', 'packed'):
                header.append('   uint32_t ' + field.name + '_count;\n')
                header.append('   ' + c_type + ' *' + field.name + ';\n')
+            elif field.array_dimensions:
+               suffix = ''.join('[' + str(size) + ']' for size in field.array_dimensions)
+               header.append('   ' + c_type + ' ' + field.name + suffix + ';\n')
             else:
                header.append('   ' + c_type + ' ' + field.name + ';\n')
          header.append('} ' + name + ';\n')
@@ -72,6 +79,31 @@ class CBackend:
       header.append('\nvoid register_' + identifier + '_types(void);\n\n#endif\n')
       for name in self.schema.message_order:
          fields = sorted(self.schema.messages[name].fields, key=lambda item: item.index)
+         for field in fields:
+            if not field.array_dimensions:
+               continue
+            prefix = name.lower() + '_' + field.name.lower() + '_array'
+            for dimension_index in range(len(field.array_dimensions) - 1, -1, -1):
+               alias = prefix + '_type_' + str(dimension_index)
+               count_value = field.array_dimensions[dimension_index]
+               child_type = (self._c_type(field.type_name) if
+                  dimension_index == len(field.array_dimensions) - 1 else
+                  prefix + '_type_' + str(dimension_index + 1))
+               child_desc = (self._type_desc(field.type_name) if
+                  dimension_index == len(field.array_dimensions) - 1 else
+                  '&' + prefix + '_desc_' + str(dimension_index + 1))
+               desc = prefix + '_desc_' + str(dimension_index)
+               source.append('typedef ' + child_type + ' ' + alias + '[' +
+                  str(count_value) + '];\n')
+               alignment_type = prefix + '_align_' + str(dimension_index)
+               source.append('typedef struct { char prefix; ' + alias + ' value; } ' +
+                  alignment_type + ';\n')
+               source.append('static const SdlTypeDesc ' + desc + ' = {\n')
+               source.append('   .kind = SDL_TYPE_ARRAY, .size = sizeof(' + alias +
+                  '), .alignment = offsetof(' + alignment_type +
+                  ', value), .name = "' + desc + '", .hash = 0,\n')
+               source.append('   .detail.array = { ' + child_desc + ', ' +
+                  str(count_value) + ' }\n};\n')
          source.append('static const SdlFieldDesc ' + name.lower() + '_fields[] = {\n')
          if not fields:
             source.append('   { 0, NULL, NULL, 0, SDL_NO_OFFSET, SDL_NO_OFFSET, 0 }\n')
@@ -86,7 +118,8 @@ class CBackend:
             if field.modifier == 'packed':
                flags += ' | SDL_FIELD_PACKED'
             source.append('   { ' + str(field.index) + 'U, "' + field.name + '", ' +
-               self._type_desc(field.type_name) + ', offsetof(' + name + ', ' + field.name +
+               (self._array_desc(name, field.name) if field.array_dimensions else
+                self._type_desc(field.type_name)) + ', offsetof(' + name + ', ' + field.name +
                '), ' + presence + ', ' + count + ', ' + flags + ' },\n')
          source.append('};\n')
          source.append('typedef struct { char prefix; ' + name +

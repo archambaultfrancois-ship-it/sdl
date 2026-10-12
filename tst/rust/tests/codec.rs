@@ -1,6 +1,8 @@
 use sdl_runtime::{decode, encode, CodecError, Complex32, Complex64};
 use sdl_schema_tests::codec_cases::{CodecCases, State};
-use sdl_schema_tests::schema::{FixedItem, RootPayload, VarItem};
+use sdl_schema_tests::schema::{
+   FixedBoard, FixedItem, FixedRow, FixedVector, RootPayload, VarItem,
+};
 
 #[cfg(feature = "wire-little-endian")]
 const C_ROOT_PAYLOAD_WIRE: &[u8] = include_bytes!("../../fixtures/root_payload.bin");
@@ -39,6 +41,31 @@ fn root_payload_deep_clone_and_wire_round_trip() {
    assert_eq!(decoded, original);
    let decoded_from_c: RootPayload = decode(C_ROOT_PAYLOAD_WIRE).unwrap();
    assert_eq!(decoded_from_c, original);
+}
+
+#[test]
+fn nested_fixed_arrays_round_trip() {
+   let vector = |base: f32| FixedVector {
+      coords: [base, base + 1.0],
+      grid: [[base as i16, base as i16 + 1, base as i16 + 2],
+         [base as i16 + 3, base as i16 + 4, base as i16 + 5]],
+   };
+   let row = |base: f32| FixedRow {
+      vectors: [vector(base), vector(base + 10.0)],
+   };
+   let input = FixedBoard {
+      rows: [row(0.0), row(100.0)],
+      packed_rows: vec![row(200.0), row(300.0)],
+   };
+   let wire = encode(&input).unwrap();
+   let decoded: FixedBoard = decode(&wire).unwrap();
+   assert_eq!(decoded, input);
+
+   let mut malformed = wire;
+   malformed.extend_from_slice(&wire_u32(1));
+   malformed.extend_from_slice(&wire_u32(1));
+   malformed.push(0);
+   assert_eq!(decode::<FixedBoard>(&malformed), Err(CodecError::TypeMismatch));
 }
 
 fn codec_cases() -> CodecCases {

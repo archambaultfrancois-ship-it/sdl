@@ -5,7 +5,7 @@ import struct
 import unittest
 
 from codec_cases import CodecCases, State
-from schema import FixedItem, RootPayload, VarItem
+from schema import FixedBoard, FixedItem, FixedRow, FixedVector, RootPayload, VarItem
 from sdl_runtime import CodecError, Complex32, Complex64, decode, encode
 
 
@@ -64,6 +64,23 @@ class CodecTests(unittest.TestCase):
       self.assertEqual(decode(wire, RootPayload), original)
       self.assertEqual(decode(FIXTURE.read_bytes(), RootPayload), original)
       self.assertIsNot(original.fixed_array, decode(wire, RootPayload).fixed_array)
+
+   def test_nested_fixed_arrays_round_trip(self):
+      vector = lambda base: FixedVector(
+         coords=[base, base + 1.0],
+         grid=[[int(base) + value for value in range(3)],
+            [int(base) + value for value in range(3, 6)]],
+      )
+      row = lambda base: FixedRow(vectors=[vector(base), vector(base + 10.0)])
+      original = FixedBoard(
+         rows=[row(0.0), row(100.0)],
+         packed_rows=[row(200.0), row(300.0)],
+      )
+      wire = encode(original)
+      self.assertEqual(decode(wire, FixedBoard), original)
+      malformed = wire + wire_u32(1) + wire_u32(1) + b'\x00'
+      with self.assertRaisesRegex(CodecError, 'fixed array length'):
+         decode(malformed, FixedBoard)
 
    def test_scalars_optionals_enums_arrays_and_empty_values(self):
       original = codec_cases()

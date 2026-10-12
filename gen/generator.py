@@ -22,11 +22,12 @@ def c_identifier(value):
 
 
 class Field:
-   def __init__(self, index, modifier, type_name, name):
+   def __init__(self, index, modifier, type_name, name, array_dimensions=None):
       self.index = int(index)
       self.modifier = modifier
       self.type_name = type_name
       self.name = name
+      self.array_dimensions = array_dimensions or []
 
 
 class Message:
@@ -87,11 +88,14 @@ class MsgParser:
             current_enum.pairs.append((match.group(1), match.group(2)))
             continue
          if current_msg is not None:
-            match = re.match(r'(\d+):\s+(optional|required|repeated|packed)\s+(\w+)\s+(\w+)\s*;', line)
+            match = re.match(r'(\d+):\s+(optional|required|repeated|packed)\s+(\w+(?:\[\d+\])*)\s+(\w+)\s*;', line)
             if not match:
                raise ValueError('invalid field declaration: ' + line)
+            declared_type = match.group(3)
+            type_name = re.match(r'\w+', declared_type).group(0)
+            dimensions = [int(value) for value in re.findall(r'\[(\d+)\]', declared_type)]
             current_msg.fields.append(Field(match.group(1), match.group(2),
-               match.group(3), match.group(4)))
+               type_name, match.group(4), dimensions))
             continue
          raise ValueError('unexpected SDL statement: ' + line)
       self.validate()
@@ -107,6 +111,25 @@ class MsgParser:
                raise ValueError('duplicate field ID or name in ' + message.name)
             if field.type_name not in self.BUILTINS and field.type_name not in self.enums and field.type_name not in self.messages:
                raise ValueError('unknown type ' + field.type_name + ' in ' + message.name)
+            if any(dimension <= 0 or dimension > 0xFFFFFFFF for dimension in field.array_dimensions):
+               raise ValueError('fixed array dimensions must be positive uint32 values in ' +
+                  message.name + '.' + field.name)
+            if field.array_dimensions and field.modifier != 'required':
+               raise ValueError('fixed arrays require the required modifier in ' +
+                  message.name + '.' + field.name)
+            if field.array_dimensions:
+               array_size = self.fixed_wire_size(field.type_name)
+               if array_size is None:
+                  raise ValueError('fixed array element has variable wire size in ' +
+                     message.name + '.' + field.name)
+               for dimension in field.array_dimensions:
+                  if array_size > 0xFFFFFFFF // dimension:
+                     raise ValueError('fixed array wire size exceeds uint32 in ' +
+                        message.name + '.' + field.name)
+                  array_size *= dimension
+            if field.array_dimensions and field.modifier == 'packed':
+               raise ValueError('packed fields cannot also declare fixed dimensions in ' +
+                  message.name + '.' + field.name)
             ids.add(field.index)
             names.add(field.name)
             if field.modifier == 'packed' and self.fixed_wire_size(field.type_name) is None:
@@ -146,7 +169,13 @@ class MsgParser:
          field_size = self.fixed_wire_size(field.type_name, active)
          if field_size is None:
             return None
+         for dimension in field.array_dimensions:
+            field_size *= dimension
+            if field_size > 0xFFFFFFFF:
+               return None
          total += field_size
+         if total > 0xFFFFFFFF:
+            return None
       return total
 
 def parse_schemas(input_path):
@@ -193,15 +222,18 @@ def main():
    if not arguments.c and not arguments.rust and not arguments.python:
       argument_parser.error('select at least one backend with -c, -rust or -python')
    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-   if arguments.c:
-      from c_backend import generate_c
-      generate_c(arguments.input, os.path.join(arguments.output, 'c'))
-   if arguments.rust:
-      from rust_backend import generate_rust
-      generate_rust(arguments.input, os.path.join(arguments.output, 'rust'))
-   if arguments.python:
-      from python_backend import generate_python
-      generate_python(arguments.input, os.path.join(arguments.output, 'python'))
+   try:
+      if arguments.c:
+         from c_backend import generate_c
+         generate_c(arguments.input, os.path.join(arguments.output, 'c'))
+      if arguments.rust:
+         from rust_backend import generate_rust
+         generate_rust(arguments.input, os.path.join(arguments.output, 'rust'))
+      if arguments.python:
+         from python_backend import generate_python
+         generate_python(arguments.input, os.path.join(arguments.output, 'python'))
+   except ValueError as error:
+      argument_parser.error(str(error))
 
 
 if __name__ == '__main__':
