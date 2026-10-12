@@ -10,92 +10,27 @@ import sys
 MAX_SCHEMA_DESCRIPTOR_SIZE = 1024 * 1024
 
 
-def canonical_type_descriptor(schema, root_name):
-   """Return a stable binary descriptor for a message and its reachable types."""
-   messages = {}
-   enums = {}
-   pending = [root_name]
-   while pending:
-      name = pending.pop()
-      if name in messages or name in enums:
-         continue
-      if name in schema.messages:
-         message = schema.messages[name]
-         fields = []
-         for field in sorted(message.fields, key=lambda item: item.index):
-            fields.append({
-               'id': field.index,
-               'name': field.name,
-               'modifier': field.modifier,
-               'type': field.type_name,
-               'dimensions': list(field.array_dimensions),
-            })
-            if field.type_name in schema.messages or field.type_name in schema.enums:
-               pending.append(field.type_name)
-         messages[name] = fields
-      elif name in schema.enums:
-         enums[name] = [[enum_name, int(value)]
-            for enum_name, value in schema.enums[name].pairs]
-      elif name not in MsgParser.BUILTINS:
-         raise ValueError('unknown type in descriptor: ' + name)
-   output = bytearray(b'SDD1')
-
-   def append_bytes(value):
-      if len(value) > MAX_SCHEMA_DESCRIPTOR_SIZE - len(output):
-         raise ValueError('wire descriptor exceeds 1 MiB for ' + root_name)
-      output.extend(value)
-
-   def append_u16(value, label):
-      if value < 0 or value > 0xFFFF:
-         raise ValueError(label + ' exceeds uint16 in schema descriptor')
-      append_bytes(value.to_bytes(2, 'big'))
-
-   def append_u32(value):
-      append_bytes(value.to_bytes(4, 'big'))
-
-   def append_text(value):
-      encoded = value.encode('utf-8')
-      append_u16(len(encoded), 'descriptor string length')
-      append_bytes(encoded)
-
-   if len(messages) > 0xFFFF or len(enums) > 0xFFFF:
-      raise ValueError('too many declarations in schema descriptor')
-   append_text(root_name)
-   append_u16(len(messages), 'message count')
-   modifier_codes = {'required': 0, 'optional': 1, 'repeated': 2, 'packed': 3}
-   for name in sorted(messages):
-      append_text(name)
-      fields = messages[name]
-      append_u16(len(fields), 'field count')
-      for field in fields:
-         append_u32(field['id'])
-         append_text(field['name'])
-         append_bytes(bytes((modifier_codes[field['modifier']],)))
-         append_text(field['type'])
-         if len(field['dimensions']) > 0xFF:
-            raise ValueError('too many array dimensions in schema descriptor')
-         append_bytes(bytes((len(field['dimensions']),)))
-         for dimension in field['dimensions']:
-            append_u32(dimension)
-   append_u16(len(enums), 'enum count')
-   for name in sorted(enums):
-      append_text(name)
-      values = enums[name]
-      append_u16(len(values), 'enum value count')
-      for enum_name, value in values:
-         append_text(enum_name)
-         try:
-            append_bytes(int(value).to_bytes(4, 'big', signed=True))
-         except OverflowError as error:
-            raise ValueError('enum value must fit signed int32 in ' + name) from error
-   return bytes(output)
-
-
-def canonical_type_hash(schema, root_name):
-   value = 2166136261
-   for byte in canonical_type_descriptor(schema, root_name):
-      value = ((value ^ byte) * 16777619) & 0xFFFFFFFF
-   return value
+def canonical_type_descriptor(schema, root_name=None):
+   """Canonical SDL2 UTF-8 catalogue (all declarations in this schema)."""
+   if root_name is not None and root_name not in schema.messages:
+      raise ValueError('unknown root message: ' + root_name)
+   lines = ['SDL2']
+   for name in sorted(schema.messages, key=lambda value: value.encode('utf-8')):
+      lines.append('message ' + name + ' {')
+      for field in sorted(schema.messages[name].fields, key=lambda item: item.index):
+         dimensions = ''.join('[' + str(n) + ']' for n in field.array_dimensions)
+         lines.append('  %d: %s %s%s %s;' %
+            (field.index, field.modifier, field.type_name, dimensions, field.name))
+      lines.append('}')
+   for name in sorted(schema.enums, key=lambda value: value.encode('utf-8')):
+      lines.append('enum ' + name + ' {')
+      for item, value in schema.enums[name].pairs:
+         lines.append('  ' + item + ' = ' + str(int(value)) + ';')
+      lines.append('}')
+   result = ('\n'.join(lines) + '\n').encode('utf-8')
+   if len(result) > MAX_SCHEMA_DESCRIPTOR_SIZE:
+      raise ValueError('wire descriptor exceeds 1 MiB')
+   return result
 
 
 def c_identifier(value):
@@ -257,7 +192,7 @@ class MsgParser:
 
       def validate_text(value, label):
          if len(value.encode('utf-8')) > 0xFFFF:
-            raise ValueError(label + ' exceeds uint16 in schema descriptor')
+            raise ValueError(label + ' exceeds 65535 UTF-8 bytes in schema catalogue')
 
       generated_symbols = {}
       for type_name in list(self.enums) + list(self.messages):

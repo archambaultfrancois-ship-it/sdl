@@ -1,21 +1,89 @@
+import java.util.Arrays;
 public final class SdlJavaBench {
-   private static int readIterations() {
-      String setting=System.getenv("SDL_BENCH_ITERATIONS");
-      if(setting==null||setting.length()==0)return 200;
-      for(int i=0;i<setting.length();i++)if(setting.charAt(i)<'0'||setting.charAt(i)>'9')return 200;
-      try { int value=Integer.parseInt(setting);return value>0?value:200; }
-      catch(NumberFormatException ignored) { return 200; }
+   static volatile Object sink;
+   static int iterations() {
+      String s = System.getenv("SDL_BENCH_ITERATIONS");
+      if (s == null || !s.matches("[0-9]+"))
+         return 200;
+      try {
+         int n = Integer.parseInt(s);
+         return n > 0 ? n : 200;
+      } catch (NumberFormatException e) {
+         return 200;
+      }
+   }
+   static void bench(String label, SdlCodec.Message value, int useful) {
+      int minIterations = iterations();
+      String description = SdlCodec.description(value.getClass());
+      long start = System.nanoTime();
+      SdlCodec.Context ctx = SdlCodec.prepare(description, value.getClass());
+      double preparation = (System.nanoTime() - start) / 1e3;
+      byte[] wire = SdlCodec.encode(ctx, value);
+      SdlCodec.decode(ctx, wire);
+      for (int i = 0; i < 1000; i++) {
+         sink = SdlCodec.encode(ctx, value);
+         sink = SdlCodec.decode(ctx, wire);
+      }
+      System.out.printf("%s metadata: %d description bytes, %.1f us prepare%n", label,
+                        description.getBytes(java.nio.charset.StandardCharsets.UTF_8).length,
+                        preparation);
+      for (String operation : new String[] {"encode", "decode"}) {
+         double[] rates = new double[3];
+         for (int trial = 0; trial < 3; trial++) {
+            start = System.nanoTime();
+            int n = 0;
+            while (n < minIterations || System.nanoTime() - start < 100000000L) {
+               sink = operation.equals("encode") ? SdlCodec.encode(ctx, value)
+                                                 : SdlCodec.decode(ctx, wire);
+               n++;
+            }
+            rates[trial] = n / ((System.nanoTime() - start) / 1e9);
+         }
+         Arrays.sort(rates);
+         System.out.printf("%s %s %.1f msg/s %.4f MiB/s (%d bytes/message)%n", label, operation,
+                           rates[1], rates[1] * useful / 1048576., wire.length);
+      }
    }
    public static void main(String[] args) {
-      int iterations=readIterations();
-      int samples=5000;benchmark.BenchPayload input=new benchmark.BenchPayload();StringBuilder header=new StringBuilder();for(int i=0;i<200;i++)header.append('H');input.header=header.toString();
-      float[] re=new float[samples],im=new float[samples];for(int i=0;i<samples;i++){re[i]=i*0.25f;im[i]=-(i%97)*0.5f;}input.samples=new SdlCodec.Complex32Array(re,im);
-      byte[] wire=input.encode();if(wire.length!=40224+benchmark.BenchPayload.SDL_DESCRIPTOR.length)throw new IllegalStateException("unexpected benchmark frame size");benchmark.BenchPayload.decode(wire);long start=System.nanoTime();long bytes=0;
-      for(int i=0;i<iterations;i++)bytes+=input.encode().length;long encodeTime=System.nanoTime()-start;
-      start=System.nanoTime();for(int i=0;i<iterations;i++)benchmark.BenchPayload.decode(wire);long decodeTime=System.nanoTime()-start;
-      double secEncode=encodeTime/1.0e9,secDecode=decodeTime/1.0e9;
-      System.out.printf("Java SDL benchmark: %d samples, %d iterations, %d bytes/message%n",samples,iterations,wire.length);
-      System.out.printf("  encode: %.1f msg/s, %.2f MiB/s%n",iterations/secEncode,(bytes/secEncode)/(1024.0*1024.0));
-      System.out.printf("  decode: %.1f msg/s, %.2f MiB/s%n",iterations/secDecode,((double)wire.length*iterations/secDecode)/(1024.0*1024.0));
+      bench_cases.BenchSmall small = new bench_cases.BenchSmall();
+      small.active = true;
+      small.sequence = 123;
+      small.code = (short)-2;
+      bench("small", small, 7);
+      bench_cases.BenchOptionals optional = new bench_cases.BenchOptionals();
+      optional.a = 1;
+      bench("optional_sparse", optional, 4);
+      optional.b = 2;
+      optional.c = 3;
+      optional.d = 4;
+      optional.e = 5;
+      optional.f = 6;
+      optional.g = 7;
+      optional.h = 8;
+      bench("optional_dense", optional, 32);
+      bench_cases.BenchVariable variable = new bench_cases.BenchVariable();
+      StringBuilder h = new StringBuilder();
+      for (int i = 0; i < 40; i++)
+         h.append('V');
+      variable.header = h.toString();
+      for (int i = 0; i < 8; i++) {
+         bench_cases.BenchEntry entry = new bench_cases.BenchEntry();
+         entry.label = "entry" + i;
+         entry.number = (long)i;
+         variable.entries.add(entry);
+      }
+      bench("variable", variable, 152);
+      benchmark.BenchPayload packed = new benchmark.BenchPayload();
+      h = new StringBuilder();
+      for (int i = 0; i < 200; i++)
+         h.append('H');
+      packed.header = h.toString();
+      float[] re = new float[5000], im = new float[5000];
+      for (int i = 0; i < 5000; i++) {
+         re[i] = i * 0.25f;
+         im[i] = -(i % 97) * 0.5f;
+      }
+      packed.samples = new SdlCodec.Complex32Array(re, im);
+      bench("packed", packed, 40200);
    }
 }

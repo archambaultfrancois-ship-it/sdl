@@ -44,7 +44,6 @@ struct SdlTypeDesc {
    size_t size;
    size_t alignment;
    const char *name;
-   uint32_t hash;
    const uint8_t *schema_descriptor;
    size_t schema_descriptor_size;
    union {

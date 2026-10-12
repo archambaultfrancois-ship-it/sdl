@@ -5,6 +5,3 @@ edition = "2021"
 
 [dependencies]
 sdl-runtime = { path = "../../runtime/rust" }
-
-[features]
-wire-little-endian = ["sdl-runtime/wire-little-endian"]

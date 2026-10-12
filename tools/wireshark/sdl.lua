@@ -1,281 +1,179 @@
--- Generic SDL wire dissector for Wireshark.
--- Supports complete SDL frames carried in one UDP datagram.
-
-local sdl = Proto("sdl", "SDL Wire")
-sdl.prefs.wire_endian = Pref.enum("Wire byte order", 0,
-   "Byte order selected by the SDL sender.",
-   { [0] = "Big endian", [1] = "Little endian" })
-
-local f_type = ProtoField.string("sdl.type", "Root message")
-local f_hash = ProtoField.uint32("sdl.schema_hash", "Schema hash", base.HEX)
-local f_field_id = ProtoField.uint32("sdl.field_id", "Field ID", base.DEC)
-local f_length = ProtoField.uint32("sdl.field_length", "Field payload length", base.DEC)
+-- SDL2: a catalogue announcement followed by positional data datagrams.
+local sdl = Proto("sdl", "SDL2 Wire")
+local f_type = ProtoField.string("sdl.type", "Message type")
+local f_id = ProtoField.uint32("sdl.type_id", "Message type ID", base.DEC)
+local f_description = ProtoField.string("sdl.description", "Catalogue")
 local f_value = ProtoField.string("sdl.value", "Value")
 local f_error = ProtoField.string("sdl.error", "Decode error")
-sdl.fields = { f_type, f_hash, f_field_id, f_length, f_value, f_error }
-
-local function fail(message)
-   error(message, 0)
-end
-
-local function u16(data, pos)
-   if pos + 1 > #data then fail("truncated u16") end
-   return data:byte(pos) * 256 + data:byte(pos + 1), pos + 2
-end
-
-local function u32(data, pos, little)
-   if pos + 3 > #data then fail("truncated u32") end
-   local a, b, c, d = data:byte(pos, pos + 3)
-   if little then return d * 16777216 + c * 65536 + b * 256 + a, pos + 4 end
-   return a * 16777216 + b * 65536 + c * 256 + d, pos + 4
-end
-
-local function text(data, pos)
-   local size
-   size, pos = u16(data, pos)
-   if size > #data - pos + 1 then fail("truncated descriptor string") end
-   local value = data:sub(pos, pos + size - 1)
-   if value:find("\0", 1, true) then fail("NUL in descriptor string") end
-   return value, pos + size
-end
-
-local function descriptor(data)
-   local pos = 1
-   if data:sub(1, 4) ~= "SDD1" then fail("unknown descriptor version") end
-   pos = 5
-   local schema = { messages = {}, enums = {} }
-   schema.root, pos = text(data, pos)
-   local count
-   count, pos = u16(data, pos)
-   for unused = 1, count do
-      local message = { fields = {}, by_id = {} }
-      message.name, pos = text(data, pos)
-      local field_count
-      field_count, pos = u16(data, pos)
-      for index = 1, field_count do
-         local field = {}
-         field.id, pos = u32(data, pos, false)
-         field.name, pos = text(data, pos)
-         field.modifier = data:byte(pos)
-         if not field.modifier then fail("truncated field modifier") end
-         pos = pos + 1
-         field.type, pos = text(data, pos)
-         local dimensions = data:byte(pos)
-         if not dimensions then fail("truncated dimensions") end
-         pos = pos + 1
-         field.dimensions = {}
-         for dimension = 1, dimensions do
-            field.dimensions[dimension], pos = u32(data, pos, false)
+sdl.fields = {f_type, f_id, f_description, f_value, f_error}
+local catalogues = {}
+function sdl.init() catalogues = {} end
+local function fail(text) error(text, 0) end
+local function utf8(text)
+   local i = 1
+   while i <= #text do
+      local b = text:byte(i); i = i + 1
+      if b >= 128 then
+         local n, value, minimum
+         if b >= 194 and b <= 223 then n, value, minimum = 1, b % 32, 128
+         elseif b >= 224 and b <= 239 then n, value, minimum = 2, b % 16, 2048
+         elseif b >= 240 and b <= 244 then n, value, minimum = 3, b % 8, 65536
+         else fail("invalid UTF-8") end
+         for unused = 1, n do
+            local c = text:byte(i); i = i + 1
+            if not c or c < 128 or c > 191 then fail("invalid UTF-8 continuation") end
+            value = value * 64 + c % 64
          end
-         message.fields[index] = field
-         message.by_id[field.id] = field
+         if value < minimum or value > 1114111 or (value >= 55296 and value <= 57343) then fail("invalid UTF-8 scalar") end
       end
-      schema.messages[message.name] = message
    end
-   count, pos = u16(data, pos)
-   for unused = 1, count do
-      local enum = {}
-      enum.name, pos = text(data, pos)
-      local item_count
-      item_count, pos = u16(data, pos)
-      enum.items = {}
-      for index = 1, item_count do
-         local name, value
-         name, pos = text(data, pos)
-         value, pos = u32(data, pos, false)
-         enum.items[value] = name
+end
+local widths = {bool=1, int8=1, int16=2, int32=4, int64=8, fl32=4, fl64=8, c32=8, c64=16}
+local function descriptor(text)
+   utf8(text)
+   if #text > 1048576 or text:sub(1,5) ~= "SDL2\n" or text:sub(-1) ~= "\n" or text:find("\0",1,true) then fail("expected SDL2 catalogue") end
+   local schema = {messages={}, enums={}, names={}, sizes={}, heights={}}
+   local current, kind, previous_message, previous_enum = nil, nil, "", ""
+   for line in text:sub(6):gmatch("([^\n]*)\n") do
+      if not current then
+         local k, name = line:match("^(%w+) ([%w_$]+) {$")
+         if not k or (k ~= "message" and k ~= "enum") or widths[name] or name == "string" then fail("invalid declaration") end
+         kind = k
+         if k == "message" then
+            if name <= previous_message then fail("message order") end; previous_message = name
+            current = {name=name, fields={}, ids={}, field_names={}}; schema.messages[name] = current
+            schema.names[#schema.names+1] = name
+         else
+            if name <= previous_enum then fail("enum order") end; previous_enum = name
+            current = {name=name, values={}, names={}, count=0}; schema.enums[name] = current
+         end
+      elseif line == "}" then
+         if kind == "enum" and current.count == 0 then fail("empty enum") end; current = nil
+      elseif kind == "message" then
+         local id, modifier, name, dimensions, field = line:match("^  (%d+): (%w+) ([%w_$]+)([%[%]%d]*) ([%w_$]+);$")
+         id = tonumber(id)
+         if not id or id < 1 or id > 4294967295 or (modifier ~= "required" and modifier ~= "optional" and modifier ~= "repeated" and modifier ~= "packed") then fail("invalid field") end
+         local dims = {}; local rebuilt = ""
+         for n in dimensions:gmatch("%[(%d+)%]") do
+            rebuilt = rebuilt .. "[" .. n .. "]"; n = tonumber(n)
+            if n < 1 or n > 4294967295 or #dims >= 255 then fail("invalid dimension") end; dims[#dims+1] = n
+         end
+         if rebuilt ~= dimensions or (#dims > 0 and modifier ~= "required") or current.field_names[field] or (#current.fields > 0 and id <= current.fields[#current.fields].id) then fail("invalid field metadata") end
+         current.field_names[field] = true; current.fields[#current.fields+1] = {id=id, modifier=modifier, type=name, dims=dims, name=field}
+      else
+         local name, n = line:match("^  ([%w_$]+) = (%-?%d+);$"); n = tonumber(n)
+         if not n or n < -2147483648 or n > 2147483647 or current.values[n] or current.names[name] then fail("invalid enum") end
+         current.values[n] = name; current.names[name] = true; current.count = current.count + 1
       end
-      schema.enums[enum.name] = enum
    end
-   if pos ~= #data + 1 then fail("trailing descriptor data") end
-   if not schema.messages[schema.root] then fail("root message is missing") end
+   if current or #schema.names == 0 then fail("unclosed or empty catalogue") end
+   local active = {}
+   local function size(name, depth)
+      if depth > 64 or active[name] then fail("recursive or deep schema") end
+      if widths[name] then return widths[name] end
+      if schema.enums[name] then return 4 end
+      if name == "string" then return false end
+      if schema.sizes[name] ~= nil then
+         if depth+schema.heights[name]>64 then fail("deep schema") end
+         return schema.sizes[name]
+      end
+      local m = schema.messages[name]; if not m then fail("unknown type") end
+      active[name] = true; local total, fixed, height = 0, #m.fields > 0, 0
+      for _, f in ipairs(m.fields) do
+         local n = size(f.type, depth+1)
+         if schema.messages[f.type] then height=math.max(height,1+schema.heights[f.type]) end
+         if #f.dims > 0 or f.modifier == "packed" then
+            if not n then fail("variable fixed element") end
+         end
+         if not n or f.modifier ~= "required" then fixed = false end
+         if n then for _, d in ipairs(f.dims) do n = n*d; if n > 4294967295 then fail("array overflow") end end; total = total+n end
+      end
+      if depth+height>64 or (fixed and total>4294967295) then fail("deep or oversized schema") end
+      active[name] = nil; schema.heights[name]=height;schema.sizes[name] = fixed and total or false; return schema.sizes[name]
+   end
+   for _, name in ipairs(schema.names) do
+      if schema.enums[name] then fail("ambiguous type") end; size(name,0)
+   end
    return schema
 end
-
-local function hash32(data)
-   local bitops = bit32 or bit
-   local hash = 2166136261
-   for index = 1, #data do
-      hash = bitops.bxor(hash, data:byte(index))
-      -- FNV prime is 2^24 + 403; keep the arithmetic exactly within 32 bits.
-      hash = (hash * 403 + (hash % 65536) * 65536) % 4294967296
+local function channel(pinfo)
+   return tostring(pinfo.src) .. ":" .. tostring(pinfo.src_port) .. ">" .. tostring(pinfo.dst) .. ":" .. tostring(pinfo.dst_port)
+end
+local function decode(tvb, schema, tree)
+   local pos, length = 0, tvb:len()
+   local function take(n)
+      if n > length-pos then fail("truncated payload") end
+      local range = tvb(pos,n); pos = pos+n; return range
    end
-   return hash
-end
-
-local function read_number(data, pos, size, little)
-   if pos + size - 1 > #data then fail("truncated numeric value") end
-   local result = 0
-   if little then
-      for index = size - 1, 0, -1 do result = result * 256 + data:byte(pos + index) end
-   else
-      for index = 0, size - 1 do result = result * 256 + data:byte(pos + index) end
-   end
-   return result
-end
-
-local primitive_sizes = {
-   bool = 1, int8 = 1, int16 = 2, int32 = 4, int64 = 8,
-   fl32 = 4, fl64 = 8, c32 = 8, c64 = 16
-}
-
-local function proto_node(parent, data, label)
-   local bytes = ByteArray.new(data, true)
-   local tvb = bytes:tvb("SDL value")
-   return parent:add(sdl, tvb(), label)
-end
-
-local function fixed_size(type_name, schema, depth)
-   local size = primitive_sizes[type_name]
-   if size then return size end
-   if schema.enums[type_name] then return 4 end
-   if depth > 32 then fail("message nesting is too deep") end
-   local message = schema.messages[type_name]
-   if not message then return nil end
-   local total = 0
-   for _, field in ipairs(message.fields) do
-      if field.modifier ~= 0 or field.type == "string" then return nil end
-      local item_size = fixed_size(field.type, schema, depth + 1)
-      if not item_size then return nil end
-      local count = 1
-      for _, dimension in ipairs(field.dimensions) do count = count * dimension end
-      total = total + 8 + item_size * count
-   end
-   return total
-end
-
-local function signed_decimal(value, bits)
-   local half = 2 ^ (bits - 1)
-   if value >= half then return string.format("%.0f", value - 2 ^ bits) end
-   return string.format("%.0f", value)
-end
-
-local function render_value(type_name, data, schema, little)
-   local size = primitive_sizes[type_name]
-   if type_name == "string" then return string.format("%q", data) end
-   if schema.enums[type_name] then
-      local value = read_number(data, 1, 4, little)
-      local enum_name = schema.enums[type_name].items[value]
-      return enum_name and (enum_name .. " (" .. value .. ")") or tostring(value)
-   end
-   if type_name == "bool" then
-      if #data ~= 1 or (data:byte(1) ~= 0 and data:byte(1) ~= 1) then
-         fail("invalid bool value")
+   local function count()
+      local n=0
+      for i=0,4 do
+         local b=take(1):uint(); if i==4 and b>15 then fail("counter overflow") end
+         n=n+(b%128)*2^(7*i)
+         if b<128 then if i>0 and b==0 then fail("noncanonical counter") end; return n end
       end
-      return data:byte(1) == 1 and "true" or "false"
+      fail("invalid counter")
    end
-   if type_name == "fl32" or type_name == "fl64" or
-      type_name == "c32" or type_name == "c64" then
-      local width = (type_name == "fl32" or type_name == "c32") and 4 or 8
-      local tvb = ByteArray.new(data, true):tvb("SDL value")
-      local function float_at(offset)
-         local range = tvb(offset, width)
-         if little then
-            if width == 4 then return range:le_float() end
-            return range:le_double()
-         end
-         if width == 4 then return range:float() end
-         return range:double()
-      end
-      if #data ~= size then fail("invalid floating point width") end
-      if type_name == "c32" or type_name == "c64" then
-         return "(" .. float_at(0) .. ", " .. float_at(width) .. ")"
-      end
-      return tostring(float_at(0))
-   end
-   if not size or #data ~= size then fail("invalid primitive width for " .. type_name) end
-   if size == 8 then
-      local bytes = ByteArray.new(data, true)
-      local tvb = bytes:tvb("SDL int64")
-      local range = tvb(0, 8)
-      return tostring(little and range:le_int64() or range:int64())
-   end
-   local value = read_number(data, 1, size, little)
-   if type_name:sub(1, 3) == "int" then return signed_decimal(value, size * 8) end
-   return tostring(value)
-end
-
-local decode_body
-local function add_field_tree(parent, field, payload, schema, little, depth)
-   if depth > 32 then fail("message nesting is too deep") end
-   local label = field.name .. " (" .. field.type .. ")"
-   local node = proto_node(parent, payload, label)
-   node:add(f_field_id, field.id)
-   node:add(f_length, #payload)
-   local message = schema.messages[field.type]
-   if #field.dimensions > 0 or field.modifier == 3 then
-      local item_size = fixed_size(field.type, schema, depth + 1)
-      if not item_size or item_size == 0 or #payload % item_size ~= 0 then
-         fail("invalid fixed array size")
-      end
-      local count = #payload / item_size
-      if #field.dimensions > 0 then
-         local expected = 1
-         for _, dimension in ipairs(field.dimensions) do expected = expected * dimension end
-         if count ~= expected then fail("fixed array element count mismatch") end
-      end
-      local array = proto_node(node, payload, "Elements (" .. count .. ")")
-      for index = 0, count - 1 do
-         local start = index * item_size + 1
-         local item = payload:sub(start, start + item_size - 1)
-         if message then
-            local element = proto_node(array, item, "Element " .. (index + 1))
-            decode_body(element, item, message, schema, little, depth + 1)
-         else
-            array:add(f_value, render_value(field.type, item, schema, little))
-         end
-      end
-   elseif message then
-      decode_body(node, payload, message, schema, little, depth + 1)
-   else
-      node:add(f_value, render_value(field.type, payload, schema, little))
-   end
-end
-
-decode_body = function(parent, data, message, schema, little, depth)
-   if depth > 32 then fail("message nesting is too deep") end
-   local pos = 1
-   while pos <= #data do
-      if #data - pos + 1 < 8 then fail("truncated field header") end
-      local id, next_pos = u32(data, pos, little)
-      local length
-      length, pos = u32(data, next_pos, little)
-      if length > #data - pos + 1 then fail("truncated field payload") end
-      local payload = data:sub(pos, pos + length - 1)
-      local field = message.by_id[id]
-      if field then
-         add_field_tree(parent, field, payload, schema, little, depth)
+   local message, value
+   value = function(name, dims, node, label, depth)
+      if depth>64 then fail("nesting too deep") end
+      if #dims>0 then
+         local rest={};for i=2,#dims do rest[#rest+1]=dims[i] end
+         for i=1,dims[1] do value(name,rest,node,label.."["..(i-1).."]",depth+1) end
+      elseif schema.messages[name] then
+         local child=node:add(f_value,label.." ("..name..")"); message(name,child,depth+1)
+      elseif name=="string" then
+         local bytes=take(count()); local text=bytes:raw();utf8(text);node:add(f_value,bytes,label.." = "..string.format("%q",text))
       else
-         parent:add(f_field_id, id):append_text(" (unknown; skipped " .. length .. " bytes)")
+         local bytes=take(widths[name] or 4);local text
+         if schema.enums[name] then local n=bytes:int();text=schema.enums[name].values[n];if not text then fail("invalid enum") end
+         elseif name=="bool" then local n=bytes:uint();if n>1 then fail("invalid bool") end;text=n==1 and "true" or "false"
+         elseif name=="fl32" or name=="fl64" then text=tostring(bytes:float())
+         elseif name=="c32" then text=tostring(bytes:range(0,4):float())..", "..tostring(bytes:range(4,4):float())
+         elseif name=="c64" then text=tostring(bytes:range(0,8):float())..", "..tostring(bytes:range(8,8):float())
+         elseif name=="int64" then text=tostring(bytes:int64())
+         else text=tostring(bytes:int()) end
+         node:add(f_value,bytes,label.." = "..text)
       end
-      pos = pos + length
    end
+   message = function(name,node,depth)
+      for _, f in ipairs(schema.messages[name].fields) do
+         local n=f.modifier=="required" and 1 or count()
+         if f.modifier=="optional" and n>1 then fail("optional count exceeds one") end
+         local unit=widths[f.type] or (schema.enums[f.type] and 4) or schema.sizes[f.type]
+         if unit then for _, d in ipairs(f.dims) do unit=unit*d end;if n>math.floor((length-pos)/unit) then fail("truncated array") end
+         elseif n>1048576 then fail("variable array too large") end
+         if n==0 then node:add(f_value,f.name.." = "..(f.modifier=="optional" and "absent" or "[]")) end
+         for i=1,n do value(f.type,f.dims,node,f.name..(n>1 and "["..(i-1).."]" or ""),depth+1) end
+      end
+   end
+   local id=count();local name=schema.names[id];if not name then fail("unknown type ID") end
+   tree:add(f_id,tvb(0,pos),id);tree:add(f_type,name);message(name,tree,0)
+   if pos~=length then fail("trailing bytes") end;return name
 end
-
-function sdl.dissector(tvb, pinfo, tree)
-   local data = tvb:raw()
-   pinfo.cols.protocol = "SDL"
-   local root = tree:add(sdl, tvb(), "SDL Wire")
-   local ok, message = pcall(function()
-      local little = sdl.prefs.wire_endian == 1
-      if #data < 8 then fail("truncated SDL frame") end
-      local descriptor_size, pos = u32(data, 1, little)
-      if descriptor_size > #data - 8 then fail("truncated SDL descriptor") end
-      local descriptor_bytes = data:sub(5, 4 + descriptor_size)
-      local schema = descriptor(descriptor_bytes)
-      pos = 5 + descriptor_size
-      local expected_hash
-      expected_hash, pos = u32(data, pos, little)
-      if expected_hash ~= hash32(descriptor_bytes) then fail("SDL descriptor hash mismatch") end
-      root:add(f_type, schema.root)
-      root:add(f_hash, expected_hash)
-      decode_body(root, data:sub(pos), schema.messages[schema.root], schema, little, 0)
-      pinfo.cols.info = schema.root
+local function catalogue_at(key, frame)
+   local latest, selected = 0, nil
+   for number, schema in pairs(catalogues[key] or {}) do
+      if number <= frame and number > latest then latest, selected = number, schema end
+   end
+   return selected
+end
+function sdl.dissector(tvb,pinfo,tree)
+   pinfo.cols.protocol="SDL2";local root=tree:add(sdl,tvb());local key=channel(pinfo)
+   local ok,result=pcall(function()
+      if tvb:len()>=5 and tvb(0,5):raw()=="SDL2\n" then
+         local text=tvb():raw();local schema=descriptor(text)
+         if not catalogues[key] then catalogues[key]={} end
+         catalogues[key][pinfo.number]=schema;root:add(f_description,text);return "Catalogue announcement"
+      end
+      local schema=catalogue_at(key,pinfo.number)
+      if not schema then fail("catalogue announcement missing from capture") end
+      return decode(tvb,schema,root)
    end)
-   if not ok then
-      root:add(f_error, tostring(message))
-      pinfo.cols.info = "Malformed SDL"
-   end
+   if ok then pinfo.cols.info=result else root:add(f_error,tostring(result));pinfo.cols.info="SDL2 decode error" end
 end
-
+sdl:register_heuristic("udp",function(tvb,pinfo,tree)
+   if (tvb:len()>=5 and tvb(0,5):raw()=="SDL2\n") or catalogues[channel(pinfo)] then sdl.dissector(tvb,pinfo,tree);return true end
+   return false
+end)
 DissectorTable.get("udp.port"):add_for_decode_as(sdl)

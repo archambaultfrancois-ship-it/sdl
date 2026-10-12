@@ -1,57 +1,38 @@
 import os
-import sys
+import statistics
 import time
-
-from sdl_runtime import Complex32, decode, encode
+from sdl_runtime import Complex32, description, prepare, encode, decode
 from benchmark import BenchPayload
+from bench_cases import BenchSmall, BenchOptionals, BenchEntry, BenchVariable
 
 
-def report_rate(operation, iterations, bytes_per_message, seconds):
-   if seconds <= 0.0:
-      print('{:<6} below timer resolution'.format(operation))
-      return
-   messages_per_second = iterations / seconds
-   mebibytes_per_second = messages_per_second * bytes_per_message / (1024.0 * 1024.0)
-   print('{:<6} {:>10.0f} msg/s  {:>8.2f} MiB/s  ({} bytes/message)'.format(
-      operation, messages_per_second, mebibytes_per_second, bytes_per_message))
-
-
-def read_iterations():
-   value = os.environ.get('SDL_BENCH_ITERATIONS', '200')
-   if not value or any(character < '0' or character > '9' for character in value):
-      return 200
-   try:
-      iterations = int(value)
-   except ValueError:
-      return 200
-   return iterations if 0 < iterations <= sys.maxsize else 200
-
-
-def main():
-   iterations = read_iterations()
-   message = BenchPayload(
-      header='H' * 200,
-      samples=[
-         Complex32(index * 0.25, -(index % 97) * 0.5)
-         for index in range(5000)
-      ],
-   )
-   wire = encode(message)
-   assert len(wire) == 40224 + len(BenchPayload._SDL_DESCRIPTOR)
-
-   start = time.perf_counter()
-   for unused_iteration in range(iterations):
-      encoded = encode(message)
-      if len(encoded) != len(wire):
-         raise RuntimeError('encoded message size changed')
-   report_rate('encode', iterations, len(wire), time.perf_counter() - start)
-
-   start = time.perf_counter()
-   for unused_iteration in range(iterations):
-      decode(wire, BenchPayload)
-   report_rate('decode', iterations, len(wire), time.perf_counter() - start)
-   print('iterations: {}, wire endian: big'.format(iterations))
+def benchmark(label, message, useful):
+   cls = type(message)
+   text = description([cls]); start = time.perf_counter()
+   ctx = prepare(text, [cls]); preparation = (time.perf_counter()-start)*1e6
+   wire = encode(ctx, message)
+   assert decode(ctx, wire) == message
+   for unused in range(100): encode(ctx, message); decode(ctx, wire)
+   setting = os.environ.get('SDL_BENCH_ITERATIONS', '200')
+   iterations = int(setting) if setting.isascii() and setting.isdecimal() and int(setting)>0 else 200
+   print('{} metadata: {} description bytes, {:.1f} us prepare'.format(label, len(text.encode()), preparation))
+   for operation, run in (('encode', lambda: encode(ctx, message)), ('decode', lambda: decode(ctx, wire))):
+      rates = []
+      for unused in range(3):
+         start = time.perf_counter(); n = 0
+         while n < iterations or time.perf_counter()-start < .1:
+            run(); n += 1
+         rates.append(n/(time.perf_counter()-start))
+      rate = statistics.median(rates)
+      print('{} {} {:.1f} msg/s {:.4f} MiB/s ({} bytes/message)'.format(
+         label, operation, rate, rate*useful/1048576, len(wire)))
 
 
 if __name__ == '__main__':
-   main()
+   benchmark('small', BenchSmall(active=True, sequence=123, code=-2), 7)
+   benchmark('optional_sparse', BenchOptionals(a=1), 4)
+   benchmark('optional_dense', BenchOptionals(**dict(zip('abcdefgh', range(1, 9)))), 32)
+   benchmark('variable', BenchVariable(header='V'*40, entries=[
+      BenchEntry(label='entry'+str(i), number=i) for i in range(8)]), 152)
+   benchmark('packed', BenchPayload(header='H'*200, samples=[
+      Complex32(i*.25, -(i%97)*.5) for i in range(5000)]), 40200)

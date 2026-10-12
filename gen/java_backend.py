@@ -2,10 +2,11 @@
 """Java 7 compatible code generation for SDL schemas."""
 
 import os
+import json
 import re
 
 from generator import (c_identifier, canonical_type_descriptor,
-   canonical_type_hash, clear_generated_outputs, parse_schemas)
+   clear_generated_outputs, parse_schemas)
 
 
 _JAVA_KEYWORDS = set(('abstract assert boolean break byte case catch char class '
@@ -61,7 +62,7 @@ class JavaBackend:
          seen = set()
          for field in self.schema.messages[message_name].fields:
             result = java_identifier(field.name)
-            if result in ('SDL_FIELDS', 'SDL_DESCRIPTOR', 'SDL_HASH'):
+            if result in ('SDL_FIELDS', 'SDL_DESCRIPTOR', 'SDL_NAME'):
                raise ValueError('Java field conflicts with generated metadata in ' +
                   message_name + ': ' + field.name)
             if result in seen:
@@ -147,11 +148,11 @@ class JavaBackend:
          out.append('  public static final SdlCodec.Field[] SDL_FIELDS = new SdlCodec.Field[]{\n')
          out.append(',\n'.join('   ' + self._field_metadata(field) for field in fields))
          out.append('\n  };\n')
-         descriptor = ','.join(str(item if item < 128 else item - 256)
-            for item in canonical_type_descriptor(self.schema, message_name))
-         out.append('  public static final byte[] SDL_DESCRIPTOR = new byte[]{' + descriptor + '};\n')
-         type_hash = canonical_type_hash(self.schema, message_name)
-         out.append('  public static final int SDL_HASH = (int)0x%08X;\n' % type_hash)
+         out.append('  public static final String SDL_NAME = ' + json.dumps(message_name,ensure_ascii=False) + ';\n')
+         text = canonical_type_descriptor(self.schema).decode('utf-8')
+         chunks = [text[i:i + 12000] for i in range(0, len(text), 12000)]
+         expression = 'new StringBuilder()' + ''.join('.append(' + json.dumps(chunk, ensure_ascii=False) + ')' for chunk in chunks) + '.toString()'
+         out.append('  public static final String SDL_DESCRIPTOR = ' + expression + ';\n')
          out.append('  public ' + cls + '() {\n')
          for field in fields:
             fname = java_identifier(field.name)
@@ -170,10 +171,8 @@ class JavaBackend:
             else:
                out.append('   this.' + fname + '=' + self._default_value(field.type_name) + ';\n')
          out.append('  }\n')
-         out.append('  public byte[] encodePayload() { return SdlCodec.encodePayload(this,SDL_FIELDS); }\n')
-         out.append('  public byte[] encode() { return SdlCodec.encode(this,SDL_DESCRIPTOR,SDL_HASH,SDL_FIELDS); }\n')
-         out.append('  public static ' + cls + ' decodePayload(byte[] bytes) { return (' + cls + ')SdlCodec.decodePayload(' + cls + '.class,SDL_FIELDS,bytes); }\n')
-         out.append('  public static ' + cls + ' decode(byte[] bytes) { return (' + cls + ')SdlCodec.decode(' + cls + '.class,SDL_DESCRIPTOR,SDL_HASH,SDL_FIELDS,bytes); }\n')
+         out.append('  public byte[] encode(SdlCodec.Context context) { return SdlCodec.encode(context,this); }\n')
+         out.append('  public static ' + cls + ' decode(SdlCodec.Context context,byte[] bytes) { return (' + cls + ')SdlCodec.decode(context,bytes); }\n')
          out.append('  public String toString() { return SdlCodec.display(this,SDL_FIELDS); }\n }\n')
       out.append('}\n')
       return ''.join(out)

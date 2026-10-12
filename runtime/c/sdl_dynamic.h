@@ -67,7 +67,7 @@ struct SdlDynamicMessage {
 };
 
 /* Decode a message without generated C type declarations. */
-SdlDynamicMessage *type_decode_dynamic(const void *encoded, size_t size);
+
 void type_dynamic_free(SdlDynamicMessage *message);
 
 /* Look up a field in a descriptor-decoded message by its SDL field name. */

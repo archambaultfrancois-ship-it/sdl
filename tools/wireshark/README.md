@@ -1,79 +1,49 @@
-# SDL Wireshark dissectors
+# SDL2 Wireshark dissectors
 
-This directory contains two dissectors for complete SDL wire frames carried
-in individual UDP datagrams. SDL embeds its schema descriptor in every frame,
-so neither dissector needs generated schema files. The wire format is
-documented in [`../../docs/wire_descriptor.md`](../../docs/wire_descriptor.md).
+The Lua and C dissectors read a UTF-8 `SDL2` catalogue announcement followed by
+SDL2 data on the same directional UDP flow (source/destination addresses and
+ports). Each datagram contains one complete catalogue or one complete data
+buffer. They cache catalogues for the capture lifetime and reset on capture
+initialization. All numeric values use big endian.
 
-## Lua dissector
+Data packets need a preceding catalogue announcement. Capture from connection
+opening; isolated data is not self describing. A new announcement replaces the
+flow's context, representing a new connection. Stream transports would require
+an additional framing/reassembly adapter. See the [wire specification](../../docs/wire_descriptor.md).
 
-[`sdl.lua`](sdl.lua) is the generic Wireshark Lua dissector. Copy it
-into Wireshark's personal Lua plugin directory, shown under **Help → About
-Wireshark → Folders → Personal Plugins**, then restart Wireshark.
+## Lua
 
-Right-click a UDP packet, choose **Decode As…**, and select **SDL Wire**. The
-dissector is available in the UDP Decode As protocol list without a fixed port
-assignment. In **Edit → Preferences → Protocols → SDL Wire**, set the wire
-byte order to match the sender. Big endian is the default; byte order is not
-encoded in SDL frames, while descriptor contents are always big endian.
+Copy [`sdl.lua`](sdl.lua) into Wireshark's personal Lua plugin directory, then
+restart Wireshark. Choose **Decode As… → SDL Wire** for UDP. The heuristic
+recognizes catalogue announcements and subsequent packets on known flows.
+Malformed data is marked with a protocol expert error.
 
-The Lua dissector shows the root message name, schema hash, field IDs, lengths,
-and decoded primitive, enum, string, nested message, and fixed array values.
-Unknown field IDs are displayed and skipped. Malformed or truncated frames
-are marked with an SDL decode error. It expects one complete frame per UDP
-datagram and does not reassemble frames split across datagrams.
+## C
 
-### Sample captures
-
-[`sdl-demo.pcap`](sdl-demo.pcap) contains three complete SDL frames in
-IPv4/UDP packets. [`sdl-robustness.pcapng`](sdl-robustness.pcapng) adds valid
-frames for integer boundaries, special floating-point values, UTF-8 and
-embedded NUL strings, enums, packed fields, nested fixed arrays, anonymous
-structs, and empty messages. It also includes three deliberately malformed
-frames for a bad descriptor hash, a truncated body, and an invalid boolean.
-The captures use big endian and UDP destination port `47000`. Open either file
-in Wireshark and select **SDL Wire** through **Decode As…** on UDP port `47000`.
-The malformed frames should be marked with the SDL expert error.
-
-Regenerate both captures with Python 3 from the repository root:
-
-```sh
-python3 tools/wireshark/generate_sample.py
-```
-
-## C dissector
-
-[`packet-sdl.c`](packet-sdl.c) is the C dissector. It parses the embedded
-schema, checks the FNV-1a fingerprint, displays primitive, enum, nested
-message, fixed array, and unknown fields, and marks malformed frames with a
-protocol expert error. It also expects one complete frame per UDP datagram
-and does not reassemble frames split across datagrams.
-
-### Build on Rocky Linux 9
-
-Enable CRB and install the compiler, Make, `pkg-config`, and Wireshark
-development files:
-
-```sh
-sudo dnf config-manager --set-enabled crb
-sudo dnf install gcc make pkgconf-pkg-config wireshark-devel
-```
-
-Check that `pkg-config` can find Wireshark, then build from the repository
-root:
+The C plugin uses the SDL C runtime's prepared catalogue and dynamic decoder.
+Install Wireshark development headers, a C99 compiler, Make, and pkg-config,
+then build for the same Wireshark version that will load it:
 
 ```sh
 pkg-config --cflags --libs wireshark
 make -C tools/wireshark
 ```
 
-The build produces `tools/wireshark/sdl.so`. Install it in the external
-plugin directory for the matching Wireshark version. C plugins depend on the
-Wireshark API and should be built for the version that will load them. In
-Wireshark, decode UDP packets through **Decode As…** and choose **SDL Wire
-(C)**. Set the `sdl.wire_endian` preference to match the sender; the default
-is big endian.
+Install `sdl.so` in that version's external plugin directory. Select
+**Decode As… → SDL Wire (C)**. The Makefile supports `PLUGIN_SUFFIX=.dll`
+where the platform/toolchain supports shared modules. Development headers are
+required; this plugin is not compiled by the main runtime suite.
 
-The C Makefile accepts `PLUGIN_SUFFIX` for platform-specific module suffixes.
-For example, `make -C tools/wireshark PLUGIN_SUFFIX=.dll` changes the output
-name to `sdl.dll`.
+## Sample captures
+
+[`sdl-demo.pcap`](sdl-demo.pcap) contains one opening catalogue and five valid
+data packets. [`sdl-robustness.pcapng`](sdl-robustness.pcapng) adds three invalid
+data packets (boolean, invalid optional count, truncation). They use UDP destination
+port 47000. Valid values include enums, complex samples, nested arrays, Unicode,
+NUL text, floating-point boundaries, and an empty message.
+
+Regenerate both from the repository root:
+
+```sh
+python3 tools/wireshark/generate_sample.py
+```

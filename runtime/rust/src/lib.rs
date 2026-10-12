@@ -1,10 +1,9 @@
-mod wire;
 mod dynamic;
-
+mod wire;
+pub use dynamic::{decode_dynamic, DynamicMessage, DynamicValue, FieldDesc};
 pub use wire::{
-   decode, display, display_struct_end, display_struct_field, display_struct_start,
-   encode, read_packed_field, write_field, write_packed_field, CodecError,
-   Complex32, Complex64, FixedWire, SdlDisplay, SdlMessage, WireValue,
+    add_size, count_size, decode, decode_any, description, display, display_struct_end,
+    display_struct_field, display_struct_start, encode, prepare, write_count, CodecError,
+    Complex32, Complex64, Context, Reader, SdlDisplay, SdlMessage, TypeInfo, TypedMessage,
+    WireValue,
 };
-
-pub use dynamic::{decode_dynamic, DynamicMessage, DynamicValue};

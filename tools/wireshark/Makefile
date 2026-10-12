@@ -12,10 +12,13 @@ endif
 PLUGIN_SUFFIX ?= .so
 TARGET := sdl$(PLUGIN_SUFFIX)
 
+ROOT := ../..
+RUNTIME := $(wildcard $(ROOT)/runtime/c/*.c)
+
 all: $(TARGET)
 
-$(TARGET): packet-sdl.c
-	$(CC) $(CFLAGS) $(WIRESHARK_CFLAGS) -fPIC -shared -o $@ $< $(WIRESHARK_LIBS)
+$(TARGET): packet-sdl.c $(RUNTIME) $(wildcard $(ROOT)/runtime/c/*.h)
+	$(CC) $(CFLAGS) $(WIRESHARK_CFLAGS) -I$(ROOT)/runtime/c -fPIC -shared -o $@ packet-sdl.c $(RUNTIME) $(WIRESHARK_LIBS) -lm
 
 clean:
 	rm -f $(TARGET)

@@ -1,15 +1,17 @@
 function main(varargin)
 % Three sequential stages exchange SDL messages as encoded byte frames.
+   text=sdl_matlab_runtime('description',{'EquationInput','EquationResult'});
+   context=sdl_matlab_runtime('prepare',text,{'EquationInput','EquationResult'});
    input_stage = EquationInput('new');
    solver_stage = EquationResult('new');
    display_stage = EquationResult('new');
 
    input_stage = input_stage_run(input_stage, varargin{:});
-   input_frame = EquationInput('encode', input_stage);
-   solver_input = EquationInput('decode', input_frame);
+   input_frame = EquationInput('encode', context, input_stage);
+   solver_input = EquationInput('decode', context, input_frame);
    solver_stage = solver_stage_run(solver_input, solver_stage);
-   result_frame = EquationResult('encode', solver_stage);
-   display_stage = EquationResult('decode', result_frame);
+   result_frame = EquationResult('encode', context, solver_stage);
+   display_stage = EquationResult('decode', context, result_frame);
    display_stage_run(display_stage);
 end
 

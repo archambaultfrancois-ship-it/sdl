@@ -3,8 +3,6 @@ name = "abc-rust"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-wire-little-endian = ["sdl-runtime/wire-little-endian"]
 
 [dependencies]
 sdl-runtime = { path = "../../runtime/rust" }

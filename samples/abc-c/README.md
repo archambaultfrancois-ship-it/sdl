@@ -13,7 +13,7 @@ sequential Matlab/Octave version is in
    `a*x^2 + b*x + c = 0`, displays the result SDL message, and sends it.
 3. The display thread decodes the result message and prints the solutions.
 
-The threads exchange length-prefixed SDL frames over two Unix-domain
+The threads exchange length-prefixed SDL2 data buffers over two Unix-domain
 `socketpair` connections. The four-byte frame length is transport framing;
 the SDL runtime encodes and decodes the message contents. All application code
 and runtime code used by the executable are C. Python 3 is used only to run the
@@ -31,3 +31,10 @@ messages it receives and sends before the display thread prints the solution.
 
 Requires a C99 compiler, POSIX threads and Unix-domain sockets, and Python 3 for generation.
 Use `make clean` to remove generated bindings and the executable.
+
+## SDL2 catalogue
+
+Each socket direction sends one length-prefixed UTF-8 catalogue at opening,
+then length-prefixed SDL2 data. The receiving stage prepares the catalogue
+once. This example sends one message per connection. The four-byte big-endian
+lengths belong to the stream transport; the runtime receives data separately.

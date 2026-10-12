@@ -13,14 +13,14 @@ From this directory:
 make demo
 make INDENT_WIDTH=5 demo
 make interop
-make WIRE_ENDIAN=little interop
 ```
 
 `demo` generates all three backends and performs a local encode/decode round
 trip in each language. `interop` writes messages in each language and asks the
 other two runtimes to decode them, covering all six encoder/decoder pairings.
-The default wire order is big endian; `WIRE_ENDIAN=little` selects little
-endian consistently for the three builds.
+Numbers always use big endian. Each encoded `.sdlw` file contains only SDL2
+data; the matching `.sdlw.sdl2` sidecar holds the opening catalogue. Decoders
+prepare the sidecar separately before reading values.
 The demos call the runtime `display` API on the in-memory SDL object. Its
 `indent_width` argument sets the number of spaces per nesting level; it defaults
 to 3 and can be changed with `INDENT_WIDTH`.
@@ -37,8 +37,8 @@ uses only the standard library.
 | Optional field | `RadioCapture.operator_note` | Omits a note when the operator has none. |
 | Fixed-size array | `CaptureMetadata.dc_offset[2]` | Holds the two calibration offsets without per-element framing. |
 | Packed complex array | `RadioCapture.iq_samples` | Sends each complex float as exactly two float32 values, with no per-sample field header. |
-| Repeated values | `RadioCapture.trigger_offsets` | Encodes sparse event offsets as separately framed values. |
-| Wire descriptor | Every encoded `RadioCapture` frame | Carries the logical schema for descriptor-driven decoding without generated message classes. |
+| Repeated values | `RadioCapture.trigger_offsets` | Encodes event offsets with one count followed by contiguous values. |
+| Opening catalogue | Separate `.sdl2` sidecar | Describes logical types once, including fields for dynamic decoding. |
 
 The sample checks both generated typed decoding and the language-neutral
 dynamic decoder. Its `interop` target verifies that the C, Rust, and Python

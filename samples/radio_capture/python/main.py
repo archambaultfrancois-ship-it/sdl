@@ -6,7 +6,7 @@ import sys
 import math
 
 from radio_capture import CaptureMetadata, CaptureMode, RadioCapture
-from sdl_runtime import Complex32, decode, decode_dynamic, display, encode
+from sdl_runtime import Complex32, decode, decode_dynamic, display, encode, description, prepare
 
 
 def example_capture():
@@ -30,9 +30,9 @@ def example_capture():
    )
 
 
-def check_capture(wire, indent_width=3, show_display=False):
-   decoded = decode(wire, RadioCapture)
-   generic = decode_dynamic(wire)
+def check_capture(ctx, wire, indent_width=3, show_display=False):
+   decoded = decode(ctx, wire)
+   generic = decode_dynamic(ctx, wire)
    assert decoded.metadata.receiver_id == 'north-ridge-rx-02'
    assert decoded.metadata.sequence == 8472
    assert decoded.metadata.mode == CaptureMode.LIVE
@@ -57,14 +57,18 @@ def main(args):
       print(display(example_capture(), indent_width), end='')
       return
    if mode == 'decode':
-      check_capture(pathlib.Path(args[2]).read_bytes())
+      text = pathlib.Path(args[2]+'.sdl2').read_text(encoding='utf-8')
+      check_capture(prepare(text, [RadioCapture]), pathlib.Path(args[2]).read_bytes())
       return
-   wire = encode(example_capture())
+   text = description([RadioCapture])
+   ctx = prepare(text, [RadioCapture])
+   wire = encode(ctx, example_capture())
    if mode == 'encode':
       pathlib.Path(args[2]).write_bytes(wire)
+      pathlib.Path(args[2]+'.sdl2').write_text(text, encoding='utf-8')
       print('Python wrote {} wire bytes to {}'.format(len(wire), args[2]))
       return
-   check_capture(wire, indent_width, show_display=True)
+   check_capture(ctx, wire, indent_width, show_display=True)
 
 
 if __name__ == '__main__':

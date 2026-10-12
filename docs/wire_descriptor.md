@@ -1,101 +1,168 @@
-# SDL wire descriptor, version 1
+# SDL2 wire format
 
-The wire descriptor is the language-neutral schema carried in each SDL message
-frame. It describes logical fields and wire types only. It never describes C,
-Rust, Java, Ada, or Python memory layout.
+## Connection catalogue and data
 
-## Frame
+The sender announces one UTF-8 catalogue when opening each direction of a
+connection. The receiver calls `prepare` once with that catalogue and its local
+types, and reuses the resulting context for subsequent data buffers. Sending
+and receiving contexts can differ. Changing a catalogue requires reopening the
+connection; adding a declaration can change message type IDs.
 
-The frame is a payload-endian `u32` descriptor length, that many descriptor
-bytes, a payload-endian `u32` FNV-1a fingerprint of the descriptor bytes, and
-the message body. The fingerprint uses the 32-bit FNV-1a offset basis
-`2166136261` and prime `16777619`; it is an identifier and consistency check,
-not a cryptographic authenticator.
+The runtime APIs handle description text and data separately. They do not
+implement sockets, authentication, catalogue negotiation, or stream framing.
+A stream transport must delimit both the opening catalogue and each data
+buffer. The socket examples use a four-byte big-endian length before the
+catalogue and before each data buffer. Those lengths belong to the transport.
+The UDP demonstrations use one datagram for the catalogue and one per message.
 
-The frame length, fingerprint, body field IDs, body field lengths, and primitive
-payloads use the selected SDL wire byte order. The descriptor itself always
-uses big-endian integers, independent of the selected wire byte order.
+Data is:
 
-## Descriptor encoding
+```
+ULEB128(message_type_id) | field_1_value | field_2_value | ...
+```
 
-All strings are UTF-8 preceded by a big-endian `u16` byte length.
-Descriptor strings may not contain NUL bytes. Integers are unsigned unless
-specified otherwise.
+Message IDs are 1-based positions of **all message declarations** in the
+catalogue, sorted by UTF-8 name bytes; enums receive no message IDs. Fields
+follow ascending field ID. Nested messages carry only their fields. Data
+contains no catalogue, hash, field IDs, field lengths, alignment, or padding.
 
-| Order | Value | Encoding |
+## Catalogue text
+
+The canonical rendering uses:
+
+- `SDL2` followed by LF (`53 44 4c 32 0a`).
+- Named messages sorted by UTF-8 bytes, then enums sorted the same way.
+- `message Name {` or `enum Name {`, LF, declaration body, `}`, LF.
+- Exactly two spaces before field/item declarations and no blank lines.
+- Fields as `ID: modifier Type[dim] field;`, sorted by numeric field ID.
+- Enum items as `NAME = signed_decimal;`, in declaration order.
+- UTF-8 text, LF after every line, no BOM and no NUL terminator.
+
+Inline messages become named declarations such as `Envelope$1`. A generated
+catalogue contains the declarations from the corresponding SDL file, including
+unused message declarations; `description(types)` merges their catalogues and
+rejects conflicts. It does not depend on native struct layout. Field names
+support diagnostics; IDs identify fields across revisions.
+
+The generated representation is canonical. A decoder may accept additional
+whitespace; senders must use the canonical rendering above.
+
+## Values
+
+| Value | Wire representation |
+| --- | --- |
+| Required | Value directly, including a variable-size string or message |
+| Optional | Canonical ULEB128 count 0 or 1, then that many values |
+| Repeated | Canonical ULEB128 element count, then contiguous values |
+| Packed | Same representation as repeated; element must have fixed wire size |
+| Fixed array | Elements in row-major order, dimensions from catalogue, no count |
+| Bool | One byte, exactly 0 or 1 |
+| int8/int16/int32/int64 | 1/2/4/8 bytes, signed two's complement, big endian |
+| Enum | Signed int32 big endian; value must belong to the declared enum |
+| fl32/fl64 | 4/8 bytes, IEEE-754 binary32/binary64, big endian |
+| c32/c64 | Real component followed by imaginary component, each fl32/fl64 |
+| String | Canonical ULEB128 UTF-8 byte length, then that many bytes |
+| Message | Its field values, recursively; no nested type ID |
+
+Empty strings, empty sequences, and absent optionals each need a zero count
+byte. An empty message has no body and needs only its top-level type ID.
+Strings may contain NUL; their length counts bytes, not characters. There is
+no configurable wire byte order.
+
+All counters and type IDs are unsigned 32-bit canonical ULEB128, taking 1–5
+bytes. Each byte holds seven low-order value bits; bit 7 means another byte
+follows. Thus 127 is `7f`, 128 is `80 01`, and 300 is `ac 02`.
+Overlong encodings (such as `80 00`), overflow, truncated counters, unknown
+message IDs, trailing bytes, invalid UTF-8, bools, and enum values are errors.
+Runtime catalogue limits are 1 MiB, 65,535 declarations/fields/items, 65,535
+UTF-8 bytes per identifier, 255 fixed dimensions, and 64 recursive processing levels. Native array limits and the accounting
+of nested values can further constrain a backend.
+Variable-size sequence decoding is capped at 1,048,576 elements; fixed-size
+sequences are additionally checked against remaining input before allocation.
+The limits protect preparation and allocation, independently of transport size
+limits. Fixed-array products must fit u32 wire size.
+
+## Schema evolution
+
+`prepare(remote_description, local_types)` matches message logical names and
+field IDs. Renaming a field preserves compatibility. Unknown fields are
+consumed and validated using the sender's layout. Missing local fields retain
+the generated defaults; this also applies to a local required field added
+after the sender's revision. A required field present in the sender catalogue
+must have its value in data; truncation never supplies a default.
+
+Matching IDs must preserve logical type name, dimensions, and cardinality.
+Repeated and packed are compatible because their wire layouts coincide.
+Changing required to optional, changing a primitive width, or reusing an ID for
+a different type is rejected. Enum values must also be representable by the
+local generated enum. Encoding requires a context describing the emitter's
+layout; a context prepared for receiving an older layout is not a substitute.
+
+This design saves per-message metadata but makes data dependent on the opening
+catalogue. An isolated data buffer cannot describe itself. Consumers storing
+or forwarding data must retain the catalogue. Unknown values cannot be skipped
+from their own headers; the receiver follows the prepared layout, including
+validating strings and nested values.
+
+## Complete byte example
+
+Source [`wire_example.sdl`](../sdl/wire_example.sdl):
+
+```sdl
+message Packet {
+  1: required bool active;
+  2: optional int16 code;
+  3: required string label;
+  4: packed int16 samples;
+}
+```
+
+The exact opening catalogue is 132 bytes. Its UTF-8 text is the source above
+prefixed with `SDL2\n`. The fixture is
+[`packet.sdl2`](../tst/fixtures/packet.sdl2). Every byte is shown below; offsets
+are hexadecimal and ASCII dots denote LF:
+
+```text
+0000  53 44 4c 32 0a 6d 65 73 73 61 67 65 20 50 61 63  SDL2.message Pac
+0010  6b 65 74 20 7b 0a 20 20 31 3a 20 72 65 71 75 69  ket {.  1: requi
+0020  72 65 64 20 62 6f 6f 6c 20 61 63 74 69 76 65 3b  red bool active;
+0030  0a 20 20 32 3a 20 6f 70 74 69 6f 6e 61 6c 20 69  .  2: optional i
+0040  6e 74 31 36 20 63 6f 64 65 3b 0a 20 20 33 3a 20  nt16 code;.  3:
+0050  72 65 71 75 69 72 65 64 20 73 74 72 69 6e 67 20  required string
+0060  6c 61 62 65 6c 3b 0a 20 20 34 3a 20 70 61 63 6b  label;.  4: pack
+0070  65 64 20 69 6e 74 31 36 20 73 61 6d 70 6c 65 73  ed int16 samples
+0080  3b 0a 7d 0a                                      ;.}.
+```
+
+`Packet` is the only message, so its type ID is 1. Associated values are
+`active=true`, `code=-2`, `label="été"`, `samples=[300, -1]`.
+The complete data buffer is **16 bytes**
+([`packet.bin`](../tst/fixtures/packet.bin)):
+
+```text
+01 01 01 ff fe 05 c3 a9 74 c3 a9 02 01 2c ff ff
+```
+
+| Decimal offset | Hex byte | Interpretation |
 | --- | --- | --- |
-| 1 | Magic and version | Four bytes: ASCII `SDD1` |
-| 2 | Root message name | String |
-| 3 | Reachable message count | Big-endian `u16` |
-| 4 | Messages | Sorted by type name |
-| 5 | Reachable enum count | Big-endian `u16` |
-| 6 | Enums | Sorted by type name |
+| 0 | 01 | Message type ID 1 |
+| 1 | 01 | active = true |
+| 2 | 01 | code present (one value) |
+| 3 | ff | code high byte |
+| 4 | fe | code low byte; ff fe = -2 |
+| 5 | 05 | label length: five UTF-8 bytes |
+| 6 | c3 | First byte of é |
+| 7 | a9 | Second byte of é |
+| 8 | 74 | t |
+| 9 | c3 | First byte of é |
+| 10 | a9 | Second byte of é |
+| 11 | 02 | samples element count: two |
+| 12 | 01 | First sample high byte |
+| 13 | 2c | First sample low byte; 01 2c = 300 |
+| 14 | ff | Second sample high byte |
+| 15 | ff | Second sample low byte; ff ff = -1 |
 
-Each message is a string type name, a big-endian `u16` field count, and its
-fields sorted by ascending field ID. Each field contains a big-endian `u32`
-field ID, a string field name, a one-byte modifier, a string type name, a
-one-byte fixed-array dimension count, and that many big-endian `u32` dimensions.
-
-Modifier codes are `0 = required`, `1 = optional`, `2 = repeated`, and
-`3 = packed`. Primitive type names are `bool`, `int8`, `int16`, `int32`,
-`int64`, `fl32`, `fl64`, `c32`, `c64`, and `string`. Other names refer to a
-message or enum declared in the descriptor.
-
-Each enum contains its string type name, a big-endian `u16` item count, then
-each item in SDL declaration order as a string item name and big-endian signed
-`i32` value.
-
-Message and enum type names must be unique and must not use a built-in wire
-type name (`bool`, `int8` through `int64`, `fl32`, `fl64`, `c32`, `c64`, or
-`string`). Enums must declare at least one item. Dynamic decoders reject
-violations so primitive and named-type lookup stays unambiguous and enum
-declarations can map to each supported language.
-A message field using an enum accepts only values declared for that enum;
-encoders and decoders reject undeclared values.
-
-## Body interpretation
-
-The body is a sequence of payload-endian `u32` field ID, payload-endian `u32`
-payload length, and payload bytes. Unknown IDs can be skipped by length.
-
-Primitive integers and enums use their declared fixed-width wire size.
-Boolean values use one byte: `0` is false and `1` is true; decoders reject all
-other byte values. Floats use IEEE-754 binary32 or binary64 and preserve
-subnormal values and signed zero. Complex values contain the real component
-followed by the imaginary component. Strings are
-valid UTF-8 bytes without a terminator; U+0000 is valid string data, and the
-field length distinguishes embedded or trailing NUL bytes from the terminator
-used by C storage. Encoders and decoders reject invalid UTF-8. A nested message
-is another field sequence. A fixed array is a row-major
-sequence of its elements without count or per-element headers. A
-packed field uses that same contiguous representation for its repeated values.
-
-A `required` field is singular, but current decoders do not require its ID to
-appear in the body; an absent field keeps its target-language default value.
-Optional fields can be absent explicitly. When a body contains a known singular
-field ID more than once, the last valid value wins; every occurrence must still
-be well-formed, even when a later value replaces it. Every repeated and packed
-occurrence must also have a valid payload before its values are appended in wire
-order. A zero-length packed occurrence is valid and contributes no elements. These rules apply to generated typed
-decoders and descriptor-driven decoders. Unknown field IDs are ignored by
-length, including zero-length fields, and regardless of repetition.
-
-Generated schemas reject fixed arrays and packed fields whose element wire
-size is variable. This keeps every fixed-array element independently
-decodable and permits a generic decoder to construct language-neutral values
-from the frame alone. Recursive message type references are unsupported and
-are rejected by the generator and descriptor-driven decoders.
-
-## C string storage
-
-Generated C structs retain `const char *` string members. Each string member
-has a generated `uint32_t` byte-length companion; repeated string fields have a
-parallel length array. A zero scalar length, or a null repeated length array,
-lets the encoder derive lengths with `strlen`, preserving ordinary C string
-usage. A null string pointer encodes as an empty string when no nonzero
-explicit length is supplied; a null pointer paired with a nonzero explicit
-length is rejected. Set explicit lengths for strings containing embedded NUL
-bytes. Lengths count UTF-8 bytes, not Unicode characters. Decoding fills the
-companion length fields, and C encoding, cloning, and display preserve those
-bytes. Initialize generated structs to zero before assigning fields so unset
-length companions select the `strlen` behavior.
+For the example stream transport, opening bytes are `00 00 00 84` followed by
+the 132 catalogue bytes. Each instance of the data above is preceded by
+`00 00 00 10`. Sending N instances costs `136 + 20*N` transport bytes; the
+runtime's data buffers themselves cost `16*N`. No catalogue is repeated in data.

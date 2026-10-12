@@ -116,21 +116,21 @@ enum State {
             dimensions + ' values;\n}\n')
 
       long_name = 'é' * 32768
-      with self.assertRaisesRegex(ValueError, 'type name exceeds uint16 in schema descriptor'):
+      with self.assertRaisesRegex(ValueError, 'type name exceeds 65535 UTF-8 bytes in schema catalogue'):
          MsgParser().parse_text('message ' + long_name + ' {\n}\n')
 
-   def test_03_limits_06_field_name_length_accepts_uint16_max_bytes(self):
+   def test_03_limits_06_field_name_length_accepts_max_bytes(self):
       name = 'x' * 0xFFFF
       parser = MsgParser()
       parser.parse_text('message Packet {\n   1: required int32 ' + name + ';\n}\n')
       self.assertEqual(parser.messages['Packet'].fields[0].name, name)
 
       with self.assertRaisesRegex(ValueError,
-            'field name in Packet exceeds uint16 in schema descriptor'):
+            'field name in Packet exceeds 65535 UTF-8 bytes in schema catalogue'):
          MsgParser().parse_text('message Packet {\n   1: required int32 ' +
             name + 'x;\n}\n')
 
-   def test_03_limits_07_schema_descriptor_u16_counts_are_validated(self):
+   def test_03_limits_07_schema_catalogue_counts_are_validated(self):
       enum_values = ''.join('   ITEM_' + str(index) + ' = ' + str(index) + ';\n'
          for index in range(0x10000))
       with self.assertRaisesRegex(ValueError,
@@ -144,7 +144,7 @@ enum State {
          MsgParser().parse_text('message Packet {\n' + fields + '}\n')
 
    def test_03_limits_08_total_wire_descriptor_size_limit_is_inclusive(self):
-      field_lengths = [65520] * 15 + [65510]
+      field_lengths = [65520] * 15 + [65393]
 
       def source_with_extra_byte(extra_byte):
          fields = []
@@ -161,7 +161,7 @@ enum State {
       self.assertEqual(len(canonical_type_descriptor(parser, 'Packet')), 1 << 20)
 
       with self.assertRaisesRegex(ValueError,
-            'wire descriptor exceeds 1 MiB for Packet'):
+            'wire descriptor exceeds 1 MiB'):
          MsgParser().parse_text(source_with_extra_byte(1))
 
    def test_01_schema_05_empty_enums_are_rejected_for_backend_portability(self):
@@ -516,9 +516,9 @@ message Packet {
       cases = (
          ("""
 message Packet {
-   1: required int32 encode_payload;
+   1: required int32 _SDL_NAME;
 }
-""", 'Python field name conflicts with runtime metadata or methods: Packet.encode_payload'),
+""", 'Python field name conflicts with runtime metadata or methods: Packet._SDL_NAME'),
          ("""
 message Packet {
    1: required int32 _SDL_FIELDS;

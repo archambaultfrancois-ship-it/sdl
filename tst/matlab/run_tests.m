@@ -1,133 +1,39 @@
 function run_tests()
-cases = CodecCases('new');
-cases.tiny = int8(-12); cases.small = int16(1234); cases.signed_value = int32(-987654);
-cases.wide = int64(1234567890123); cases.ratio = single(1.25); cases.precise = 1/7;
-cases.point = complex(single(1.5), single(-2.25)); cases.position = complex(3.5,-4.75);
-enum = State();
-cases.state = enum.READY; cases.empty_text = ''; cases.required_zero = int32(0);
-cases.samples = {int16(-3),int16(4)}; cases.measurements={0.25,-2.5};
-cases.labels={'','octave'}; cases.points={complex(single(1),single(2))};
-cases.empty_values={}; cases.required_enabled=true; cases.optional_enabled=false;
-cases.bool_flags={true,false}; cases.fixed_states=int32([0 1 -7]);
-cases.packed_states={enum.READY,enum.NEGATIVE}; cases.packed_flags={true,false};
-cases.high_id_value=int32(42);
-wire=CodecCases('encode',cases);
-decoded=CodecCases('decode',wire);
-assert(decoded.tiny == cases.tiny && decoded.small == cases.small);
-assert(decoded.signed_value == cases.signed_value && decoded.wide == cases.wide);
-assert(decoded.ratio == cases.ratio && decoded.precise == cases.precise);
-assert(decoded.point == cases.point && decoded.position == cases.position);
-assert(decoded.state == cases.state && strcmp(decoded.empty_text,''));
-assert(decoded.required_zero == 0 && decoded.required_enabled);
-assert(numel(decoded.samples)==2 && decoded.samples{2}==4);
-assert(numel(decoded.labels)==2 && strcmp(decoded.labels{2},'octave'));
-assert(isequal(decoded.fixed_states(:),cases.fixed_states(:)));
-assert(decoded.high_id_value==42);
-% Packed complex values keep real/imaginary components paired per element.
-complex_cases=CodecCases('new');
-complex_cases.points=complex(single([1.25;-3.75]),single([-2.5;4.125]));
-complex_out=CodecCases('decode',CodecCases('encode',complex_cases));
-assert(isequal(complex_out.points(:),complex_cases.points(:)));
-% An absent optional field and empty packed fields retain their SDL defaults.
-defaults=CodecCases('new');
-defaults_wire=CodecCases('encode',defaults);
-defaults_out=CodecCases('decode',defaults_wire);
-assert(isempty(defaults_out.tiny) && isempty(defaults_out.optional_enabled));
-assert(isempty(defaults_out.points) && isempty(defaults_out.packed_states));
-assert(isempty(defaults_out.packed_flags) && isempty(defaults_out.samples));
-assert(defaults_out.required_zero==0 && ~defaults_out.required_enabled);
-assert(isequal(defaults_out.fixed_states(:),int32([0;0;0])));
-% Declared enum boundary values round-trip as signed int32 values.
-enum_values=int32([-2147483648;2147483647]);
-for k=1:numel(enum_values)
- enum_cases=CodecCases('new'); enum_cases.state=enum_values(k);
- enum_out=CodecCases('decode',CodecCases('encode',enum_cases));
- assert(enum_out.state==enum_values(k));
+ctx=sdl_matlab_runtime('prepare',Packet('description'),{'Packet'});
+m=Packet('new');m.active=true;m.code=int16(-2);m.label='été';m.samples=int16([300;-1]);wire=Packet('encode',ctx,m);
+f=fopen('tst/fixtures/packet.bin','rb');fixture=fread(f,Inf,'*uint8');fclose(f);assert(isequal(wire,fixture));
+f=fopen('tst/fixtures/packet.sdl2','rb');text=fread(f,Inf,'*uint8');fclose(f);assert(isequal(uint8(unicode2native(Packet('description'),'UTF-8'))(:),text));
+p=Packet('decode',ctx,wire);assert(p.active&&p.code==-2&&strcmp(p.label,m.label)&&isequal(p.samples,m.samples));
+for n=0:numel(wire)-1,must_fail(@() Packet('decode',ctx,wire(1:n)));end
+must_fail(@() Packet('decode',ctx,[wire;uint8(0)]));must_fail(@() Packet('decode',ctx,uint8([129;0])));must_fail(@() Packet('decode',ctx,uint8([255;255;255;255;16])));
+bad=wire;bad(3)=2;must_fail(@() Packet('decode',ctx,bad));bad=wire;bad(2)=2;must_fail(@() Packet('decode',ctx,bad));bad=wire;bad(8)=255;must_fail(@() Packet('decode',ctx,bad));
+m.code=[];m.label=char([97,0,98,0]);m.samples=int16([]);p=Packet('decode',ctx,Packet('encode',ctx,m));assert(isempty(p.code)&&isequal(m.label,p.label));
+remote=strrep(Packet('description'),'bool active;','bool enabled;');remote=strrep(remote,'packed int16 samples;',sprintf('repeated int16 samples;\n  5: required string extra;'));
+rctx=sdl_matlab_runtime('prepare',remote,{'Packet'});p=Packet('decode',rctx,[fixture;uint8([2;111;107])]);assert(p.active&&numel(p.samples)==2);
+removed=sprintf('SDL2\nmessage Packet {\n  1: required bool active;\n}\n');rctx=sdl_matlab_runtime('prepare',removed,{'Packet'});p=Packet('decode',rctx,uint8([1;1]));assert(p.active&&isempty(p.code)&&isempty(p.samples));
+must_fail(@() sdl_matlab_runtime('prepare',strrep(Packet('description'),'bool active;','int32 active;'),{'Packet'}));
+text=sdl_matlab_runtime('description',{'Packet','EmptyMessage'});multi=sdl_matlab_runtime('prepare',text,{'Packet','EmptyMessage'});[p,name]=sdl_matlab_runtime('decode',multi,EmptyMessage('encode',multi,EmptyMessage('new')));assert(strcmp(name,'EmptyMessage'));
+cc=sdl_matlab_runtime('prepare',CodecCases('description'),{'CodecCases'});c=CodecCases('new');c.tiny=int8(-128);c.small=int16(32767);c.signed_value=intmin('int32');c.wide=intmin('int64');c.ratio=single(Inf);c.precise=-0.0;c.point=complex(single(1),single(-2));c.position=complex(3,4);c.state=State('MINIMUM');c.labels={'',char([97,0,98])};c.bool_flags={true,false};c.fixed_states=int32([1;-2147483648;2147483647]);c.packed_states=int32([-7;1]);c.points=complex(single([1;2]),single([-1;-2]));
+p=CodecCases('decode',cc,CodecCases('encode',cc,c));assert(p.wide==intmin('int64')&&p.tiny==-128&&p.state==intmin('int32')&&isequal(p.points,c.points)&&isequal(p.labels,c.labels(:)));
+for x={[],''},c.empty_text=x{1};p=CodecCases('decode',cc,CodecCases('encode',cc,c));assert(isequal(p.empty_text,x{1}));end
+root=sdl_matlab_runtime('prepare',RootPayload('description'),{'RootPayload'});r=RootPayload('new');r.header='nested';r.fixed_array.x=single([1;3]);r.fixed_array.y=single([2;4]);v=VarItem('new');v.name='';v.id=int64(7);r.var_array={v};p=RootPayload('decode',root,RootPayload('encode',root,r));assert(isequal(p.fixed_array,r.fixed_array)&&p.var_array{1}.id==7);
+board=sdl_matlab_runtime('prepare',FixedBoard('description'),{'FixedBoard'});b=FixedBoard('new');b.rows(1).vectors(1).coords=single([1;2]);p=FixedBoard('decode',board,FixedBoard('encode',board,b));assert(isequal(p.rows,b.rows));
+for n=[0,1,127,128,16383],m=Packet('new');m.label=repmat('x',1,n);m.samples=int16(-ones(n,1));p=Packet('decode',ctx,Packet('encode',ctx,m));assert(numel(p.label)==n&&numel(p.samples)==n);end
+for text={sprintf('SDL1\n'),sprintf('SDL2\n'),sprintf('SDL2\nmessage A {\n  1: required A a;\n}\n'),sprintf('SDL2\nmessage A {\n  1: packed string a;\n}\n')},must_fail(@() sdl_matlab_runtime('prepare',text{1}));end
+for shared=[false true]
+ text=sprintf('SDL2\n');if shared,count=30;else,count=66;end
+ for k=0:count-1
+  text=[text sprintf('message N%03d {\n',k)];
+  if k==0,text=[text sprintf('  1: required int8 value;\n')];else
+   text=[text sprintf('  1: optional N%03d left;\n',k-1)];
+   if shared,text=[text sprintf('  2: optional N%03d right;\n',k-1)];end
+  end
+  text=[text sprintf('}\n')];
+ end
+ if shared,sdl_matlab_runtime('prepare',text,{});else,must_fail(@() sdl_matlab_runtime('prepare',text,{}));end
 end
-% Empty packed SoA and multidimensional terminal columns are valid.
-empty_root=RootPayload('new'); empty_root.fixed_array=struct('x',single([]),'y',single([]));
-empty_root_out=RootPayload('decode',RootPayload('encode',empty_root));
-assert(isempty(empty_root_out.fixed_array.x) && isempty(empty_root_out.fixed_array.y));
-% All fields can be omitted from the payload; decoder defaults are applied.
-empty_payload=CodecCases('decode_payload',uint8([]));
-assert(empty_payload.required_zero==0 && ~empty_payload.required_enabled);
-% Unknown fields are skipped, while malformed headers and values are rejected.
-unknown=[test_u32(1234);test_u32(3);uint8([9;8;7])];
-unknown_out=CodecCases('decode_payload',unknown);
-assert(unknown_out.required_zero==0);
-assert_throws(@() CodecCases('decode_payload',uint8([1;2;3])));
-assert_throws(@() CodecCases('decode_payload',[test_u32(1);test_u32(2);uint8([1;2])]));
-assert_throws(@() CodecCases('decode_payload',[test_u32(17);test_u32(1);uint8(2)]));
-assert_throws(@() CodecCases('decode_payload',[test_u32(15);test_u32(3);uint8([1;2;3])]));
-% Singular fields use the last occurrence; repeated fields append occurrences.
-duplicates=[test_u32(11);test_u32(4);test_i32(7); ...
- test_u32(11);test_u32(4);test_i32(-42); ...
- test_u32(12);test_u32(2);test_i16(-9); ...
- test_u32(12);test_u32(2);test_i16(1234)];
-duplicate_out=CodecCases('decode_payload',duplicates);
-assert(duplicate_out.required_zero==int32(-42));
-assert(numel(duplicate_out.samples)==2 && duplicate_out.samples{1}==int16(-9));
-assert(duplicate_out.samples{2}==int16(1234));
-assert_throws(@() CodecCases('decode',wire(1:end-1)));
-bad_hash=wire; descriptor_size=test_read_u32(wire(1:4));
-bad_hash(5+descriptor_size)=bitxor(bad_hash(5+descriptor_size),uint8(1));
-assert_throws(@() CodecCases('decode',bad_hash));
-assert_throws(@() EnumRecordBatch('decode',wire));
-% Malformed fixed-array lengths must be rejected.
-assert_throws(@() CodecCases('decode_payload',[test_u32(20);test_u32(8); ...
- test_i32(1);test_i32(2)]));
-% TODO: decide whether Matlab should reject undeclared enum values on encode/decode.
-% SoA encoding rejects terminal columns that describe different record counts.
-bad_root=RootPayload('new');
-bad_root.fixed_array=struct('x',single([1;2]),'y',single(3));
-assert_throws(@() RootPayload('encode',bad_root));
-batch=EnumRecordBatch('new');
-batch.records=struct('state',int32([enum.READY;enum.NEGATIVE]),'code',int32([11;22]));
-batch_wire=EnumRecordBatch('encode',batch);
-batch_out=EnumRecordBatch('decode',batch_wire);
-assert(isequal(batch_out.records.state,int32([1;-7])));
-assert(isequal(batch_out.records.code,int32([11;22])));
-root=RootPayload('new');root.header='soa';
-root.fixed_array=struct('x',single([1;3]),'y',single([2;4]));
-root.var_array={};root_wire=RootPayload('encode',root);root_out=RootPayload('decode',root_wire);
-assert(isequal(root_out.fixed_array.x,single([1;3])));
-assert(isequal(root_out.fixed_array.y,single([2;4])));
-rows=FixedRowBatch('new');
-rows.rows.vectors.coords=reshape(single(1:8),[2,2,2]);
-rows.rows.vectors.grid=reshape(int16(1:24),[3,2,2,2]);
-rows_wire=FixedRowBatch('encode',rows);rows_out=FixedRowBatch('decode',rows_wire);
-assert(isequal(rows_out.rows.vectors.coords,rows.rows.vectors.coords));
-assert(isequal(rows_out.rows.vectors.grid,rows.rows.vectors.grid));
-fprintf('Matlab/Octave codec tests passed (wire endian: %s)\n', getenv('SDL_WIRE_ENDIAN'));
+fprintf('Matlab/Octave SDL2 fixtures, catalogues, evolution and malformed input passed.\n');
 end
-
-function assert_throws(callback)
-failed=false;
-try
- callback();
-catch
- failed=true;
-end
-assert(failed);
-end
-
-function bytes=test_u32(value)
-bytes=typecast(uint32(value),'uint8');
-if strcmpi(getenv('SDL_WIRE_ENDIAN'),'little'),bytes=flipud(bytes(:));else,bytes=bytes(:);end
-end
-
-function value=test_read_u32(bytes)
-bytes=uint8(bytes(:));
-if strcmpi(getenv('SDL_WIRE_ENDIAN'),'little'),bytes=flipud(bytes);end
-value=typecast(bytes,'uint32');
-end
-
-function bytes=test_i32(value)
-bytes=typecast(int32(value),'uint8');
-if strcmpi(getenv('SDL_WIRE_ENDIAN'),'little'),bytes=flipud(bytes(:));else,bytes=bytes(:);end
-end
-
-function bytes=test_i16(value)
-bytes=typecast(int16(value),'uint8');
-if strcmpi(getenv('SDL_WIRE_ENDIAN'),'little'),bytes=flipud(bytes(:));else,bytes=bytes(:);end
+function must_fail(f)
+failed=false;try,f();catch,failed=true;end;assert(failed,'invalid input accepted');
 end

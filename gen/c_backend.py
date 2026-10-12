@@ -4,7 +4,7 @@
 import os
 
 from generator import (c_identifier, canonical_type_descriptor,
-   canonical_type_hash, clear_generated_outputs, parse_schemas)
+   clear_generated_outputs, parse_schemas)
 
 
 _C_KEYWORDS = set((
@@ -17,6 +17,7 @@ _C_RESERVED_ORDINARY_NAMES = set((
    'size_t ptrdiff_t SdlTypeKind SdlTypeDesc SdlFieldDesc SdlEnumValueDesc '
    'SdlUInt32Alignment SdlDynamicKind SdlDynamicComplex SdlDynamicEnum '
    'SdlDynamicString SdlDynamicArray SdlDynamicField SdlDynamicMessage '
+   'SdlContext type_description type_prepare type_context_free type_message_name '
    'SdlDynamicValue type_encode_size type_encode type_decode_size type_decode '
    'type_clone type_display type_free type_decode_dynamic type_dynamic_free '
    'type_dynamic_get sdl_register_type').split())
@@ -25,7 +26,7 @@ _C_MACROS = set((
    'SDL_FIELD_OPTIONAL SDL_FIELD_REPEATED SDL_FIELD_PACKED '
    'SDL_UINT32_ALIGNMENT').split())
 _C_RESERVED_HEADER_GUARDS = set((
-   'SDL_DYNAMIC_H SDL_TYPE_DESCRIPTORS_H SDL_TYPE_ENGINE_H '
+   'SDL_CONTEXT_H SDL_DYNAMIC_H SDL_TYPE_DESCRIPTORS_H SDL_TYPE_ENGINE_H '
    'SDL_TYPE_PRIVATE_H SDL_TYPE_REGISTRY_H SDL_WIRE_H SDL_REGISTRY_H').split())
 
 
@@ -160,7 +161,7 @@ class CBackend:
          source.append('const SdlTypeDesc SDL_ENUM_' + enum.name.upper() + '_DESC = {\n')
          source.append('   .kind = SDL_TYPE_ENUM, .size = sizeof(' + enum.name +
             '), .alignment = offsetof(SDL_ALIGN_' + enum.name.upper() + ', value),\n')
-         source.append('   .name = "' + enum.name + '", .hash = 0,\n')
+         source.append('   .name = "' + enum.name + '",\n')
          source.append('   .detail.enumeration = { ' + str(len(enum.pairs)) +
             ', ' + enum_values_name + ' }\n};\n\n')
 
@@ -199,8 +200,7 @@ class CBackend:
             '_SCHEMA_DESCRIPTOR[];\n')
          header.append('#define ' + c_name.upper() + '_SCHEMA_DESCRIPTOR_SIZE ' +
             str(len(canonical_type_descriptor(self.schema, name))) + 'U\n')
-         header.append('#define ' + c_name.upper() + '_HASH 0x' +
-            format(canonical_type_hash(self.schema, name), '08X') + 'U\n')
+
 
       header.append('\nvoid register_' + identifier + '_types(void);\n\n#endif\n')
       for name in self.schema.message_order:
@@ -228,7 +228,7 @@ class CBackend:
                source.append('static const SdlTypeDesc ' + desc + ' = {\n')
                source.append('   .kind = SDL_TYPE_ARRAY, .size = sizeof(' + alias +
                   '), .alignment = offsetof(' + alignment_type +
-                  ', value), .name = "' + desc + '", .hash = 0,\n')
+                  ', value), .name = "' + desc + '",\n')
                source.append('   .detail.array = { ' + child_desc + ', ' +
                   str(count_value) + ' }\n};\n')
          source.append('static const SdlFieldDesc ' + c_name.lower() + '_fields[] = {\n')
@@ -267,7 +267,7 @@ class CBackend:
          source.append('const SdlTypeDesc ' + c_name.upper() + '_DESC = {\n')
          source.append('   SDL_TYPE_STRUCT, sizeof(' + c_name + '), offsetof(SDL_ALIGN_' +
             c_name.upper() + ', value),\n')
-         source.append('   "' + name + '", ' + c_name.upper() + '_HASH, ' +
+         source.append('   "' + name + '", ' +
             c_name.upper() + '_SCHEMA_DESCRIPTOR, sizeof(' + c_name.upper() +
             '_SCHEMA_DESCRIPTOR),\n')
          source.append('   { { ' + str(len(fields)) + ', ' + c_name.lower() + '_fields } }\n};\n\n')

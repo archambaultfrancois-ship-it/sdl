@@ -4,7 +4,7 @@ import struct
 import sys
 import threading
 
-from sdl_runtime import decode, encode
+from sdl_runtime import decode, encode, description, prepare
 from equation import EquationInput, EquationKind, EquationResult
 
 
@@ -12,7 +12,11 @@ MAX_FRAME_SIZE = 1024 * 1024
 
 
 def send_message(stream, message):
-   frame = encode(message)
+   text = description([type(message)])
+   ctx = prepare(text, [type(message)])
+   announcement = text.encode('utf-8')
+   stream.sendall(struct.pack('>I', len(announcement)) + announcement)
+   frame = encode(ctx, message)
    if not frame or len(frame) > MAX_FRAME_SIZE:
       raise ValueError('SDL frame is too large')
    stream.sendall(struct.pack('>I', len(frame)) + frame)
@@ -29,10 +33,14 @@ def read_exact(stream, length):
 
 
 def receive_message(stream, message_type):
+   schema_size = struct.unpack('>I', read_exact(stream, 4))[0]
+   if not 0 < schema_size <= MAX_FRAME_SIZE:
+      raise ValueError('invalid catalogue size')
+   ctx = prepare(read_exact(stream, schema_size), [message_type])
    length = struct.unpack('>I', read_exact(stream, 4))[0]
    if length == 0 or length > MAX_FRAME_SIZE:
       raise ValueError('invalid SDL frame length')
-   return decode(read_exact(stream, length), message_type)
+   return decode(ctx, read_exact(stream, length))
 
 
 def input_thread(sock):
