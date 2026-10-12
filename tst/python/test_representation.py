@@ -21,13 +21,111 @@ class RepresentationTests(unittest.TestCase):
       cls.packet = importlib.import_module('packet')
       cls.unsigned = importlib.import_module('unsigned')
       cls.arrays = importlib.import_module('arrays')
+      cls.quantized = importlib.import_module('quantized')
 
    @classmethod
    def tearDownClass(cls):
       sys.path.remove(cls.temporary.name)
-      for name in ('packet', 'unsigned', 'arrays'):
+      for name in ('packet', 'unsigned', 'arrays', 'quantized'):
          sys.modules.pop(name, None)
       cls.temporary.cleanup()
+
+   def test_01_codec_quantized_float_oracle(self):
+      Q, Child = self.quantized.Quantized, self.quantized.QuantChild
+      ctx = prepare(description([Q, Child]), [Q, Child])
+      x = Q(flag=True, value=0.625, precise=-1.25, maybe=-1.25,
+         samples=[0.125, 0.375, -0.125, -0.375], matrix=[[-8, 7.5], [0.75, -0.75]],
+         child=Child(value=2.625), tail=165)
+      # Signed codes: 2, -12, -2, [0,2,0,-2], [-16,15,2,-2], 10.
+      expected = bytes.fromhex('0382ff4001f0040081e83c5e0aa5')
+      self.assertEqual(encode(ctx, x), expected)
+      y = decode(ctx, expected)
+      self.assertEqual((y.value, y.maybe, y.samples, y.matrix, y.child.value),
+         (0.5, -1.0, [0.0, 0.5, 0.0, -0.5], [[-8.0, 7.5], [1.0, -1.0]], 2.5))
+      self.assertAlmostEqual(y.precise, -1.2)
+      self.assertEqual(encode(ctx, y), expected)
+      self.assertEqual(decode_dynamic(ctx, expected).fields['value'], 0.5)
+      # Representation differences preserve logical compatibility; use the sender's q.
+      remote = Q._SDL_DESCRIPTOR.replace('q0.25', 'q0.5')
+      self.assertTrue(compare_catalogues(remote, Q._SDL_DESCRIPTOR).compatible)
+      self.assertEqual(decode(prepare(remote, [Q, Child]), expected).value, 1.0)
+      for invalid in (float('nan'), float('inf'), -float('inf'), 16.0, -16.5):
+         x.value = invalid
+         with self.subTest(value=invalid), self.assertRaises(CodecError):
+            encode(ctx, x)
+      for size in range(len(expected)):
+         with self.assertRaises(CodecError):
+            decode(ctx, expected[:size])
+      bad = bytearray(expected); bad[3] |= 1
+      with self.assertRaises(CodecError):
+         decode(ctx, bad)
+
+   def test_02_invalid_quantum_clauses_and_catalogues(self):
+      for t, w in (('fl32','q=0.1'), ('int32','bits=12,q=0.1'),
+            ('c32','bits=12,q=0.1'), ('fl64','bits=12,q=0'), ('fl64','bits=12,q=-0.1'),
+            ('fl64','bits=12,q=NaN'), ('fl64','bits=12,q=1e999'),
+            ('fl64','bits=12,q=1e-999'), ('fl32','bits=33,q=0.1'),
+            ('fl64','bits=65,q=0.1'), ('fl64','bits=12,q=0.1,encoding=varint'),
+            ('fl64','bits=12,q=0.1,q=0.1'), ('fl32','bits=12,q=1e38'),
+            ('fl32','bits=12,q=1e-46'), ('fl64','bits=12,q=1e308')):
+         with self.subTest(type=t, wire=w), self.assertRaises(ValueError):
+            MsgParser().parse_text('message X {\n '+t+' value wire('+w+');\n}\n')
+      for suffix in ('q0.1', 'b12,q0', 'b12,qNaN', 'b65,q0.1',
+            'b12,q0.1,v', 'b12,q0.1,q0.1', 'b12,q1e-1'):
+         with self.subTest(suffix=suffix), self.assertRaises(CodecError):
+            prepare('SDL2|X{1:fl64:value@'+suffix+';}')
+      descriptors = []
+      for q in ('0.1', '.1000', '1e-1', '+000.100'):
+         parser = MsgParser()
+         parser.parse_text('message X {\n fl64 value wire(q='+q+',bits=12);\n}\n')
+         descriptors.append(canonical_type_descriptor(parser))
+      self.assertEqual(descriptors, [b'SDL2|X{1:fl64:value@b12,q0.1;}'] * 4)
+
+   def test_02_quantum_rejected_on_all_integer_types(self):
+      integers = ('int8', 'int16', 'int32', 'int64',
+         'uint8', 'uint16', 'uint32', 'uint64')
+      shapes = (('', '', ''), ('optional ', '?', ''),
+         ('repeated ', '*', ''), ('packed ', '+', ''), ('', '', '[2]'))
+      clauses = (('q=0.1', 'q0.1'), ('bits=1,q=0.1', 'b1,q0.1'),
+         ('q=0.1,bits=1', 'q0.1,b1'), ('encoding=varint,q=0.1', 'v,q0.1'))
+      for t in integers:
+         for modifier, marker, dimensions in shapes:
+            source = 'message X {\n '+modifier+t+dimensions+' value wire(%s);\n}\n'
+            descriptor = 'SDL2|X{1'+marker+':'+t+dimensions+':value@%s;}'
+            # The same integer declaration remains valid without a quantum.
+            MsgParser().parse_text(source % 'bits=1')
+            prepare(descriptor % 'b1')
+            for clause, suffix in clauses:
+               with self.subTest(type=t, modifier=modifier, dimensions=dimensions, clause=clause):
+                  with self.assertRaisesRegex(ValueError, 'wire q requires'):
+                     MsgParser().parse_text(source % clause)
+                  with self.assertRaisesRegex(CodecError, 'wire q requires'):
+                     prepare(descriptor % suffix)
+
+   def test_01_codec_quantum_bit_width_boundaries(self):
+      import math
+      from sdl_runtime import SdlMessage
+      for type_name, bits in (('fl64', 1), ('fl32', 32), ('fl64', 64)):
+         descriptor = 'SDL2|QuantumBoundary{1:%s:value@b%d,q0.25;}' % (type_name, bits)
+         cls = type('QuantumBoundary', (SdlMessage,), {
+            '__module__': __name__, '_SDL_NAME': 'QuantumBoundary',
+            '_SDL_DESCRIPTOR': descriptor,
+            '_SDL_FIELDS': ((1, 'value', 'required', type_name, ()),)})
+         context = prepare(descriptor, cls)
+         x = cls(value=-math.ldexp(0.25, bits - 1))
+         expected = b'\x01\x80' + b'\x00' * ((bits + 7) // 8 - 1)
+         with self.subTest(type=type_name, bits=bits):
+            self.assertEqual(encode(context, x), expected)
+            self.assertEqual(decode(context, expected).value, x.value)
+            x.value = -x.value
+            with self.assertRaises(CodecError):
+               encode(context, x)
+      Wide = self.quantized.QuantWide
+      context = prepare(description(Wide), Wide)
+      x = Wide(small=-2.0**29, large=-2.0**61)
+      expected = bytes.fromhex('02800000008000000000000000')
+      self.assertEqual(encode(context, x), expected)
+      self.assertEqual(decode(context, expected), x)
 
    def test_01_codec_scalar_oracle(self):
       P = self.packet.Packet

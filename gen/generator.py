@@ -5,13 +5,15 @@ import re
 import argparse
 import os
 import sys
+import math
+from decimal import Decimal
 
 
 MAX_SCHEMA_DESCRIPTOR_SIZE = 1024 * 1024
 MAX_SCHEMA_NESTING = 64
 
 
-WIRE_KEYS = ('bits', 'encoding', 'align', 'pad_after')
+WIRE_KEYS = ('bits', 'q', 'encoding', 'align', 'pad_after')
 
 
 def parse_wire_options(text):
@@ -19,11 +21,23 @@ def parse_wire_options(text):
    if text is None:
       return options
    for item in text.split(','):
-      match = re.fullmatch(r'\s*(bits|encoding|align|pad_after)\s*=\s*([A-Za-z]+|[0-9]+)\s*', item)
+      match = re.fullmatch(r'\s*(bits|q|encoding|align|pad_after)\s*=\s*([^\s]+)\s*', item)
       if not match or match[1] in options:
          raise ValueError('invalid or duplicate wire option: ' + item)
       key, value = match.groups()
-      if key == 'encoding':
+      if key == 'q':
+         if not re.fullmatch(r'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?', value):
+            raise ValueError('wire q requires a positive finite decimal')
+         quantum = float(value)
+         if not math.isfinite(quantum) or quantum <= 0:
+            raise ValueError('wire q requires a positive finite decimal')
+         value = format(Decimal(value), 'f')
+         if '.' in value:
+            value = value.rstrip('0').rstrip('.')
+         value = value.lstrip('+').lstrip('0')
+         if value.startswith('.'):
+            value = '0' + value
+      elif key == 'encoding':
          if value not in ('varint', 'zigzag'):
             raise ValueError('unknown wire encoding: ' + value)
       else:
@@ -35,13 +49,25 @@ def parse_wire_options(text):
 
 
 def wire_suffix(options):
-   return '@' + ','.join({'bits':'b','align':'a','pad_after':'p'}[key] + str(options[key]) if key != 'encoding' else {'varint':'v','zigzag':'z'}[options[key]] for key in WIRE_KEYS if key in options) if options else ''
+   return '@' + ','.join({'bits':'b','q':'q','align':'a','pad_after':'p'}[key] + str(options[key]) if key != 'encoding' else {'varint':'v','zigzag':'z'}[options[key]] for key in WIRE_KEYS if key in options) if options else ''
 
 
 def validate_wire_options(options, type_name, enum=False):
    width = {'bool': 1, 'int8': 8, 'uint8': 8, 'int16': 16, 'uint16': 16, 'int32': 32, 'uint32': 32, 'int64': 64, 'uint64': 64}.get(type_name, 32 if enum else 0)
+   if 'q' in options:
+      if type_name not in ('fl32', 'fl64') or 'bits' not in options or 'encoding' in options:
+         raise ValueError('wire q requires fl32/fl64 with bits and excludes encoding')
+      width = 32 if type_name == 'fl32' else 64
    if 'bits' in options and not 1 <= options['bits'] <= width:
-      raise ValueError('wire bits must fit an integer, bool, or enum type: ' + type_name)
+      if type_name in ('fl32', 'fl64') and 'q' not in options:
+         raise ValueError('wire bits on a floating type require q: ' + type_name)
+      raise ValueError('wire bits must fit the type width: ' + type_name)
+   if 'q' in options:
+      q = float(options['q'])
+      maximum = float.fromhex('0x1.fffffep127') if type_name == 'fl32' else sys.float_info.max
+      minimum = float.fromhex('0x1p-149') / 2 if type_name == 'fl32' else 0
+      if not math.isfinite(q) or q <= minimum or q * 2 ** (options['bits'] - 1) > maximum:
+         raise ValueError('wire q range must fit the floating type: ' + type_name)
    if options.get('encoding') == 'zigzag' and type_name.startswith('uint'):
       raise ValueError('zigzag requires a signed integer or enum')
    if 'encoding' in options and (not width or type_name == 'bool' or 'bits' in options):

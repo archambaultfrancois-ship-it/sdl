@@ -46,9 +46,10 @@ SDL2|Position{1:int32:x;2:int32:y@b12;}|Vehicule{1:uint32:id;2:Position:position
 - A marker immediately after the ID encodes cardinality: none for `required`,
   `?` for `optional`, `*` for `repeated`, `+` for `packed`.
 - An optional `@` suffix carries representation options, separated by commas:
-  `bN` for `bits=N`, `v` for `encoding=varint`, `z` for `encoding=zigzag`,
+  `bN` for `bits=N`, `qQ` for a normalized plain decimal quantum `q=Q`,
+  `v` for `encoding=varint`, `z` for `encoding=zigzag`,
   `aN` for `align=N`, and `pN` for `pad_after=N`. Canonical option order is
-  bits, encoding, alignment, padding; the existing semantic restrictions apply.
+  bits, quantum, encoding, alignment, padding; the semantic restrictions apply.
 - Enum items use `NAME=signed_decimal;`, in declaration order.
 - Decimal numbers use their shortest spelling; names retain their full spelling.
 - Empty messages use `Name{}`. No BOM or terminating NUL is part of the catalogue.

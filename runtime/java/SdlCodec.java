@@ -1219,13 +1219,15 @@ public final class SdlCodec {
       return 0;
    }
    private static final class WireOptions {
-      int bits, align, pad; String encoding; boolean presentAlign, presentPad;
+      int bits, align, pad; String encoding, quantumText; double quantum; boolean presentAlign, presentPad;
       static WireOptions parse(String text) {
          WireOptions w=new WireOptions(); if(text==null)return w;
          java.util.HashSet<String> seen=new java.util.HashSet<String>();
          for(String item:text.split(",",-1)) {
             String key; long n = 0;
-            if(item.equals("v")||item.equals("z")) {
+            if(item.matches("q[0-9]+(?:\\.[0-9]+)?")) {
+               key="q";w.quantumText=item.substring(1);w.quantum=Double.parseDouble(w.quantumText);
+            } else if(item.equals("v")||item.equals("z")) {
                key="encoding";w.encoding=item.equals("v")?"varint":"zigzag";
             } else {
                if(!item.matches("[bap][0-9]+"))throw malformed("invalid wire option");
@@ -1240,11 +1242,20 @@ public final class SdlCodec {
       }
       void validate(String t,boolean enumeration){
          int width=t.equals("bool")?1:t.startsWith("int")||t.startsWith("uint")?wireSize(t)*8:enumeration?32:0;
+         if(quantumText!=null){
+            if(!t.equals("fl32")&&!t.equals("fl64")||bits==0||encoding!=null)throw malformed("wire q requires a floating type with bits");
+            width=wireSize(t)*8;
+         }
          if(bits>width||encoding!=null&&(width==0||t.equals("bool")||bits!=0||encoding.equals("zigzag")&&t.startsWith("uint"))||presentAlign&&(align<1||align>256||(align&(align-1))!=0)||pad>65535)throw malformed("invalid wire representation");
+         if(quantumText!=null){
+            double bound=Math.scalb(quantum,bits-1);
+            if(Double.isNaN(quantum)||Double.isInfinite(quantum)||quantum<=0||Double.isInfinite(bound)||t.equals("fl32")&&(quantum<=Math.scalb(1.0,-150)||bound>Float.MAX_VALUE))throw malformed("wire q range must fit the floating type");
+         }
       }
       String suffix(){
          java.util.List<String> parts=new java.util.ArrayList<String>();
          if(bits!=0)parts.add("b"+bits);
+         if(quantumText!=null)parts.add("q"+quantumText);
          if(encoding!=null)parts.add(encoding.equals("varint")?"v":"z");
          if(presentAlign)parts.add("a"+align);
          if(presentPad)parts.add("p"+pad);
@@ -1277,6 +1288,7 @@ public final class SdlCodec {
       if(schema.messages.containsKey(f.typeName)){repMessage(schema,f.typeName,plain,custom,encode,depth+1);return;}
       if(f.typeName.equals("string")){long n=repCount(plain,custom,encode);if(n>Integer.MAX_VALUE)throw malformed("string too large");repCopy(encode?plain:custom,encode?custom:plain,(int)n);return;}
       int size=wireSize(f.typeName);if(size==0)size=4;WireOptions w=f.wire;
+      if(w.quantumText!=null){repQuantizedFloat(w,size,plain,custom,encode);return;}
       if(w.bits==0&&w.encoding==null){repCopy(encode?plain:custom,encode?custom:plain,size);return;}
       int width=size*8,bits=w.bits==0?width:w.bits;boolean signed=f.typeName.startsWith("int")||schema.enums.containsKey(f.typeName);
       if(encode){long n=plain.bits(width,0);if(signed&&width<64)n=(n<<(64-width))>>(64-width);
@@ -1286,6 +1298,20 @@ public final class SdlCodec {
          if(w.bits!=0&&signed&&bits<64)n=(n<<(64-bits))>>(64-bits);
          else if("zigzag".equals(w.encoding))n=(n>>>1)^-(n&1);
          else if(w.bits==0&&signed&&(n<0||width<64&&n>=(1L<<(width-1))))throw malformed("varint exceeds signed range");plain.bits(width,n);
+      }
+   }
+   private static strictfp void repQuantizedFloat(WireOptions w,int size,RepStream plain,RepStream custom,boolean encode){
+      if(encode){
+         long raw=plain.bits(size*8,0);
+         double x=size==4?(double)Float.intBitsToFloat((int)raw):Double.longBitsToDouble(raw);
+         double scaled=x/w.quantum, rounded=Math.rint(scaled), limit=Math.scalb(1.0,w.bits-1);
+         if(Double.isNaN(rounded)||Double.isInfinite(rounded)||rounded < -limit||rounded>=limit)throw malformed("quantized float outside wire bit range");
+         custom.bits(w.bits,(long)rounded);
+      }else{
+         long n=custom.bits(w.bits,0);
+         if(w.bits<64)n=(n<<(64-w.bits))>>(64-w.bits);
+         double x=(double)n*w.quantum;
+         plain.bits(size*8,size==4?(long)Float.floatToRawIntBits((float)x):Double.doubleToRawLongBits(x));
       }
    }
    private static void repMessage(Schema schema,String name,RepStream plain,RepStream custom,boolean encode,int depth){

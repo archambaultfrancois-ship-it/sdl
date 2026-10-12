@@ -5,6 +5,9 @@
 #include "sdl_wire.h"
 
 #include <limits.h>
+#include <float.h>
+#include <math.h>
+#include <locale.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -31,6 +34,8 @@ typedef struct {
    uint8_t dimension_count;
    uint32_t *dimensions;
    unsigned wire_flags, wire_bits, wire_encoding, wire_align, wire_pad;
+   double wire_quantum;
+   char *wire_quantum_text;
    const SdlFieldDesc *local;
    const SdlFixedPlan *record_plan;
 } SdlDynamicFieldDesc;
@@ -189,6 +194,7 @@ static void schema_clear(SdlDynamicSchema *schema) {
                free(message->fields[j].name);
                free(message->fields[j].type_name);
                free(message->fields[j].dimensions);
+               free(message->fields[j].wire_quantum_text);
             }
          free(message->fields);
          free(message->plan.spans);
@@ -339,11 +345,53 @@ static bool valid_wire(const SdlDynamicSchema *s, const SdlDynamicFieldDesc *f) 
    else if(!strcmp(t,"int16")||!strcmp(t,"uint16")) width=16;
    else if(!strcmp(t,"int32")||!strcmp(t,"uint32")||schema_enum(s,t)) width=32;
    else if(!strcmp(t,"int64")||!strcmp(t,"uint64")) width=64;
+   if (f->wire_flags & 16) {
+      if ((strcmp(t, "fl32") && strcmp(t, "fl64")) || !(f->wire_flags & 1) || (f->wire_flags & 2))
+         return false;
+      width = !strcmp(t, "fl32") ? 32 : 64;
+   }
    if((f->wire_flags&1)&&(!f->wire_bits||f->wire_bits>width)) return false;
+   if (f->wire_flags & 16) {
+      double q = f->wire_quantum, bound = ldexp(q, (int)f->wire_bits - 1);
+      if (!isfinite(q) || q <= 0 || !isfinite(bound) ||
+          (width == 32 && (q <= ldexp(1.0, -150) || bound > FLT_MAX)))
+         return false;
+   }
    if((f->wire_flags&2)&&(!width||!strcmp(t,"bool")||(f->wire_flags&1)||
        (f->wire_encoding==2&&!strncmp(t,"uint",4)))) return false;
    if((f->wire_flags&4)&&(!f->wire_align||f->wire_align>256||(f->wire_align&(f->wire_align-1)))) return false;
    return f->wire_pad<=65535;
+}
+static bool parse_quantum(const char *text, double *value) {
+   const char *p = text, *dot, *decimal;
+   char *adapted = NULL, *end;
+   size_t prefix, suffix, separator;
+   if (*p < '0' || *p > '9')
+      return false;
+   while (*p >= '0' && *p <= '9') ++p;
+   if (*p == '.') {
+      ++p;
+      if (*p < '0' || *p > '9') return false;
+      while (*p >= '0' && *p <= '9') ++p;
+   }
+   if (*p) return false;
+   /* strtod uses the host locale; catalogue decimals always use a dot. */
+   dot = strchr(text, '.');
+   decimal = localeconv()->decimal_point;
+   if (dot && strcmp(decimal, ".")) {
+      prefix = (size_t)(dot - text); suffix = strlen(dot + 1); separator = strlen(decimal);
+      adapted = (char *)malloc(prefix + separator + suffix + 1);
+      if (!adapted) return false;
+      memcpy(adapted, text, prefix);
+      memcpy(adapted + prefix, decimal, separator);
+      memcpy(adapted + prefix + separator, dot + 1, suffix + 1);
+   }
+   *value = strtod(adapted ? adapted : text, &end);
+   {
+      bool ok = !*end && isfinite(*value) && *value > 0;
+      free(adapted);
+      return ok;
+   }
 }
 static bool parse_compact_wire(Lexer *l, SdlDynamicFieldDesc *f) {
    if (l->p == l->end || *l->p != '@') return true;
@@ -351,9 +399,13 @@ static bool parse_compact_wire(Lexer *l, SdlDynamicFieldDesc *f) {
    for (;;) {
       char *option=token(l);unsigned flag;uint32_t n=0;
       if(!option)return false;
-      flag=option[0]=='b'?1:option[0]=='v'||option[0]=='z'?2:option[0]=='a'?4:option[0]=='p'?8:0;
+      flag=option[0]=='b'?1:option[0]=='v'||option[0]=='z'?2:option[0]=='a'?4:option[0]=='p'?8:option[0]=='q'?16:0;
       if(!flag||(f->wire_flags&flag)){free(option);return false;}
-      if(flag==2){if(option[1]){free(option);return false;}f->wire_encoding=option[0]=='v'?1:2;}
+      if (flag == 16) {
+         if (!parse_quantum(option + 1, &f->wire_quantum) ||
+             !(f->wire_quantum_text = copy_string(option + 1))) { free(option); return false; }
+      }
+      else if(flag==2){if(option[1]){free(option);return false;}f->wire_encoding=option[0]=='v'?1:2;}
       else {Lexer digits={option+1,option+strlen(option)};if(!number(&digits,&n)){free(option);return false;}if(flag==1)f->wire_bits=n;else if(flag==4)f->wire_align=n;else f->wire_pad=n;}
       free(option);f->wire_flags|=flag;
       if(l->p==l->end||*l->p!=',')return true;
@@ -1396,6 +1448,9 @@ static bool same_message(const SdlDynamicMessageDesc *a, const SdlDynamicMessage
       if (x->wire_flags != y->wire_flags || x->wire_bits != y->wire_bits || x->wire_encoding != y->wire_encoding || x->wire_align != y->wire_align || x->wire_pad != y->wire_pad || x->id != y->id || x->modifier != y->modifier || strcmp(x->name, y->name) ||
           strcmp(x->type_name, y->type_name) || x->dimension_count != y->dimension_count)
          return false;
+      /* Catalogue identity preserves decimal text, even for equal doubles. */
+      if ((x->wire_flags & 16) && strcmp(x->wire_quantum_text, y->wire_quantum_text))
+         return false;
       for (j = 0; j < x->dimension_count; ++j)
          if (x->dimensions[j] != y->dimensions[j])
             return false;
@@ -1425,14 +1480,16 @@ static bool decimal_out(Writer *w, long long n) {
    return text_out(w, b);
 }
 static bool render_wire(const SdlDynamicFieldDesc *f, Writer *w) {
-   unsigned flag; bool first=true;
+   const unsigned flags[] = {1, 16, 2, 4, 8};
+   unsigned i, flag; bool first=true;
    if(!f->wire_flags) return true;
    if(!text_out(w,"@")) return false;
-   for(flag=1;flag<=8;flag*=2) if(f->wire_flags&flag) {
+   for(i=0;i<sizeof(flags)/sizeof(flags[0]);++i) if(f->wire_flags&(flag=flags[i])) {
       if(!first&&!text_out(w,",")) return false;
       first=false;
-      if(!text_out(w,flag==1?"b":flag==2?"":flag==4?"a":"p")) return false;
+      if(!text_out(w,flag==1?"b":flag==16?"q":flag==2?"":flag==4?"a":"p")) return false;
       if(flag==2) { if(!text_out(w,f->wire_encoding==1?"v":"z")) return false; }
+      else if(flag==16) { if(!text_out(w,f->wire_quantum_text)) return false; }
       else if(!decimal_out(w,flag==1?f->wire_bits:flag==4?f->wire_align:f->wire_pad)) return false;
    }
    return true;

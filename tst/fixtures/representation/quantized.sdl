@@ -1,0 +1,17 @@
+message QuantChild {
+   fl64 value wire(bits=8,q=0.25);
+}
+message QuantWide {
+   fl32 small wire(bits=32,q=0.25);
+   fl64 large wire(bits=64,q=0.25);
+}
+message Quantized {
+   bool flag wire(bits=1);
+   fl32 value wire(bits=7,q=0.25);
+   fl64 precise wire(bits=12,q=0.1);
+   optional fl64 maybe wire(bits=5,q=0.5);
+   packed fl32 samples wire(bits=5,q=0.25);
+   fl64[2][2] matrix wire(bits=5,q=0.5);
+   QuantChild child;
+   uint8 tail;
+}

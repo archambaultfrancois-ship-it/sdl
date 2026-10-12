@@ -4,8 +4,11 @@ The ordinary codecs retain their native byte layouts; this layer converts those
 bytes at the message boundary, including nested messages and unknown fields.
 """
 import re
+import math
+import struct
+import sys
 
-_KEYS = ('bits', 'encoding', 'align', 'pad_after')
+_KEYS = ('bits', 'q', 'encoding', 'align', 'pad_after')
 _LIMIT = 64 * 1024 * 1024
 
 
@@ -16,6 +19,8 @@ def options(text, type_name, enum=False):
    for item in text.split(','):
       if item in ('v', 'z'):
          key, value = 'encoding', {'v':'varint', 'z':'zigzag'}[item]
+      elif re.fullmatch(r'q[0-9]+(?:\.[0-9]+)?', item):
+         key, value = 'q', item[1:]
       elif re.fullmatch(r'[bap][0-9]+', item):
          key = {'b':'bits', 'a':'align', 'p':'pad_after'}[item[0]]
          value = int(item[1:])
@@ -31,8 +36,18 @@ def options(text, type_name, enum=False):
 def validate(w, type_name, enum=False):
    width = {'bool': 1, 'int8': 8, 'uint8': 8, 'int16': 16, 'uint16': 16,
       'int32': 32, 'uint32': 32, 'int64': 64, 'uint64': 64}.get(type_name, 32 if enum else 0)
+   if 'q' in w:
+      if type_name not in ('fl32', 'fl64') or 'bits' not in w or 'encoding' in w:
+         raise ValueError('wire q requires a floating type with bits')
+      width = 32 if type_name == 'fl32' else 64
    if 'bits' in w and not 1 <= w['bits'] <= width:
       raise ValueError('invalid wire bits')
+   if 'q' in w:
+      q = float(w['q'])
+      maximum = float.fromhex('0x1.fffffep127') if type_name == 'fl32' else sys.float_info.max
+      minimum = float.fromhex('0x1p-150') if type_name == 'fl32' else 0
+      if not math.isfinite(q) or q <= minimum or q * 2 ** (w['bits'] - 1) > maximum:
+         raise ValueError('wire q range must fit the floating type')
    if 'encoding' in w and (not width or type_name == 'bool' or 'bits' in w or
          (w['encoding'] == 'zigzag' and type_name.startswith('uint'))):
       raise ValueError('invalid wire encoding type')
@@ -42,7 +57,7 @@ def validate(w, type_name, enum=False):
 
 
 def suffix(w):
-   return '@' + ','.join({'bits':'b','align':'a','pad_after':'p'}[k] + str(w[k]) if k != 'encoding' else {'varint':'v','zigzag':'z'}[w[k]] for k in _KEYS if k in w) if w else ''
+   return '@' + ','.join({'bits':'b','q':'q','align':'a','pad_after':'p'}[k] + str(w[k]) if k != 'encoding' else {'varint':'v','zigzag':'z'}[w[k]] for k in _KEYS if k in w) if w else ''
 
 
 class Stream:
@@ -147,6 +162,24 @@ def transform(messages, enums, names, data, encoding):
       signed = type_name.startswith('int') or type_name in enums
       width = size * 8
       bits = w.get('bits', width)
+      if 'q' in w:
+         q = float(w['q'])
+         fmt = '>f' if size == 4 else '>d'
+         if encoding:
+            x = struct.unpack(fmt, plain.bytes(size))[0]
+            scaled = x / q
+            if not math.isfinite(scaled):
+               raise ValueError('quantized float must be finite')
+            n = round(scaled)
+            if not -(1 << (bits - 1)) <= n < 1 << (bits - 1):
+               raise ValueError('quantized float outside wire bit range')
+            custom.bits(bits, n & ((1 << bits) - 1))
+         else:
+            n = custom.bits(bits)
+            if n & (1 << (bits - 1)):
+               n -= 1 << bits
+            plain.bytes(size, struct.pack(fmt, float(n) * q))
+         return
       if encoding:
          n = int.from_bytes(plain.bytes(size), 'big', signed=signed)
          low, high = (-(1 << (bits - 1)), (1 << (bits - 1)) - 1) if signed else (0, (1 << bits) - 1)

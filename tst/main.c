@@ -505,6 +505,112 @@ static void deep_array_messages(void) {
    type_dynamic_free(decoded);
    type_context_free(ctx);
 }
+static void quantum_catalogue_merge_cases(void) {
+   static const uint8_t catalogue_a[] =
+      "SDL2|QuantumMergeA{}|QuantumMergePlain{1:int32:value;}|QuantumMergeShared{1:fl64:value@b12,q0.1;}";
+   static const uint8_t catalogue_b[] =
+      "SDL2|QuantumMergeB{}|QuantumMergePlain{1:int32:value;}|QuantumMergeShared{1:fl64:value@b12,q0.10000000000000001;}";
+   static const uint8_t catalogue_c[] =
+      "SDL2|QuantumMergeC{}|QuantumMergePlain{1:int32:value;}|QuantumMergeShared{1:fl64:value@b12,q0.1;}";
+   static const SdlTypeDesc types[] = {
+      {.kind = SDL_TYPE_STRUCT, .name = "QuantumMergeA", .schema_descriptor = catalogue_a,
+       .schema_descriptor_size = sizeof(catalogue_a) - 1},
+      {.kind = SDL_TYPE_STRUCT, .name = "QuantumMergeB", .schema_descriptor = catalogue_b,
+       .schema_descriptor_size = sizeof(catalogue_b) - 1},
+      {.kind = SDL_TYPE_STRUCT, .name = "QuantumMergeC", .schema_descriptor = catalogue_c,
+       .schema_descriptor_size = sizeof(catalogue_c) - 1}
+   };
+   const char *conflicting[][2] = {{"QuantumMergeA", "QuantumMergeB"}, {"QuantumMergeB", "QuantumMergeA"}};
+   const char *matching[][2] = {{"QuantumMergeA", "QuantumMergeC"}, {"QuantumMergeC", "QuantumMergeA"}};
+   const char expected[] =
+      "SDL2|QuantumMergeA{}|QuantumMergeC{}|QuantumMergePlain{1:int32:value;}|QuantumMergeShared{1:fl64:value@b12,q0.1;}";
+   size_t i, size;
+   uint32_t expected_id;
+   /* Distinct canonical decimal texts can denote the same binary64 value. */
+   assert(strtod("0.1", NULL) == strtod("0.10000000000000001", NULL));
+   for (i = 0; i < sizeof(types) / sizeof(types[0]); ++i) {
+      const char *name = types[i].name;
+      char *description;
+      assert(sdl_register_type(&types[i]));
+      description = type_description(&name, 1, &size);
+      assert(description && size == types[i].schema_descriptor_size &&
+         !memcmp(description, types[i].schema_descriptor, size));
+      type_free(description);
+   }
+   for (i = 0; i < sizeof(conflicting) / sizeof(conflicting[0]); ++i) {
+      size = 123;
+      assert(!type_description(conflicting[i], 2, &size));
+      assert(size == 0);
+   }
+   assert(type_catalogue_id(expected, sizeof(expected) - 1, &expected_id));
+   for (i = 0; i < sizeof(matching) / sizeof(matching[0]); ++i) {
+      char *description = type_description(matching[i], 2, &size);
+      uint32_t id;
+      assert(description && size == sizeof(expected) - 1 && !memcmp(description, expected, size));
+      assert(type_catalogue_id(description, size, &id) && id == expected_id);
+      type_free(description);
+   }
+}
+static void quantum_cases(void) {
+   const char *invalid[] = {"q0.1", "b12,q0", "b12,qNaN", "b65,q0.1",
+      "b12,q0.1,v", "b12,q0.1,q0.1", "b12,q1e-1", "b12,q-1", "b12,q1.", "b12,q.1"};
+   const unsigned widths[] = {1, 32, 64};
+   char descriptor[256];
+   size_t i;
+   for (i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+      size_t size = (size_t)snprintf(descriptor, sizeof(descriptor), "SDL2|QuantumBoundary{1:fl64:value@%s;}", invalid[i]);
+      assert(!type_prepare(descriptor, size));
+   }
+   {
+      const char *integers[] = {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"};
+      const char *markers[] = {"", "?", "*", "+", ""};
+      const char *suffixes[] = {"q0.1", "b1,q0.1", "q0.1,b1", "v,q0.1"};
+      size_t t, shape, option;
+      for (t = 0; t < sizeof(integers) / sizeof(integers[0]); ++t) {
+         for (shape = 0; shape < sizeof(markers) / sizeof(markers[0]); ++shape) {
+            const char *dimensions = shape == 4 ? "[2]" : "";
+            size_t ds = (size_t)snprintf(descriptor, sizeof(descriptor),
+               "SDL2|QuantumBoundary{1%s:%s%s:value@b1;}", markers[shape], integers[t], dimensions);
+            SdlContext *ctx = type_prepare(descriptor, ds);
+            assert(ctx);
+            type_context_free(ctx);
+            for (option = 0; option < sizeof(suffixes) / sizeof(suffixes[0]); ++option) {
+               ds = (size_t)snprintf(descriptor, sizeof(descriptor),
+                  "SDL2|QuantumBoundary{1%s:%s%s:value@%s;}", markers[shape], integers[t], dimensions, suffixes[option]);
+               assert(!type_prepare(descriptor, ds));
+            }
+         }
+      }
+   }
+   for (i = 0; i < sizeof(widths) / sizeof(widths[0]); ++i) {
+      unsigned bits = widths[i], scalar = bits == 32 ? 4 : 8;
+      size_t ds = (size_t)snprintf(descriptor, sizeof(descriptor),
+         "SDL2|QuantumBoundary{1:%s:value@b%u,q0.25;}", scalar == 4 ? "fl32" : "fl64", bits);
+      SdlContext *ctx = type_prepare(descriptor, ds);
+      unsigned char plain[9] = {1}, expected[9] = {1, 0x80};
+      size_t size, wire_size = 1 + (bits + 7) / 8;
+      double x = -ldexp(0.25, (int)bits - 1);
+      float single = (float)x;
+      void *encoded;
+      SdlDynamicMessage *decoded;
+      assert(ctx);
+      sdl_wire_encode_native(plain + 1, scalar == 4 ? (void *)&single : (void *)&x, scalar);
+      encoded = type_wire_transform(ctx, plain, 1 + scalar, true, &size);
+      assert(encoded && size == wire_size && !memcmp(encoded, expected, size));
+      assert(type_context_validate(ctx, encoded, size));
+      decoded = type_decode_dynamic(ctx, encoded, size);
+      assert(decoded && decoded->fields[0].value.kind == SDL_DYNAMIC_FLOAT && decoded->fields[0].value.value.floating == x);
+      type_dynamic_free(decoded);
+      type_free(encoded);
+      x = -x; single = (float)x;
+      sdl_wire_encode_native(plain + 1, scalar == 4 ? (void *)&single : (void *)&x, scalar);
+      assert(!type_wire_transform(ctx, plain, 1 + scalar, true, &size));
+      x = NAN; single = NAN;
+      sdl_wire_encode_native(plain + 1, scalar == 4 ? (void *)&single : (void *)&x, scalar);
+      assert(!type_wire_transform(ctx, plain, 1 + scalar, true, &size));
+      type_context_free(ctx);
+   }
+}
 /* Mixed widths and native padding exercise the non-contiguous span path. */
 typedef struct {
    bool enabled;
@@ -713,6 +819,8 @@ int main(void) {
    deep_messages();
    deep_arrays();
    deep_array_messages();
+   quantum_cases();
+   quantum_catalogue_merge_cases();
    registry_cases();
    puts("C SDL2 codec, evolution, malformed input and storage checks passed.");
    return 0;

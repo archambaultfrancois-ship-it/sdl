@@ -47,6 +47,36 @@ static bool rep_count(RepStream *plain, RepStream *custom, bool encode, uint64_t
    return rep_varint(encode?plain:custom,n,32)&&rep_varint(encode?custom:plain,n,32);
 }
 static bool rep_message(const SdlDynamicSchema *, const SdlDynamicMessageDesc *, RepStream *,RepStream *,bool,size_t);
+static bool rep_quantized_float(const SdlDynamicFieldDesc *f, size_t size,
+                                 RepStream *plain, RepStream *custom, bool encode) {
+   uint64_t raw = 0;
+   int64_t code;
+   double x, scaled, rounded, fraction, limit = ldexp(1.0, (int)f->wire_bits - 1);
+   if (encode) {
+      if (!rep_bits(plain, (unsigned)size * 8, &raw)) return false;
+      if (size == 4) {
+         uint32_t bits = (uint32_t)raw; float value;
+         memcpy(&value, &bits, 4); x = value;
+      } else memcpy(&x, &raw, 8);
+      scaled = x / f->wire_quantum;
+      if (!isfinite(scaled)) return false;
+      rounded = floor(scaled); fraction = scaled - rounded;
+      if (fraction > 0.5 || (fraction == 0.5 && fmod(rounded, 2.0) != 0)) rounded += 1;
+      if (rounded < -limit || rounded >= limit) return false;
+      raw = (uint64_t)(int64_t)rounded;
+      return rep_bits(custom, f->wire_bits, &raw);
+   }
+   if (!rep_bits(custom, f->wire_bits, &raw)) return false;
+   if (f->wire_bits < 64 && (raw & (UINT64_C(1) << (f->wire_bits - 1))))
+      raw |= UINT64_MAX << f->wire_bits;
+   memcpy(&code, &raw, 8);
+   x = (double)code * f->wire_quantum;
+   if (size == 4) {
+      float value = (float)x; uint32_t bits;
+      memcpy(&bits, &value, 4); raw = bits;
+   } else memcpy(&raw, &x, 8);
+   return rep_bits(plain, (unsigned)size * 8, &raw);
+}
 static bool rep_value(const SdlDynamicSchema *schema, const SdlDynamicFieldDesc *f, size_t dim,
                       RepStream *plain, RepStream *custom, bool encode, size_t depth) {
    size_t i, size; uint64_t n=0; unsigned width,bits; bool sign;
@@ -63,6 +93,7 @@ static bool rep_value(const SdlDynamicSchema *schema, const SdlDynamicFieldDesc 
       return rep_copy(encode?plain:custom,encode?custom:plain,(size_t)n);
    }
    size=primitive_size(f->type_name); if(!size)size=4;
+   if (f->wire_flags & 16) return rep_quantized_float(f, size, plain, custom, encode);
    if(!(f->wire_flags&3)) return rep_copy(encode?plain:custom,encode?custom:plain,size);
    width=(unsigned)size*8;bits=f->wire_flags&1?f->wire_bits:width;
    sign=!strncmp(f->type_name,"int",3)||schema_enum(schema,f->type_name)!=NULL;

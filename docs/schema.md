@@ -256,7 +256,8 @@ and `value` begins on an 8-byte boundary and is followed by two zero bytes.
 
 | Option | Rules |
 | --- | --- |
-| `bits=N` | Integers and enums: 1 through their native width; `bool`: 1. Applies to every scalar element of a sequence or fixed array. |
+| `bits=N` | Integers and enums: 1 through their native width; `bool`: 1. With `q`, `fl32`: 1–32 and `fl64`: 1–64. Applies to every scalar element of a sequence or fixed array. |
+| `q=Q` | Positive finite quantum for `fl32`/`fl64`; requires `bits` and excludes `encoding`. The wire value is a signed integer multiplied by Q on decoding. |
 | `encoding=varint` | Integers and enums, as canonical unsigned ULEB128. Signed inputs must be nonnegative. Up to 10 bytes for `uint64`. |
 | `encoding=zigzag` | Signed integers and enums, mapped to unsigned ULEB128. Covers the complete signed range. |
 | `align=N` | Aligns the start of the field, including any optional/sequence count, to N bytes from the enclosing message body's start. N is a power of two from 1 through 256. |
@@ -265,8 +266,31 @@ and `value` begins on an 8-byte boundary and is followed by two zero bytes.
 `bits` and `encoding` are mutually exclusive. Unknown keys, duplicate keys,
 empty clauses, invalid widths and invalid option combinations are rejected.
 Options may be written in any order with spaces in source schemas. Canonical
-catalogues emit them in order `bits`, `encoding`, `align`, `pad_after`, separated
+catalogues emit them in order `bits`, `q`, `encoding`, `align`, `pad_after`, separated
 by commas without spaces.
+
+For example, `fl32 temperature wire(bits=12,q=0.1);` stores a signed 12-bit
+integer instead of IEEE-754 bits, while the generated member remains a float.
+Encoding divides the input by Q, rounds to the nearest integer (ties to even),
+and requires the result to fit -2048 through 2047. Decoding multiplies this
+integer by Q: the output grid ranges from -204.8 through 204.7. There is no
+saturation. NaN, infinities, a nonfinite quotient, and rounded integers outside
+the bit range are rejected. Zero is reconstructed as positive zero.
+
+Division, rounding, and multiplication use IEEE-754 binary64 arithmetic;
+`fl32` inputs first have binary32 precision and decoded outputs are rounded
+back to binary32. Consequently decimal half steps need not be exact binary
+ties, and resolution remains limited by the logical floating type's precision.
+This is lossy quantization; increasing `bits` does not increase float precision.
+Q must not round to zero in the logical type, and the grid's negative endpoint
+must remain finite in that type. These constraints are checked at preparation.
+
+Source Q literals may use decimal or scientific notation (`0.1`, `.1`, `1e-1`).
+The generator emits a normalized plain decimal (`q0.1`), so these forms produce
+the same catalogue and hash. Quantum clauses also work on optional fields,
+sequences, fixed arrays, and nested messages. A quantum change preserves logical
+schema compatibility: readers apply the sender's representation and quantum.
+Older runtimes reject catalogues with `q`; both peers need quantum support.
 
 Signed bit fields use two's complement. For example,
 `int32 temperature wire(bits=12);` accepts -2048 through 2047 on encoding and

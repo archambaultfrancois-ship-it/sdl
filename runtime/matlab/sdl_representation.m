@@ -4,7 +4,8 @@ switch action
 case 'parse'
  text=varargin{1};w=struct();parts=strsplit(text,',','CollapseDelimiters',false);
  for k=1:numel(parts)
-  item=parts{k};if strcmp(item,'v')||strcmp(item,'z'),key='encoding';if strcmp(item,'v'),v='varint';else,v='zigzag';end
+  item=parts{k};if ~isempty(regexp(item,'^q[0-9]+(\.[0-9]+)?$','once')),key='q';v=item(2:end);
+  elseif strcmp(item,'v')||strcmp(item,'z'),key='encoding';if strcmp(item,'v'),v='varint';else,v='zigzag';end
   elseif ~isempty(regexp(item,'^[bap][0-9]+$','once'))
    if item(1)=='b',key='bits';elseif item(1)=='a',key='align';else,key='pad_after';end
    v=str2double(item(2:end));if ~isfinite(v)||v<0||v~=fix(v)||v>4294967295,error('SDL:Descriptor','invalid wire number');end
@@ -15,7 +16,15 @@ case 'parse'
 case 'validate'
  w=varargin{1};t=varargin{2};is_enum=varargin{3};width=0;
  if strcmp(t,'bool'),width=1;elseif any(strcmp(t,{'int8','uint8'})),width=8;elseif any(strcmp(t,{'int16','uint16'})),width=16;elseif any(strcmp(t,{'int32','uint32'}))||is_enum,width=32;elseif any(strcmp(t,{'int64','uint64'})),width=64;end
+ if isfield(w,'q')
+  if ~any(strcmp(t,{'fl32','fl64'}))||~isfield(w,'bits')||isfield(w,'encoding'),error('SDL:Descriptor','wire q requires a floating type with bits');end
+  if strcmp(t,'fl32'),width=32;else,width=64;end
+ end
  if isfield(w,'bits')&&(w.bits<1||w.bits>width),error('SDL:Descriptor','invalid wire bits');end
+ if isfield(w,'q')
+  q=str2double(w.q);bound=q*2^(w.bits-1);
+  if ~isfinite(q)||q<=0||~isfinite(bound)||(width==32&&(q<=2^-150||bound>double(realmax('single')))),error('SDL:Descriptor','wire q range must fit the floating type');end
+ end
  if isfield(w,'encoding')&&(width==0||strcmp(t,'bool')||isfield(w,'bits')||(strcmp(w.encoding,'zigzag')&&strncmp(t,'uint',4))),error('SDL:Descriptor','invalid wire encoding type');end
  if isfield(w,'align')&&(w.align<1||w.align>256||bitand(uint32(w.align),uint32(w.align-1))~=0),error('SDL:Descriptor','invalid wire alignment');end
  if isfield(w,'pad_after')&&w.pad_after>65535,error('SDL:Descriptor','invalid wire padding');end
@@ -23,6 +32,7 @@ case 'validate'
 case 'suffix'
  w=varargin{1};parts={};
  if isfield(w,'bits'),parts{end+1}=sprintf('b%d',w.bits);end
+ if isfield(w,'q'),parts{end+1}=['q' w.q];end
  if isfield(w,'encoding'),if strcmp(w.encoding,'varint'),parts{end+1}='v';else,parts{end+1}='z';end,end
  if isfield(w,'align'),parts{end+1}=sprintf('a%d',w.align);end
  if isfield(w,'pad_after'),parts{end+1}=sprintf('p%d',w.pad_after);end
@@ -83,6 +93,25 @@ result=streams(dst).out(:);
   if isKey(schema.messages,t),message(t,depth+1);return;end
   if strcmp(t,'string'),copy(count());return;end
   switch t,case {'bool','int8','uint8'},size=1;case {'int16','uint16'},size=2;case {'int64','uint64','fl64','c32'},size=8;case 'c64',size=16;otherwise,size=4;end
+  if isfield(w,'q')
+   q=str2double(w.q);nbits=w.bits;
+   if encode
+    raw=bits(1,size*8);
+    if size==4,x=double(typecast(uint32(raw),'single'));else,x=typecast(raw,'double');end
+    scaled=x/q;if ~isfinite(scaled),error('SDL:InvalidValue','quantized float must be finite');end
+    rounded=floor(scaled);fraction=scaled-rounded;
+    if fraction>0.5||(fraction==0.5&&mod(rounded,2)~=0),rounded=rounded+1;end
+    if rounded < -2^(nbits-1)||rounded>=2^(nbits-1),error('SDL:InvalidValue','quantized float outside wire bit range');end
+    bits(2,nbits,typecast(int64(rounded),'uint64'));
+   else
+    raw=bits(2,nbits);
+    if nbits<64&&bitget(raw,nbits),raw=bitor(raw,bitcmp(bitshift(uint64(1),nbits)-uint64(1)));end
+    x=double(typecast(raw,'int64'))*q;
+    if size==4,raw=uint64(typecast(single(x),'uint32'));else,raw=typecast(x,'uint64');end
+    bits(1,size*8,raw);
+   end
+   return;
+  end
   if ~isfield(w,'bits')&&~isfield(w,'encoding'),copy(size);return;end
   width=size*8;nbits=width;if isfield(w,'bits'),nbits=w.bits;end
   signed=strncmp(t,'int',3)||isKey(schema.enums,t);
