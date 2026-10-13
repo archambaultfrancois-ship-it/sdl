@@ -3,6 +3,9 @@
 SDL generates message bindings for C99, Rust, Python 3, Java 7+, Ada 2012, and
 Matlab/Octave from `.sdl` schemas.
 
+See the [feature overview](docs/features.md) for the available user-facing services.
+The [graphical design](docs/design.md) covers static architecture and runtime flows, with editable draw.io diagrams.
+
 SDL2 exchanges a compact UTF-8 schema catalogue when a connection opens.
 The canonical description is one string without whitespace, for example
 `SDL2|Point{1:int32:x;2:int32:y@b12;}`; catalogue hashes use these exact bytes. The runtime
