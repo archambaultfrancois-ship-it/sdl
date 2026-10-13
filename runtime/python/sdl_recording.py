@@ -101,14 +101,15 @@ class RecordingRecord:
 
 
 class RecordingWriter:
-   """Write indexed MCAP or sequential PCAPNG. Create paths exclusively by default.
+   """Write sequential PCAPNG by default, or explicitly select indexed MCAP.
 
+   Create paths exclusively by default; the filename does not select the format.
    Caller-owned binary streams remain open. write_encoded preserves exact SDL2
    bytes; validate_payload=False skips body decoding, but still checks the root.
    """
    def __init__(self, output, *, metadata=None, chunk_size=1024 * 1024,
                 max_payload_size=32 * 1024 * 1024, validate_payload=True,
-                overwrite=False, format="mcap"):
+                overwrite=False, format="pcapng"):
       if format not in ('mcap', 'pcapng'):
          raise RecordingError('format must be mcap or pcapng')
       self.format = format

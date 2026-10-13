@@ -1,9 +1,15 @@
 # SDL2 recording profile, version 1
 
-This reference defines `sdl2-recording-v1`, an SDL project profile of the
+SDL recordings default to the [PCAPNG profile](recording_pcapng.md), with `.pcapng`
+files containing catalogues and SDL2 payloads. MCAP is available through explicit
+format selection (`format="mcap"` in Python). Filename extensions do not select
+the writer format; readers detect both containers automatically.
+
+This reference describes the shared recording APIs and defines `sdl2-recording-v1`,
+an SDL project profile of the
 [MCAP container format](https://mcap.dev/spec). The profile and `sdl2` encoding
 names are project conventions, not entries in MCAP's official registry.
-Recordings use `.mcap` and contain both catalogues and SDL2 payloads. No schema
+MCAP recordings use `.mcap` and contain both catalogues and SDL2 payloads. No schema
 sidecar, generated class or registry service is required for dynamic decoding.
 The same services also support the [SDL PCAPNG profile](recording_pcapng.md)
 for USER0 captures and conversion in both directions. Reader APIs and CLI commands
@@ -27,7 +33,7 @@ Replay must not decode and re-encode the payload before passing it to a consumer
 
 MCAP schema/channel declarations precede messages that reference them. An unused
 declaration may appear only in the summary. Repeated declarations with the same
-local ID must be identical. The Python and native writers emit indexed, uncompressed chunks,
+local ID must be identical. The Python and native MCAP writers emit indexed, uncompressed chunks,
 data and chunk CRCs, a summary with its CRC, and final file magic. This initial
 reader rejects compressed chunks. Compression and indexed seeking are future work;
 the current reader scans sequentially, even when a time range is requested.
@@ -108,7 +114,7 @@ from radio_capture import RadioCapture  # generated application bindings
 
 catalogue = description(RadioCapture)
 context = prepare(catalogue, [RadioCapture])
-with RecordingWriter("capture.mcap", metadata={"producer": "receiver-v1"}) as recording:
+with RecordingWriter("capture.pcapng", metadata={"producer": "receiver-v1"}) as recording:
     channel = recording.register_channel(
         topic="radio/iq", catalogue=catalogue, root_type="RadioCapture")
     for capture in acquire_captures():  # application's acquisition source
@@ -125,30 +131,32 @@ avoids that extra decoding pass; size, ownership and root checks still apply.
 Both methods accept `log_time_ns`, `publish_time_ns` and `sequence`.
 
 Files are created exclusively by default; use `overwrite=True` explicitly to
-replace one. Context exit calls `close()`, finishing chunks and indexes. Binary
+replace one. Context exit calls `close()`, finishing MCAP chunks and indexes or
+writing the PCAPNG END record. Binary
 streams supplied by the caller remain open; streams opened from paths are closed.
-`flush()` finishes the current chunk and flushes the stream. `flush(sync=True)`
+`flush()` finishes any current MCAP chunk and flushes the stream. `flush(sync=True)`
 also calls `os.fsync()` and requires a stream with a file descriptor. Neither
 ordinary flush nor close promises survival of a power loss. An interrupted file
 is incomplete until recovered, even if it contains readable complete chunks.
 
 Writes are synchronous: recording IO errors propagate to the application. There
 is no background queue or silent drop policy. The default chunk target is 1 MiB
-and the default payload limit is 32 MiB. A chunk can exceed its target by its final
-record. The SDK retains index entries until close; memory can grow with chunk,
-channel and catalogue counts, rather than with all message payloads.
+and the default payload limit is 32 MiB. An MCAP chunk can exceed its target by its
+final record. For MCAP, the SDK retains index entries until close; memory can grow
+with chunk, channel and catalogue counts, rather than with all message payloads.
+PCAPNG writes one packet block per record and retains no message index.
 
 ## Inspection, validation and replay
 
 From the repository root, with the dependency on `PYTHONPATH`:
 
 ```sh
-python3 tools/recording/sdl-recording info capture.mcap
-python3 tools/recording/sdl-recording inspect capture.mcap --topic radio/iq --from 300ms --limit 5
-python3 tools/recording/sdl-recording inspect capture.mcap --format text --topic radio/iq --limit 1
-python3 tools/recording/sdl-recording validate capture.mcap
+python3 tools/recording/sdl-recording info capture.pcapng
+python3 tools/recording/sdl-recording inspect capture.pcapng --topic radio/iq --from 300ms --limit 5
+python3 tools/recording/sdl-recording inspect capture.pcapng --format text --topic radio/iq --limit 1
+python3 tools/recording/sdl-recording validate capture.pcapng
 PYTHONPATH="samples/record_replay:$PYTHONPATH" \
-  python3 tools/recording/sdl-recording replay capture.mcap \
+  python3 tools/recording/sdl-recording replay capture.pcapng \
   --topic radio/iq --from 300ms --to 800ms --speed 0.5 --consumer pipeline:on_record
 ```
 
@@ -183,15 +191,15 @@ control characters escaped so tabs and newlines do not disrupt the table.
 Long cells wrap within their columns. Topic/time filters and `--limit` work
 identically for both formats; the default remains JSON.
 
-`validate` scans to the final magic, checks available data, chunk and summary CRCs,
+`validate` scans to the final MCAP magic or PCAPNG END record, checks container CRCs,
 rejects conflicting declarations and invalid roots, and dynamically decodes every
 payload. It fails on malformed or truncated files. It does not certify the semantic
 correctness of every index entry. Sequential scanning ignores indexes.
 
-The reader limits each MCAP record to 64 MiB by default, isolates inner field
-lengths to that record, and rejects oversized or compressed chunks. The API allows
+The reader limits each MCAP record or PCAPNG block to 64 MiB by default, isolates
+inner field lengths to that record, and rejects oversized or compressed chunks. The API allows
 `max_record_size` to be changed for recordings with larger payloads. It retains
-prepared catalogues and channels and at most one chunk of encoded data per scan;
+prepared catalogues and channels and at most one MCAP chunk or PCAPNG block per scan;
 decoded objects can use more memory than their encoded bytes.
 
 `inspect --limit` stops early; it does not validate the rest of the file. CLI replay
@@ -206,7 +214,7 @@ Python applications can call the same replay function directly:
 ```python
 from sdl_recording import RecordingReader, replay
 
-reader = RecordingReader("capture.mcap")
+reader = RecordingReader("capture.pcapng")
 reader.validate()  # optional preflight before application effects
 replay(reader.iter_records(topics="radio/iq"), on_record, speed=0)
 ```

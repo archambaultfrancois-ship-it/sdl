@@ -60,7 +60,7 @@ class NativeTests(unittest.TestCase):
         self.assertGreaterEqual(result, 0, self.lib.error().decode())
     def python_record(self, cls=Q, times=(10, 20, 20)):
         payloads = []
-        with RecordingWriter(self.path, chunk_size=128) as writer:
+        with RecordingWriter(self.path, format='mcap', chunk_size=128) as writer:
             ch = writer.register_channel(topic='radio/é📻\0iq', catalogue=description(cls), root_type='Sample',
                                          metadata={'origin': 'é📻\0'})
             ctx = prepare(description(cls), [cls])
@@ -106,6 +106,7 @@ class NativeTests(unittest.TestCase):
                 self.ok(self.lib.writer_flush(writer, 1))
         finally: self.ok(self.lib.writer_close(writer))
         records = list(RecordingReader(self.path).iter_records())
+        self.assertEqual(RecordingReader(self.path).info()['format'], 'pcapng')
         self.assertEqual([r.payload for r in records], payloads)
         self.assertEqual([r.sequence for r in records], [2**32-1]*3)
         self.assertEqual(len({r.channel.schema_id for r in records}), 3)
@@ -211,6 +212,7 @@ class NativeTests(unittest.TestCase):
             '-I'+str(ROOT / 'runtime/recording/include'), str(ROOT / 'tst/recording/native/client.c'),
             '-L'+str(LIBRARY.parent), '-Wl,-rpath,'+str(LIBRARY.parent), '-lsdl_recording', '-o', str(binary)], check=True)
         subprocess.run([str(binary), str(self.path)], check=True)
+        self.assertEqual(RecordingReader(self.path).info()['format'], 'pcapng')
         records = list(RecordingReader(self.path).iter_records())
         self.assertEqual(len(records), 1); self.assertEqual(records[0].payload, b'\x01')
 

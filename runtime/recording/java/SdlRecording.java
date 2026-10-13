@@ -63,7 +63,7 @@ public final class SdlRecording {
         private long handle;
         public Writer(String path) throws IOException { this(path, false, 1024 * 1024); }
         public Writer(String path, boolean overwrite, long chunkSize) throws IOException {
-            handle = nOpen(text(path), true, overwrite, chunkSize);
+            this(path, overwrite, chunkSize, Format.PCAPNG);
         }
         public Writer(String path, Format format) throws IOException { this(path, false, 1024 * 1024, format); }
         public Writer(String path, boolean overwrite, long chunkSize, Format format) throws IOException {

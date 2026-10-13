@@ -22,22 +22,26 @@ def main():
             classes = ROOT / 'build/recording/java'
             subprocess.run([os.environ.get('JAVAC', 'javac'), '-encoding', 'UTF-8', '-source', '8', '-target', '8', '-Xlint:-options',
                 '-cp', str(classes), '-d', str(classes), str(ROOT / 'tst/recording/native/SdlRecordingTests.java')], check=True)
-        for format in ('mcap', 'pcapng'):
-            source = directory / ('python.' + format)
+        for selection in ('mcap', 'pcapng', None):
+            format = selection or 'pcapng'
+            label = selection or 'default'
+            source = directory / ('python.' + label)
             with RecordingWriter(source, format=format) as writer:
                 ch = writer.register_channel(topic='radio/é📻\0iq', catalogue=description(Q), root_type='Sample')
                 writer.write(ch, Q(value=.375), log_time_ns=1)
             if args.jni:
-                target = directory / ('java.' + format)
+                target = directory / ('java.' + label)
                 subprocess.run([os.environ.get('JAVA', 'java'), '-Djava.library.path=' + str(ROOT / 'build/recording/release'),
-                    '-cp', str(classes), 'SdlRecordingTests', str(target), str(source), format], check=True)
+                    '-cp', str(classes), 'SdlRecordingTests', str(target), str(source)] +
+                    ([selection] if selection else []), check=True)
                 check_output(target, format)
             if args.mex:
-                target = directory / ('mex.' + format)
+                target = directory / ('mex.' + label)
                 def quote(path): return "'" + str(path).replace("'", "''") + "'"
                 expression = '; '.join(['addpath(' + quote(ROOT / p) + ')' for p in
                     ('runtime/recording/matlab', 'build/recording/mex', 'tst/recording/native')])
-                expression += '; run_recording_mex_tests(' + quote(target) + ', ' + quote(source) + ', ' + quote(format) + ')'
+                expression += '; run_recording_mex_tests(' + quote(target) + ', ' + quote(source)
+                expression += (', ' + quote(selection) if selection else '') + ')'
                 subprocess.run([os.environ.get('OCTAVE', 'octave'), '--quiet', '--no-gui', '--eval', expression], check=True)
                 check_output(target, format)
 

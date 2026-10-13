@@ -100,7 +100,7 @@ package body SDL_Recording is
    end Validate;
    function Create (Path : String; Overwrite : Boolean := False;
                     Chunk_Size : UInt64 := 1_048_576;
-                    Format : Recording_Format := MCAP) return Writer is
+                    Format : Recording_Format := PCAPNG) return Writer is
    begin
       return Result : Writer do
          Result.Handle := W_Open (View (Path), Flag (Overwrite), Chunk_Size, C_Flag (Recording_Format'Pos (Format)));

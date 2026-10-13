@@ -3,7 +3,11 @@
 from sdl_runtime import SdlDynamicMessage, display
 
 
-def on_record(record):
+BURST_FILTER = ('metadata.receiver_id == "demo-rx-01" && exists(operator_note) && '
+   'any(iq_samples, s => real(s) * real(s) + imag(s) * imag(s) > 4)')
+
+
+def on_record(record, *, output=None):
    capture = record.decode().fields
    metadata = capture['metadata'].fields
    samples = capture['iq_samples']
@@ -15,4 +19,4 @@ def on_record(record):
       'peak_power': max(powers, default=0),
       'burst_detected': any(power > 4 for power in powers),
    })
-   print(display(analysis), end='')
+   print(display(analysis), end='', file=output)

@@ -8,7 +8,7 @@ switch command
         overwrite = false; chunk = uint64(1024 * 1024);
         if numel(varargin) > 1, overwrite = varargin{2}; end
         if numel(varargin) > 2, chunk = varargin{3}; end
-        format = 'mcap';
+        format = 'pcapng';
         if numel(varargin) > 3, format = varargin{4}; end
         varargout{1} = sdl_recording_mex('open_writer_format', path, overwrite, chunk, utf8(format));
     case 'open_reader'

@@ -60,7 +60,7 @@ class RecordingTests(unittest.TestCase):
       catalogue = description(cls)
       ctx = prepare(catalogue, [cls])
       payloads = []
-      with RecordingWriter(self.path, metadata={'producer': 'test'}, chunk_size=128) as writer:
+      with RecordingWriter(self.path, format='mcap', metadata={'producer': 'test'}, chunk_size=128) as writer:
          channel = writer.register_channel(topic=topic, catalogue=catalogue, root_type='Sample')
          for i, timestamp in enumerate(times):
             message = cls(value=i + 0.375 if cls is Q else i)
@@ -183,7 +183,7 @@ class RecordingTests(unittest.TestCase):
 
    def test_flush_exposes_complete_chunks_before_close(self):
       stream = io.BytesIO()
-      writer = RecordingWriter(stream)
+      writer = RecordingWriter(stream, format='mcap')
       c = writer.register_channel(topic='t', catalogue=description(V1), root_type='Sample')
       writer.write(c, V1(value=4), log_time_ns=10)
       writer.flush()
@@ -294,7 +294,7 @@ class RecordingTests(unittest.TestCase):
             return super().write(data)
 
       stream = FaultyStream()
-      writer = RecordingWriter(stream)
+      writer = RecordingWriter(stream, format='mcap')
       c = writer.register_channel(topic='t', catalogue=description(V1), root_type='Sample')
       writer.write(c, V1(value=1), log_time_ns=1)
       stream.fail = True

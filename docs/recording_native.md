@@ -66,17 +66,18 @@ target is 1 MiB. Chunk targets must be positive and at most 32 MiB minus 1024 by
 An individual record larger than the target gets its own chunk. Declaration writes
 also respect the target, even before any message is written.
 
-PCAPNG is selected explicitly on writer creation; readers detect the file magic:
+Writers default to PCAPNG; readers detect the file magic. Select MCAP explicitly:
 
-| API | PCAPNG selection |
+| API | MCAP selection |
 | --- | --- |
-| C | `sdl_recording_writer_open_format(path, 0, 1048576, SDL_RECORDING_FORMAT_PCAPNG)` |
-| Rust | `RecordingWriter::create_format(path, false, 1048576, RecordingFormat::Pcapng)` |
-| Java JNI | `new SdlRecording.Writer("capture.pcapng", SdlRecording.Format.PCAPNG)` |
-| Ada | `Create ("capture.pcapng", Format => PCAPNG)` |
-| MATLAB/Octave | `sdl_recording('open_writer', 'capture.pcapng', false, uint64(1048576), 'pcapng')` |
+| C | `sdl_recording_writer_open_format(path, 0, 1048576, SDL_RECORDING_FORMAT_MCAP)` |
+| Rust | `RecordingWriter::create_format(path, false, 1048576, RecordingFormat::Mcap)` |
+| Java JNI | `new SdlRecording.Writer("capture.mcap", SdlRecording.Format.MCAP)` |
+| Ada | `Create ("capture.mcap", Format => MCAP)` |
+| MATLAB/Octave | `sdl_recording('open_writer', 'capture.mcap', false, uint64(1048576), 'mcap')` |
 
-Existing writer entry points default to MCAP, regardless of filename. PCAPNG has
+Writer entry points without a format argument default to PCAPNG, regardless of
+filename. PCAPNG has
 one EPB per declaration/message, nanosecond timestamps, packet CRCs and a final
 END packet with counts and stream CRC. It has no chunks or message index;
 the chunk argument remains validated but does not affect PCAPNG output.
@@ -173,12 +174,12 @@ Include `build/recording/java` in the classpath and
 `-Djava.library.path=build/recording/release` when starting Java.
 
 ```java
-try (SdlRecording.Writer recording = new SdlRecording.Writer("capture.mcap")) {
+try (SdlRecording.Writer recording = new SdlRecording.Writer("capture.pcapng")) {
     int channel = recording.channel("radio/iq", catalogue, "RadioCapture");
     recording.write(channel, encodedPayload, logNs, publishNs, sequence);
 }
-SdlRecording.validate("capture.mcap");
-try (SdlRecording.Reader reader = new SdlRecording.Reader("capture.mcap")) {
+SdlRecording.validate("capture.pcapng");
+try (SdlRecording.Reader reader = new SdlRecording.Reader("capture.pcapng")) {
     reader.filter("radio/iq", null, null);
     reader.replay(0, new SdlRecording.Consumer() {
         public void accept(SdlRecording.Record record) {
@@ -208,7 +209,7 @@ required. A reader cannot be operated on or closed from its own replay callback.
 Add `runtime/recording/matlab` and `build/recording/mex` to the MATLAB/Octave path:
 
 ```matlab
-writer = sdl_recording('open_writer', 'capture.mcap');
+writer = sdl_recording('open_writer', 'capture.pcapng');
 try
     channel = sdl_recording('channel', writer, 'radio/iq', catalogue, 'RadioCapture');
     sdl_recording('write_encoded', writer, channel, uint8(encodedPayload), ...
@@ -218,8 +219,8 @@ catch err
     try, sdl_recording('close', writer); catch, end
     rethrow(err);
 end
-count = sdl_recording('validate', 'capture.mcap');
-reader = sdl_recording('open_reader', 'capture.mcap');
+count = sdl_recording('validate', 'capture.pcapng');
+reader = sdl_recording('open_reader', 'capture.pcapng');
 try
     sdl_recording('filter', reader, 'radio/iq', [], []);
     count = sdl_recording('replay', reader, 0, @(record) pipeline(record.payload, record.catalogue));
@@ -240,7 +241,7 @@ record text back to characters. Native record structs own their payload/text dat
 exceptions retain their original identifier/message, including under Octave.
 
 `open_writer(path,overwrite,chunkSize,format)` accepts optional logical overwrite,
-`uint64` chunk size and format `'mcap'` (default) or `'pcapng'`.
+`uint64` chunk size and format `'pcapng'` (default) or `'mcap'`.
 `write_encoded` defaults omitted log time to `now`, publish
 time to log time and sequence to zero. `flush(writer,sync)` defaults sync to false.
 `metadata(writer,name,pairs)` and `validate_payload(writer,enabled)` match C services.

@@ -30,9 +30,12 @@ def main():
     relative = '@loader_path' if sys.platform == 'darwin' else '$ORIGIN'
     link = ['-L'+str(OUT/'release'), '-lsdl_filter', '-Wl,-rpath,'+relative]
     if args.python:
+        # Android extensions must explicitly link the interpreter's shared library.
+        python_link = ([str(Path(sysconfig.get_config_var('LIBDIR')) /
+            sysconfig.get_config_var('LDLIBRARY'))] if sys.platform == 'android' else [])
         run(cc + ['-std=c99','-Wall','-Wextra','-Werror','-O3','-shared','-fPIC'] + include +
             ['-I'+sysconfig.get_path('include'), ROOT/'runtime/filter/python/sdl_filter_native.c',
-             *link,'-o', OUT/'release'/('_sdl_filter_native'+sysconfig.get_config_var('EXT_SUFFIX'))])
+             *python_link,*link,'-o', OUT/'release'/('_sdl_filter_native'+sysconfig.get_config_var('EXT_SUFFIX'))])
     if args.jni:
         javac = shutil.which(shlex.split(os.environ.get('JAVAC','javac'))[0])
         if not javac:

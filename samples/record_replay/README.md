@@ -9,8 +9,8 @@ From the repository root:
 
 ```sh
 make -C samples/record_replay demo
-# Or record, inspect and replay a USER0 PCAPNG file:
-make -C samples/record_replay demo RECORDING_FORMAT=pcapng
+# Or explicitly select MCAP:
+make -C samples/record_replay demo RECORDING_FORMAT=mcap
 ```
 
 The demo checks for the pinned optional `mcap` dependency and installs it in
@@ -18,9 +18,26 @@ The demo checks for the pinned optional `mcap` dependency and installs it in
 or a cached wheel; subsequent runs reuse the installation. Override `RECORDING_DEPS`
 to choose another dependency directory, or run `make recording-deps` beforehand.
 
-The demo creates `build/radio.mcap`, prints file information and a bounded
+The demo creates `build/radio.pcapng` by default, prints file information and a bounded
 structured display of the burst at 300 ms, validates the entire file, and replays without
 waiting. It compares `build/live.log` with `build/replayed.log` byte for byte.
+It then verifies topic and time filtering (300 ms included, 800 ms excluded),
+an unknown topic and an empty time range. The optional catalogue filter service
+is built with `make filter-python` and activated by `main.py --filter-log`:
+
+```text
+metadata.receiver_id == "demo-rx-01" && exists(operator_note) &&
+any(iq_samples, s => real(s) * real(s) + imag(s) * imag(s) > 4)
+```
+
+The predicate checks nested metadata, an optional field and the power of complex
+IQ samples. Live evaluation uses generated objects; replay evaluation reads the
+recorded SDL2 payloads directly. Both must match sequences 3 and 8 and reject the
+other eight captures. All ten captures remain in the recording and the full logs.
+The demo compares `build/live-filtered.log` and `build/replayed-filtered.log`
+byte for byte. This step needs Cargo, a C compiler and Python development headers;
+see [catalogue filtering](../../docs/filtering.md).
+
 Analysis logs use the runtime `display()` style, with one indented block per capture:
 
 ```text
@@ -34,14 +51,15 @@ CaptureAnalysis {
 ```
 
 The recording contains its catalogue; decoding it does not need generated classes.
-With `RECORDING_FORMAT=pcapng`, the same workflow creates `build/radio.pcapng`.
-The application writer accepts `--format mcap|pcapng`; readers detect the container.
+With `RECORDING_FORMAT=mcap`, the same workflow creates `build/radio.mcap`.
+The application writer accepts `--format mcap|pcapng`, defaulting to PCAPNG;
+readers detect the container.
 
 For a structured display of one recorded capture:
 
 ```sh
 PYTHONPATH=build/recording-deps \
-  python3 tools/recording/sdl-recording inspect samples/record_replay/build/radio.mcap \
+  python3 tools/recording/sdl-recording inspect samples/record_replay/build/radio.pcapng \
   --format text --topic radio/iq --from 300ms --limit 1
 ```
 
@@ -53,7 +71,7 @@ To replay at half speed:
 
 ```sh
 PYTHONPATH=build/recording-deps:samples/record_replay \
-  python3 tools/recording/sdl-recording replay samples/record_replay/build/radio.mcap \
+  python3 tools/recording/sdl-recording replay samples/record_replay/build/radio.pcapng \
   --speed 0.5 --consumer pipeline:on_record
 ```
 

@@ -35,9 +35,10 @@ typedef struct {
 uint32_t sdl_recording_abi_version(void);
 const char *sdl_recording_error(void);
 int sdl_recording_now(uint64_t *time_ns);
+/* Default container is PCAPNG, independently of the filename extension. */
 SdlRecordingWriter *sdl_recording_writer_open(SdlRecordingBytes path,
     uint8_t overwrite, uint64_t chunk_size);
-/* Additive ABI v1 entry point; existing writer_open retains MCAP behavior.
+/* Explicit container selection: SDL_RECORDING_FORMAT_MCAP or _PCAPNG.
  * Readers automatically detect MCAP or SDL PCAPNG by file magic. */
 SdlRecordingWriter *sdl_recording_writer_open_format(SdlRecordingBytes path,
     uint8_t overwrite, uint64_t chunk_size, uint8_t format);

@@ -198,7 +198,8 @@ def main(argv=None):
    convert = sub.add_parser('convert', help='preserve SDL records in another container')
    convert.add_argument('file')
    convert.add_argument('output')
-   convert.add_argument('--format', choices=('mcap', 'pcapng'), required=True, help='output container')
+   convert.add_argument('--format', choices=('mcap', 'pcapng'), default='pcapng',
+      help='output container (default: pcapng)')
    convert.add_argument('--overwrite', action='store_true')
    args = parser.parse_args(argv)
    try:

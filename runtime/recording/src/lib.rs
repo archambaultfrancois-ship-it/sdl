@@ -195,8 +195,9 @@ pub struct RecordingWriter {
     pending_bytes: u64,
 }
 impl RecordingWriter {
+    /// Create a PCAPNG recording regardless of the filename extension.
     pub fn create(path: impl AsRef<Path>, overwrite: bool, chunk_size: u64) -> Result<Self> {
-        Self::create_format(path, overwrite, chunk_size, RecordingFormat::Mcap)
+        Self::create_format(path, overwrite, chunk_size, RecordingFormat::Pcapng)
     }
     pub fn create_format(
         path: impl AsRef<Path>,

@@ -21,6 +21,28 @@ impl Drop for Temp {
     }
 }
 #[test]
+fn default_writer_uses_pcapng_regardless_of_extension() {
+    let path = Temp::new();
+    let mut writer = RecordingWriter::create(&path.0, false, 128).unwrap();
+    let channel = writer
+        .register_channel("radio", "SDL2|Packet{}", "Packet", BTreeMap::new())
+        .unwrap();
+    writer.write_encoded(channel, &[1], 10, 9, 3).unwrap();
+    writer.close().unwrap();
+    assert_eq!(&fs::read(&path.0).unwrap()[..4], &[0x0a, 0x0d, 0x0d, 0x0a]);
+    assert_eq!(validate(&path.0).unwrap(), 1);
+    let record = RecordingReader::open(&path.0)
+        .unwrap()
+        .next_record()
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.payload, [1]);
+    assert_eq!(
+        (record.log_time_ns, record.publish_time_ns, record.sequence),
+        (10, 9, 3)
+    );
+}
+#[test]
 fn native_api_roundtrip_filter_and_replay() {
     for format in [RecordingFormat::Mcap, RecordingFormat::Pcapng] {
         let path = Temp::new();

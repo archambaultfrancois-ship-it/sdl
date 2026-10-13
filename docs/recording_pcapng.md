@@ -4,23 +4,25 @@
 [PCAPNG](https://datatracker.ietf.org/doc/draft-ietf-opsawg-pcapng/06/).
 LINKTYPE_USER0 (147) is the local convention for this application transport;
 it is not a registered SDL link type. Packets carry SDL recording records directly,
-without synthetic Ethernet, IP or UDP headers. MCAP remains the default format.
+without synthetic Ethernet, IP or UDP headers. PCAPNG is the default recording
+format; MCAP remains available through explicit format selection.
 
 Catalogue, channel, payload, timestamp, ordering, filtering and replay semantics
 are shared with the [MCAP recording profile](recording.md). A file includes exact
 canonical UTF-8 SDL2 catalogues and complete raw SDL2 payloads; generated classes
 are unnecessary for dynamic inspection. All recording readers detect MCAP or
 SDL PCAPNG from file magic, independently of the filename extension. Writers
-require explicit format selection; a `.pcapng` suffix alone does not select it.
+default to PCAPNG independently of the filename extension. Select `mcap`
+explicitly to write MCAP; a `.mcap` suffix alone does not select it.
 
 ## Recording and tools
 
-After `make recording-deps`, the Python API selects PCAPNG as follows:
+After `make recording-deps`, the Python API writes PCAPNG by default:
 
 ```python
 from sdl_recording import RecordingWriter
 
-with RecordingWriter("capture.pcapng", format="pcapng") as writer:
+with RecordingWriter("capture.pcapng") as writer:
     channel = writer.register_channel(topic="radio/iq", catalogue=catalogue,
                                       root_type="RadioCapture")
     writer.write_encoded(channel, encoded_payload, log_time_ns=arrival_ns,
@@ -38,18 +40,19 @@ From the repository root:
 
 ```sh
 export PYTHONPATH="build/recording-deps:runtime/python:$PYTHONPATH"
-python3 tools/recording/sdl-recording convert capture.mcap capture.pcapng --format pcapng
+python3 tools/recording/sdl-recording convert capture.mcap capture.pcapng
 python3 tools/recording/sdl-recording info capture.pcapng
 python3 tools/recording/sdl-recording inspect capture.pcapng --format text --limit 1
 python3 tools/recording/sdl-recording inspect capture.pcapng --format table --limit 1
 python3 tools/recording/sdl-recording validate capture.pcapng
 python3 tools/recording/sdl-recording convert capture.pcapng restored.mcap --format mcap
-make -C samples/record_replay demo RECORDING_FORMAT=pcapng
+make -C samples/record_replay demo
 ```
 
 CLI replay also accepts PCAPNG, with the existing `--consumer module:function`,
 `--topic`, `--from`, `--to` and `--speed` options. Inspection's `--format` chooses
-the display style; conversion's `--format` chooses the output container.
+the display style; conversion's `--format` chooses the output container
+(default: `pcapng`).
 
 `convert_recording(source, output, format="pcapng", overwrite=False)` is the Python
 conversion API. Conversion validates the entire source before creating output,

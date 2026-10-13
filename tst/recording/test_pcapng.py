@@ -57,6 +57,19 @@ class PcapngTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.path = Path(self.tmp.name) / 'capture.pcapng'
     def tearDown(self): self.tmp.cleanup()
+    def test_default_writer_uses_pcapng_regardless_of_extension(self):
+        path = Path(self.tmp.name) / 'default.mcap'
+        payload = encode(prepare(description(Q), [Q]), Q(value=.375))
+        with RecordingWriter(path) as writer:
+            channel = writer.register_channel(topic='radio/iq', catalogue=description(Q), root_type='Sample')
+            writer.write_encoded(channel, payload, log_time_ns=10, publish_time_ns=9, sequence=3)
+        self.assertEqual(path.read_bytes()[:4], b'\x0a\x0d\x0d\x0a')
+        reader = RecordingReader(path)
+        self.assertEqual(reader.info()['format'], 'pcapng')
+        self.assertEqual(reader.validate(), 1)
+        record, = reader.iter_records()
+        self.assertEqual(record.payload, payload)
+        self.assertEqual((record.log_time_ns, record.publish_time_ns, record.sequence), (10, 9, 3))
     def record(self):
         payloads = []
         with RecordingWriter(self.path, format='pcapng', metadata={'producer':'é📻\0'}) as w:
@@ -102,9 +115,11 @@ class PcapngTests(unittest.TestCase):
         self.assertEqual(len(info['schemas']),3)
     def test_empty_recording_stream_ownership_exclusive_creation_and_defaults(self):
         stream = io.BytesIO()
-        with RecordingWriter(stream, format='pcapng'): pass
+        with RecordingWriter(stream): pass
         self.assertFalse(stream.closed)
         self.path.write_bytes(stream.getvalue())
+        self.assertEqual(stream.getvalue()[:4], b'\x0a\x0d\x0d\x0a')
+        self.assertEqual(RecordingReader(self.path).info()['format'], 'pcapng')
         self.assertEqual(RecordingReader(self.path).validate(),0)
         with self.assertRaises(FileExistsError): RecordingWriter(self.path,format='pcapng')
         with self.assertRaises(RecordingError): RecordingWriter(self.path,format='wrong',overwrite=True)
@@ -192,7 +207,7 @@ class PcapngTests(unittest.TestCase):
         self.assertEqual(info['channels'],before['channels'])
         with self.assertRaises(RecordingError): convert_recording(self.path,self.path,overwrite=True)
         with self.assertRaises(FileExistsError): convert_recording(self.path,pcap)
-        with RecordingWriter(Path(self.tmp.name)/'unused.mcap') as writer:
+        with RecordingWriter(Path(self.tmp.name)/'unused.mcap',format='mcap') as writer:
             writer.register_channel(topic='unused',catalogue=description(V1),root_type='Sample')
         unused=Path(self.tmp.name)/'unused.pcapng'
         convert_recording(Path(self.tmp.name)/'unused.mcap',unused)
@@ -210,6 +225,13 @@ class PcapngTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr); self.assertIn('message: Sample {',result.stdout)
         result=subprocess.run(command+['validate',str(other)],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr); self.assertEqual(json.loads(result.stdout)['message_count'],3)
+        default=Path(self.tmp.name)/'default.mcap'
+        result=subprocess.run(command+['convert',str(other),str(default)],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(json.loads(result.stdout)['format'],'pcapng')
+        self.assertEqual(RecordingReader(default).info()['format'],'pcapng')
+        self.assertEqual([r.payload for r in RecordingReader(default).iter_records()],
+                         [r.payload for r in RecordingReader(other).iter_records()])
 
 @unittest.skipUnless(LIBRARY.exists(),'optional native recording library not built')
 class PcapngNativeTests(unittest.TestCase):

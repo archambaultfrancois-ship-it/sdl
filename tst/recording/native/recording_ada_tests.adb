@@ -10,7 +10,7 @@ procedure Recording_Ada_Tests is
    Path : constant String := Ada.Command_Line.Argument (1);
    Format : constant Recording_Format :=
      (if Ada.Command_Line.Argument_Count > 1
-      then Recording_Format'Value (Ada.Command_Line.Argument (2)) else MCAP);
+      then Recording_Format'Value (Ada.Command_Line.Argument (2)) else PCAPNG);
    Seen : Natural := 0;
    procedure Consume (Item : Recording_Record) is
    begin

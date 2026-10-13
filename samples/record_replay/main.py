@@ -2,13 +2,14 @@
 """Record synthetic IQ captures while delivering the same payloads to analysis."""
 
 import argparse
+from contextlib import ExitStack
 import math
 import time
 
 from radio_capture import CaptureMetadata, CaptureMode, RadioCapture
 from sdl_runtime import Complex32, description, encode, prepare
 from sdl_recording import RecordingRecord, RecordingWriter
-from pipeline import on_record
+from pipeline import BURST_FILTER, on_record
 
 
 def acquire_captures(count):
@@ -32,22 +33,40 @@ def main():
    parser.add_argument('output')
    parser.add_argument('--count', type=int, default=10)
    parser.add_argument('--overwrite', action='store_true')
-   parser.add_argument('--format', choices=('mcap', 'pcapng'), default='mcap')
+   parser.add_argument('--format', choices=('mcap', 'pcapng'), default='pcapng',
+      help='output container (default: pcapng)')
+   parser.add_argument('--filter-log', help='also log only captures matching the IQ burst filter')
    args = parser.parse_args()
    if args.count < 1:
       parser.error('--count must be positive')
    catalogue = description(RadioCapture)
    context = prepare(catalogue, [RadioCapture])
-   with RecordingWriter(args.output, overwrite=args.overwrite, format=args.format,
-         metadata={'producer': 'SDL record/replay demo', 'receiver_id': 'demo-rx-01'}) as writer:
+   with ExitStack() as stack:
+      predicate = None
+      if args.filter_log:
+         from sdl_filter import Filter, Status
+         predicate = stack.enter_context(Filter(catalogue, 'RadioCapture', BURST_FILTER))
+         filtered_log = stack.enter_context(open(args.filter_log, 'w', encoding='utf-8'))
+      writer = stack.enter_context(RecordingWriter(args.output, overwrite=args.overwrite,
+         format=args.format,
+         metadata={'producer': 'SDL record/replay demo', 'receiver_id': 'demo-rx-01'}))
       channel = writer.register_channel(topic='radio/iq', catalogue=catalogue, root_type='RadioCapture')
       for capture in acquire_captures(args.count):
          payload = encode(context, capture)
          timestamp = capture.metadata.captured_at_ns
          writer.write_encoded(channel, payload, log_time_ns=timestamp,
             publish_time_ns=timestamp, sequence=capture.metadata.sequence)
-         on_record(RecordingRecord(channel, payload, timestamp, timestamp,
-            capture.metadata.sequence))
+         record = RecordingRecord(channel, payload, timestamp, timestamp,
+            capture.metadata.sequence)
+         on_record(record)
+         if predicate is not None:
+            result = predicate.evaluate(capture)
+            expected = Status.MATCH if capture.metadata.sequence % 5 == 3 else Status.NO_MATCH
+            if result.status != expected:
+               raise AssertionError('live filter sequence %d: %s, expected %s' %
+                  (capture.metadata.sequence, result, expected.name))
+            if result.matched:
+               on_record(record, output=filtered_log)
 
 
 if __name__ == '__main__':
