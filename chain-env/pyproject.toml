@@ -19,3 +19,7 @@ where = ["src"]
 "share/sdl-chain/sdk/c" = ["sdk/c/chain_component.h", "sdk/c/chain_component.c", "sdk/c/chain_callbacks.h", "sdk/c/chain_callbacks.c"]
 "share/sdl-chain/sdk/rust" = ["sdk/rust/Cargo.toml"]
 "share/sdl-chain/sdk/rust/src" = ["sdk/rust/src/lib.rs"]
+
+"share/sdl-chain/sdk/client/c" = ["sdk/client/c/chain_client.h", "sdk/client/c/chain_client_raw.h", "sdk/client/c/chain_client.c"]
+"share/sdl-chain/sdk/client/rust" = ["sdk/client/rust/Cargo.toml"]
+"share/sdl-chain/sdk/client/rust/src" = ["sdk/client/rust/src/lib.rs", "sdk/client/rust/src/ffi.rs", "sdk/client/rust/src/json.rs"]

@@ -52,3 +52,21 @@ class ModelTests(unittest.TestCase):
             model["components"]["observation"]["inputs"]["match"] = {"root": "Measurement", "required": False}
             with self.assertRaisesRegex(ValueError, "non-reserved ASCII"):
                 validate_graph(model, deployment)
+
+    def test_external_topics_and_explicit_input_bindings(self):
+        model=copy.deepcopy(self.model)
+        sub=model['subscriptions'][0]
+        topic='external.measurement'
+        node,port=sub['from'].split('.')
+        model['external_topics']={topic:{'root':model['components'][node]['outputs'][port]['root']}}
+        sub.pop('from');sub['from_topic']=topic
+        validate_graph(model,self.deployment)
+        for change in ('both','unknown','collision'):
+            bad=copy.deepcopy(model)
+            if change=='both':bad['subscriptions'][0]['from']='source.output'
+            elif change=='unknown':bad['subscriptions'][0]['from_topic']='unknown'
+            else:bad['external_topics'][f'{node}.{port}']=bad['external_topics'][topic]
+            with self.assertRaises(ValueError):validate_graph(bad,self.deployment)
+        for limits in ({'max_capacity':0},{'enabled':'yes'},{'durability':'disk'}):
+            deployment=copy.deepcopy(self.deployment);deployment['broker']={'external':limits}
+            with self.assertRaises(ValueError):validate_graph(model,deployment)

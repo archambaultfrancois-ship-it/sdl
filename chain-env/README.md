@@ -115,3 +115,8 @@ To extract, copy this project root into the new repository, retaining its SDKs,
 examples, tests and dependency lock. The nested `.github/workflows` directory
 becomes active when this directory becomes the repository root. No source paths
 need changing; build plans are regenerated for the new checkout location.
+
+The [Python, C and Rust external client SDKs](docs/clients.md) support publishing
+and subscribing to the broker without a client-side model. The application model
+can also declare `external_topics` and connect a topic to an input using
+`from_topic`. See the examples in `examples/external/`.

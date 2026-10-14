@@ -4,12 +4,36 @@ from chain_env.modeling.model import fields
 
 
 def validate_graph(model, deployment):
-    fields(model, ("version", "schemas", "components", "subscriptions"), ("version", "schemas", "components", "subscriptions"))
-    fields(deployment, ("version", "components", "subscriptions", "max_frame", "max_datagram"), ("version", "components"))
+    fields(model, ("version", "schemas", "components", "subscriptions", "external_topics"), ("version", "schemas", "components", "subscriptions"))
+    fields(deployment, ("version", "components", "subscriptions", "max_frame", "max_datagram", "broker"), ("version", "components"))
     if not isinstance(model["schemas"], str) or not model["schemas"]:
         raise ValueError("schemas must be a nonempty path")
     if not isinstance(deployment["components"], dict) or not isinstance(deployment.get("subscriptions", {}), dict):
         raise ValueError("deployment components and subscriptions must be objects")
+    broker = deployment.get("broker", {})
+    fields(broker, ("host", "external"))
+    if broker.get("host", "127.0.0.1") not in ("127.0.0.1", "0.0.0.0"):
+        raise ValueError("local deployment broker host must be 127.0.0.1 or 0.0.0.0")
+    from chain_env.config import EXTERNAL_LIMITS
+    limits = broker.get("external", {})
+    fields(limits, tuple(EXTERNAL_LIMITS))
+    for key, value in limits.items():
+        if key == "enabled":
+            if type(value) is not bool:
+                raise ValueError("external enabled must be boolean")
+        elif type(value) is not int or value <= 0:
+            raise ValueError(f"{key} must be positive")
+    external = model.get("external_topics", {})
+    if not isinstance(external, dict):
+        raise ValueError("external_topics must be an object")
+    for topic, desc in external.items():
+        if not isinstance(topic, str) or not 0 < len(topic) <= 200:
+            raise ValueError("invalid external topic")
+        fields(desc, ("root", "schema"), ("root",))
+        if not isinstance(desc["root"], str) or not desc["root"]:
+            raise ValueError("invalid external topic root")
+        if "schema" in desc and (not isinstance(desc["schema"], str) or not desc["schema"]):
+            raise ValueError("invalid external topic schema")
     components = model["components"]
     if not isinstance(components, dict) or not components:
         raise ValueError("components must be a nonempty object")
@@ -79,21 +103,29 @@ def validate_graph(model, deployment):
         for command in ([execution["command"]] if "command" in execution else []) + execution.get("build", []):
             if not isinstance(command, list) or not command or not all(isinstance(x, str) for x in command):
                 raise ValueError("commands must be nonempty argv lists")
+    if set(external) & {f"{name}.{port}" for name, node in components.items() for port in node["outputs"]}:
+        raise ValueError("external topic conflicts with an internal output")
     edges = {name: set() for name in components}
     targets, ids = set(), set()
     if not isinstance(model["subscriptions"], list):
         raise ValueError("subscriptions must be a list")
     for sub in model["subscriptions"]:
-        fields(sub, ("id", "from", "to", "qos"), ("id", "from", "to"))
+        fields(sub, ("id", "from", "from_topic", "to", "qos"), ("id", "to"))
+        if ("from" in sub) == ("from_topic" in sub):
+            raise ValueError("subscription needs exactly one from or from_topic")
         if not isinstance(sub["id"], str) or not sub["id"] or sub["id"] in ids:
             raise ValueError("subscription IDs must be unique, nonempty strings")
         ids.add(sub["id"])
-        source, output = endpoint(sub["from"], components, "outputs")
+        if "from" in sub:
+            source, output = endpoint(sub["from"], components, "outputs")
+        elif sub["from_topic"] not in external:
+            raise ValueError("unknown external topic")
         target, input_port = endpoint(sub["to"], components, "inputs")
         if sub["to"] in targets:
             raise ValueError("each input must have exactly one producer")
         targets.add(sub["to"])
-        edges[source].add(target)
+        if "from" in sub:
+            edges[source].add(target)
     if set(deployment.get("subscriptions", {})) - ids:
         raise ValueError("unknown subscription in deployment")
     for name, node in components.items():

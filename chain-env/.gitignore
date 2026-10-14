@@ -4,3 +4,8 @@ __pycache__/
 *.sqlite*
 /sdk/rust/target/
 /sdk/rust/Cargo.lock
+
+/sdk/client/rust/target/
+/sdk/client/rust/Cargo.lock
+/examples/external/rust/Cargo.lock
+/examples/external/rust/target/

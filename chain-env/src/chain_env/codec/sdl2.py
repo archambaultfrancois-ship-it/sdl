@@ -8,7 +8,10 @@ import subprocess
 import sys
 
 
-class SDL2:
+from chain_env.codec.runtime import Runtime
+
+
+class SDL2(Runtime):
     def __init__(self, root):
         self.root = Path(root).resolve()
         self._bindings = {}
@@ -76,24 +79,3 @@ print(json.dumps({'catalogue':description(types), 'types':{message_name(t):[t.__
                     raise ValueError(f"cannot resolve generated Rust binding for {logical}")
                 result[logical] = [module.replace(".", "::"), symbol]
         return result
-
-    def compare(self, publisher, consumer, root):
-        report = self.api.compare_catalogues(publisher, consumer, root=root, require_required=True)
-        if not report.compatible:
-            raise ValueError(f"SDL2 {report.code} at {report.path}")
-
-    def identity(self, text):
-        return self.api.catalogue_id(text)
-
-    def validate(self, text, root, envelope):
-        identity, payload = self.api.unpack_envelope(envelope)
-        if identity != self.identity(text):
-            raise ValueError("catalogue identity mismatch")
-        context = self.api.prepare(text)
-        value = self.api.decode_dynamic(context, payload)
-        if value.type_name != root:
-            raise ValueError("unexpected root message")
-        return value
-
-    def wrap(self, text, payload):
-        return self.api.pack_envelope(self.identity(text), payload)

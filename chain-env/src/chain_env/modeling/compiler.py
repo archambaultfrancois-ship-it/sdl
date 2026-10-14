@@ -80,24 +80,34 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
         node["cwd"] = str((deployment_path.parent / expand(execution.get("cwd", "."))).resolve())
         node["env"] = {k: expand(v) for k, v in execution.get("env", {}).items()}
         components[name] = node
+    external_topics = {}
+    for topic, desc in model.get("external_topics", {}).items():
+        text = catalogue(desc.get("schema", model["schemas"]))
+        if desc["root"] not in codec.api.message_names(codec.api.prepare(text)):
+            raise ValueError(f"unknown root {desc['root']}")
+        external_topics[topic] = {**desc, "catalogue": text, "catalogue_id": codec.identity(text)}
     subscriptions = []
     for sub in model["subscriptions"]:
-        source, output = sub["from"].split(".")
+        if "from" in sub:
+            source, output = sub["from"].split(".")
+            publisher = components[source]["outputs"][output]
+        else:
+            publisher = external_topics[sub["from_topic"]]
         target, input_port = sub["to"].split(".")
-        publisher, consumer = components[source]["outputs"][output], components[target]["inputs"][input_port]
+        consumer = components[target]["inputs"][input_port]
         if publisher["root"] != consumer["root"]:
             raise ValueError("connected port roots must have the same logical name")
         codec.compare(publisher["catalogue"], consumer["catalogue"], publisher["root"])
         binding = deployment.get("subscriptions", {}).get(sub["id"], {})
         fields(binding, ("transport",))
         policy = SubscriptionPolicy.resolve(sub.get("qos"), binding.get("transport", "tcp"))
-        subscriptions.append({**sub, "policy": policy.to_dict()})
+        subscriptions.append({**sub, "from": sub.get("from", sub.get("from_topic")), "policy": policy.to_dict()})
     for key, default in (("max_frame", 1024 * 1024), ("max_datagram", 1200)):
         value = deployment.get(key, default)
         if type(value) is not int or value < 128 or (key == "max_datagram" and value > 65507):
             raise ValueError(f"invalid {key}")
     return {"version": 1, "sdl_root": str(codec.root), "components": components, "subscriptions": subscriptions,
-            "build_dir": str(destination), "max_frame": deployment.get("max_frame", 1024 * 1024),
+            "external_topics": external_topics, "broker": deployment.get("broker", {}), "build_dir": str(destination), "max_frame": deployment.get("max_frame", 1024 * 1024),
             "max_datagram": deployment.get("max_datagram", 1200)}
 
 

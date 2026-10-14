@@ -4,6 +4,12 @@ import struct
 from chain_env.transport.protocol import encode, decode
 
 
+class RemoteError(ValueError):
+    def __init__(self, message, code="invalid_request"):
+        self.code = code
+        super().__init__(message)
+
+
 class TCP:
     def __init__(self, reader, writer, limit=1024 * 1024):
         self.reader, self.writer, self.limit = reader, writer, limit
@@ -50,10 +56,12 @@ class Client:
         future = asyncio.get_running_loop().create_future()
         self.pending[identity] = future
         try:
-            await self.tcp.send({"op": op, "request": identity, **arguments}, payload)
-            header, body = await asyncio.wait_for(future, self.request_timeout if timeout is None else timeout)
+            async def exchange():
+                await self.tcp.send({"op": op, "request": identity, **arguments}, payload)
+                return await future
+            header, body = await asyncio.wait_for(exchange(), self.request_timeout if timeout is None else timeout)
             if "error" in header:
-                raise ValueError(header["error"])
+                raise RemoteError(header["error"], header.get("error_code", "invalid_request"))
             if header.get("content") == "json":
                 result = json.loads(body)
                 if not isinstance(result, dict):
