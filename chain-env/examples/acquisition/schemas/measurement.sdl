@@ -1,0 +1,5 @@
+/** A sequenced measurement shared by three component languages. */
+message Measurement {
+    1: required uint64 sequence;
+    2: required fl64 value;
+}

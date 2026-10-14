@@ -1,0 +1,6 @@
+/build/
+*.egg-info/
+__pycache__/
+*.sqlite*
+/sdk/rust/target/
+/sdk/rust/Cargo.lock

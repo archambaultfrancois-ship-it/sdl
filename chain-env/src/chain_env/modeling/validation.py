@@ -1,0 +1,124 @@
+"""Structural graph validation, independent of SDL and execution."""
+import re
+from chain_env.modeling.model import fields
+
+
+def validate_graph(model, deployment):
+    fields(model, ("version", "schemas", "components", "subscriptions"), ("version", "schemas", "components", "subscriptions"))
+    fields(deployment, ("version", "components", "subscriptions", "max_frame", "max_datagram"), ("version", "components"))
+    if not isinstance(model["schemas"], str) or not model["schemas"]:
+        raise ValueError("schemas must be a nonempty path")
+    if not isinstance(deployment["components"], dict) or not isinstance(deployment.get("subscriptions", {}), dict):
+        raise ValueError("deployment components and subscriptions must be objects")
+    components = model["components"]
+    if not isinstance(components, dict) or not components:
+        raise ValueError("components must be a nonempty object")
+    if set(deployment["components"]) != set(components):
+        raise ValueError("deployment must cover exactly the model components")
+    for name, node in components.items():
+        if not name or "." in name:
+            raise ValueError("component names must be nonempty and contain no dots")
+        fields(node, ("inputs", "outputs", "trigger", "parameters"), ("inputs", "outputs", "trigger"))
+        if not isinstance(node.get("parameters", {}), dict):
+            raise ValueError("parameters must be an object")
+        for direction in ("inputs", "outputs"):
+            if not isinstance(node[direction], dict):
+                raise ValueError("ports must be an object")
+            for port, desc in node[direction].items():
+                if not port or "." in port:
+                    raise ValueError("port names must be nonempty and contain no dots")
+                fields(desc, ("root", "schema", "required"), ("root",))
+                if not isinstance(desc["root"], str) or not desc["root"]:
+                    raise ValueError("port root must be a nonempty string")
+                if "required" in desc and type(desc["required"]) is not bool:
+                    raise ValueError("required must be boolean")
+                if "schema" in desc and (not isinstance(desc["schema"], str) or not desc["schema"]):
+                    raise ValueError("schema must be a nonempty path")
+        trigger = node["trigger"]
+        fields(trigger, ("mode", "period_ms"), ("mode",))
+        if trigger["mode"] not in ("periodic", "on_change"):
+            raise ValueError("unsupported trigger")
+        if trigger["mode"] == "periodic" and (type(trigger.get("period_ms")) is not int or trigger["period_ms"] <= 0):
+            raise ValueError("periodic trigger requires a positive period_ms")
+        if not node["inputs"] and trigger["mode"] != "periodic":
+            raise ValueError("sources must be periodic")
+        execution = deployment["components"][name]
+        fields(execution, ("command", "container", "build", "cwd", "env", "placement"))
+        if ("command" in execution) == ("container" in execution):
+            raise ValueError("each component needs exactly one command or container")
+        if "container" in execution:
+            container = execution["container"]
+            fields(container, ("language", "handler"), ("language", "handler"))
+            language = container["language"]
+            if language not in ("python", "c", "rust"):
+                raise ValueError("container language must be python, c or rust")
+            if not isinstance(container["handler"], str) or not container["handler"]:
+                raise ValueError("container handler must be a nonempty file path")
+            if not name.isidentifier():
+                raise ValueError("generated component names must be identifiers")
+            native_keywords = set(("auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while _Bool _Complex _Imaginary bool true false complex imaginary I NULL offsetof as crate fn impl in let loop match mod move mut pub ref self Self super trait type unsafe use where async await dyn abstract become box final macro override priv typeof unsized virtual yield try").split())
+            if language != "python" and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name):
+                raise ValueError("generated native component names must be ASCII identifiers")
+            for direction in ("inputs", "outputs"):
+                for port in node[direction]:
+                    if not port.isidentifier():
+                        raise ValueError("generated port names must be identifiers")
+                    if language != "python" and (not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", port) or port in native_keywords):
+                        raise ValueError("generated native port names must be portable, non-reserved ASCII identifiers")
+                    if direction == "inputs" and port in ("start", "stop", "tick"):
+                        raise ValueError(f"input {port!r} conflicts with a reserved callback")
+        if execution.get("placement", "local") != "local":
+            raise ValueError("only local placement is implemented")
+        if not isinstance(execution.get("build", []), list):
+            raise ValueError("build must be a list of argv commands")
+        if not isinstance(execution.get("cwd", "."), str):
+            raise ValueError("cwd must be a path string")
+        env = execution.get("env", {})
+        if not isinstance(env, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
+            raise ValueError("env must map strings to strings")
+        for command in ([execution["command"]] if "command" in execution else []) + execution.get("build", []):
+            if not isinstance(command, list) or not command or not all(isinstance(x, str) for x in command):
+                raise ValueError("commands must be nonempty argv lists")
+    edges = {name: set() for name in components}
+    targets, ids = set(), set()
+    if not isinstance(model["subscriptions"], list):
+        raise ValueError("subscriptions must be a list")
+    for sub in model["subscriptions"]:
+        fields(sub, ("id", "from", "to", "qos"), ("id", "from", "to"))
+        if not isinstance(sub["id"], str) or not sub["id"] or sub["id"] in ids:
+            raise ValueError("subscription IDs must be unique, nonempty strings")
+        ids.add(sub["id"])
+        source, output = endpoint(sub["from"], components, "outputs")
+        target, input_port = endpoint(sub["to"], components, "inputs")
+        if sub["to"] in targets:
+            raise ValueError("each input must have exactly one producer")
+        targets.add(sub["to"])
+        edges[source].add(target)
+    if set(deployment.get("subscriptions", {})) - ids:
+        raise ValueError("unknown subscription in deployment")
+    for name, node in components.items():
+        for port, desc in node["inputs"].items():
+            if desc.get("required", True) and f"{name}.{port}" not in targets:
+                raise ValueError(f"unconnected required input {name}.{port}")
+    visiting, visited = set(), set()
+    def walk(node):
+        if node in visiting:
+            raise ValueError("graph contains a cycle")
+        if node in visited:
+            return
+        visiting.add(node)
+        for child in edges[node]:
+            walk(child)
+        visiting.remove(node)
+        visited.add(node)
+    for name in edges:
+        walk(name)
+
+
+def endpoint(value, components, direction):
+    if not isinstance(value, str) or value.count(".") != 1:
+        raise ValueError(f"invalid endpoint: {value}")
+    node, port = value.split(".")
+    if node not in components or port not in components[node][direction]:
+        raise ValueError(f"unknown {direction} endpoint: {value}")
+    return node, port

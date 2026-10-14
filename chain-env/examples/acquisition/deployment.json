@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "components": {
+    "acquisition": {
+      "container": {"language": "c", "handler": "components/source.c"}
+    },
+    "analyse": {
+      "container": {"language": "rust", "handler": "components/transform.rs"}
+    },
+    "observation": {
+      "container": {"language": "python", "handler": "components/observer.py"}
+    },
+    "affichage": {
+      "container": {"language": "python", "handler": "components/observer.py"}
+    }
+  },
+  "subscriptions": {
+    "analyse-observation": {"transport": "udp"},
+    "analyse-affichage": {"transport": "udp"}
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "schemas": "schemas",
+  "components": {
+    "acquisition": {"inputs": {}, "outputs": {"measure": {"root": "Measurement"}}, "trigger": {"mode": "periodic", "period_ms": 20}},
+    "analyse": {"inputs": {"input": {"root": "Measurement"}}, "outputs": {"result": {"root": "Measurement"}}, "trigger": {"mode": "on_change"}},
+    "observation": {"inputs": {"input": {"root": "Measurement"}}, "outputs": {}, "trigger": {"mode": "on_change"}},
+    "affichage": {"inputs": {"input": {"root": "Measurement"}}, "outputs": {}, "trigger": {"mode": "periodic", "period_ms": 100}}
+  },
+  "subscriptions": [
+    {"id": "source-analyse", "from": "acquisition.measure", "to": "analyse.input", "qos": {"buffer": "fifo", "ack": "received", "retry": {}}},
+    {"id": "analyse-observation", "from": "analyse.result", "to": "observation.input", "qos": {"buffer": "fifo", "ack": "received", "retry": {}}},
+    {"id": "analyse-affichage", "from": "analyse.result", "to": "affichage.input", "qos": {"buffer": "latest"}}
+  ]
+}

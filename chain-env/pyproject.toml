@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sdl-chain"
+version = "0.1.0"
+description = "Executable SDL2 component graphs with per-subscription delivery policies"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[project.scripts]
+sdl-chain = "chain_env.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.data-files]
+"share/sdl-chain/sdk/c" = ["sdk/c/chain_component.h", "sdk/c/chain_component.c", "sdk/c/chain_callbacks.h", "sdk/c/chain_callbacks.c"]
+"share/sdl-chain/sdk/rust" = ["sdk/rust/Cargo.toml"]
+"share/sdl-chain/sdk/rust/src" = ["sdk/rust/src/lib.rs"]
