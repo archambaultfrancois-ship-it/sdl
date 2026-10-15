@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "components": {
+    "source": {"container": {"language": "c", "handler": "../acquisition/components/source.c"}},
+    "left": {"container": {"language": "python", "handler": "left.py"}},
+    "right": {"container": {"language": "rust", "handler": "../acquisition/components/transform.rs"}},
+    "join": {"container": {"language": "python", "handler": "join.py"}}
+  }
+}

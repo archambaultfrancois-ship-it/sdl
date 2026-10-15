@@ -2,7 +2,7 @@
 import json
 import struct
 import sys
-from chain_env.execution.ipc import MAX_SIZE, frame, port_data, unpack_port
+from chain_env.execution.ipc import MAX_SIZE, TICK_CONTEXT, frame, port_data, unpack_port, tick_context
 
 
 def read_exact(stream, size):
@@ -16,7 +16,7 @@ def read_exact(stream, size):
 
 
 class ComponentSession:
-    def __init__(self, reader=None, writer=None, *, auto_ready=True):
+    def __init__(self, reader=None, writer=None, *, auto_ready=True, timed_ticks=False):
         self.reader = reader or sys.stdin.buffer
         self.writer = writer or sys.stdout.buffer
         op, payload = self.receive()
@@ -24,12 +24,14 @@ class ComponentSession:
             raise ValueError("expected INIT")
         self.config = json.loads(payload)
         self.is_ready = False
+        self.timed_ticks = timed_ticks
+        self.time_ns, self.tick_index = 0, 0
         if auto_ready:
             self.ready()
 
     def ready(self):
         if not self.is_ready:
-            self.send("R")
+            self.send("R", TICK_CONTEXT if self.timed_ticks else b"")
             self.is_ready = True
 
     def receive(self):
@@ -56,10 +58,13 @@ class ComponentSession:
                     raise ValueError("duplicate input in tick")
                 inputs[port] = None if not catalogue and not payload else (catalogue, payload)
             elif op == "T":
+                self.time_ns, self.tick_index = tick_context(data, self.tick_index)
                 yield inputs
                 self.send("F")
                 inputs = {}
             elif op == "X":
+                if data:
+                    raise ValueError("STOP must be empty")
                 return
             else:
                 raise ValueError("unexpected adapter event")

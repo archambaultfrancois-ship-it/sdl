@@ -9,6 +9,18 @@ static uint32_t number(const uint8_t *b) {
 static void header(uint8_t *b, uint32_t n) {
     b[0]=(uint8_t)(n>>24); b[1]=(uint8_t)(n>>16); b[2]=(uint8_t)(n>>8); b[3]=(uint8_t)n;
 }
+int chain_ready(void) {
+    const uint8_t capability = 1;
+    return chain_send('R', &capability, 1);
+}
+int chain_tick(const ChainEvent *event, uint64_t *time_ns, uint64_t *tick_index) {
+    if (event->op != 'T') return 0;
+    if (!event->size) { *time_ns = 0; ++*tick_index; return 1; }
+    if (event->size != 16) return 0;
+    *time_ns = ((uint64_t)number(event->data) << 32) | number(event->data + 4);
+    *tick_index = ((uint64_t)number(event->data + 8) << 32) | number(event->data + 12);
+    return *tick_index != 0;
+}
 static int read_all(void *data, size_t size) {
     size_t offset=0;
     while (offset<size) {

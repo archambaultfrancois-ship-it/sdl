@@ -73,6 +73,12 @@ never silently weakening an unsupported profile.
 
 ## Process lifecycle
 
+The runtime also provides a [functional simulated engine](simulation.md), selected
+by `run --mode simulated`. It uses the same compiled plan and component protocol,
+with central virtual-time coordination and direct bounded RAM admission instead
+of network adapters and broker processes. Parallel calculations cross deterministic
+publication barriers, so worker count does not change the logical execution.
+
 See [runtime execution, ticks and message flow](runtime.md) for a detailed
 walkthrough of startup, input selection, callbacks and delivery confirmations.
 

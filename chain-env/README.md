@@ -19,7 +19,7 @@ From this project's root inside an SDL checkout:
 ```sh
 make validate
 make demo
-make test
+make check
 ```
 
 `SDL_ROOT` defaults to the parent of this project (`..`). To use another checkout,
@@ -65,6 +65,7 @@ failure counts, as well as observed average publication and processing rates.
 
 See [architecture](docs/architecture.md) for document fields and process layout,
 [runtime execution](docs/runtime.md) for ticks, message flow and acknowledgements,
+[simulation](docs/simulation.md) for reproducible virtual-time execution and parallel workers,
 [delivery](docs/delivery.md) for FIFO/latest semantics and transport guarantees,
 and [component protocol](sdk/protocol.md) for the Python, C and Rust SDK boundary.
 The example documents are complete runnable model/deployment templates.
@@ -92,6 +93,16 @@ The dependency-free Rust stdio crate lives in
 perform the actual message encoding and decoding.
 
 ## Tests and extraction
+
+`make check` runs all test suites in sequence with a compact progress bar. It
+prints the complete output of a failing suite and stops immediately. Use
+`make test` for verbose output from every suite.
+
+`make test-simulated` checks deterministic virtual-time execution across worker
+counts, native containers, scenarios, timeouts and bounded queue admission.
+Choose `sdl-chain run --mode simulated --duration 60 --workers 4` to simulate
+60 virtual seconds. The default remains real-time execution. See the
+[parallel simulation example](docs/simulation.md#runnable-parallel-example).
 
 `make test-unit` needs only Python. `make test-sdk` runs the Rust SDK checks.
 `make test-integration` uses sockets, injects

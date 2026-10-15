@@ -67,7 +67,8 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
     destination, sdl_root = Path(destination), Path(sdl_root)
     bindings = destination / "types"
     types = merge_schemas(name, "c", schemas, bindings)
-    reserved = {"ChainContext", "ChainPortSpec", "ChainHook", "ComponentCallbacks", "main", "dispatch", "inputs", "outputs"}
+    reserved = {"ChainContext", "ChainPortSpec", "ChainHook", "ComponentCallbacks", "main", "dispatch", "inputs", "outputs",
+                "chain_now", "chain_time_ns", "chain_tick_index"}
     if node["inputs"]:
         reserved.add("ComponentInputs")
     reserved.update("publish_" + port for port in node["outputs"])
@@ -151,10 +152,14 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
              "pub type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;",
              "fn codec<T>(value: std::result::Result<T, sdl_runtime::CodecError>) -> Result<T> {",
              '    value.map_err(|error| format!("SDL codec: {error:?}").into())', "}",
-             "pub struct Context {", "    pub name: &'static str,", "    pub config_json: String,", "    active: bool,"]
+             "pub struct Context {", "    pub name: &'static str,", "    pub config_json: String,", "    active: bool,",
+             "    tick: sdl_chain_component::TickContext,"]
     for port in node["outputs"]:
         lines.append(f"    output_{port}: sdl_runtime::Context,")
-    lines += ["}", "impl Context {"]
+    lines += ["}", "impl Context {",
+              "    pub fn time_ns(&self) -> u64 { self.tick.time_ns }",
+              "    pub fn tick_index(&self) -> u64 { self.tick.tick_index }",
+              "    pub fn now(&self) -> f64 { self.time_ns() as f64 / 1_000_000_000.0 }"]
     for port, desc in node["outputs"].items():
         module, symbol = types[desc["root"]]
         lines += [f"    pub fn publish_{port}(&mut self, message: &crate::types::{module}::{symbol}) -> Result {{",
@@ -188,7 +193,7 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
         lines += ["    fn on_tick(&mut self, _ctx: &mut Context) -> Result {", '        Err("implement on_tick".into())']
     lines += ["    }", "}", "pub fn run<H: Callbacks>(mut handler: H) -> Result {", "    let init = receive()?;",
               '    if init.op != b\'I\' { return Err("expected INIT".into()); }', "    let mut ctx = Context {",
-              f"        name: {rust_string(name)}, config_json: String::from_utf8(init.data)?, active: false,"]
+              f"        name: {rust_string(name)}, config_json: String::from_utf8(init.data)?, active: false, tick: Default::default(),"]
     for port, desc in node["outputs"].items():
         module, symbol = types[desc["root"]]
         lines.append(f"        output_{port}: codec(sdl_runtime::prepare({rust_string(desc['catalogue'])}, &[crate::types::{module}::{symbol}::type_info()]))?,")
@@ -198,7 +203,7 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
         lines += [f"        let mut selected_{port}: Option<crate::types::{module}::{symbol}> = None;",
                   f"        let mut received_{port} = false;",
                   f"        let mut decoder_{port}: Option<(String, sdl_runtime::Context)> = None;"]
-    lines += ["        handler.on_start(&mut ctx)?;", "        send(b'R', &[])?;", "        loop {", "            let event = receive()?;",
+    lines += ["        handler.on_start(&mut ctx)?;", "        send(b'R', sdl_chain_component::TICK_CONTEXT)?;", "        loop {", "            let event = receive()?;",
               "            match event.op {", "                b'D' => {", "                    let data = input(&event)?;",
               "                    match data.port {"]
     for port, desc in node["inputs"].items():
@@ -220,7 +225,7 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
             lines.append("                            }")
         lines.append("                        }")
     lines += ['                        _ => return Err("unknown input port".into()),', "                    }", "                }",
-              "                b'T' if event.data.is_empty() => {"]
+              "                b'T' => {", "                    ctx.tick = sdl_chain_component::tick(&event, ctx.tick_index())?;"]
     for port, desc in node["inputs"].items():
         if desc.get("required", True):
             lines.append(f'                    if !received_{port} {{ return Err("missing required input: {port}".into()); }}')

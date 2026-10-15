@@ -26,6 +26,17 @@ class CallbackContext:
         self._encoders = {port: codec.api.prepare(self.config["outputs"][port]["catalogue"], [cls])
                           for port, cls in output_types.items()}
 
+    @property
+    def time_ns(self):
+        return self.session.time_ns
+
+    @property
+    def tick_index(self):
+        return self.session.tick_index
+
+    def now(self):
+        return self.time_ns / 1_000_000_000
+
     def publish(self, port, message):
         if not self._active:
             raise RuntimeError("publication is only allowed inside a tick callback")
@@ -105,7 +116,7 @@ def run_callbacks(*, name, handler, sdl_root, input_types, output_types,
                   context_type=CallbackContext, reader=None, writer=None):
     """Dispatch one complete scheduler snapshot, finishing only successful ticks."""
     codec = SDL2(sdl_root)
-    session = ComponentSession(reader, writer, auto_ready=False)
+    session = ComponentSession(reader, writer, auto_ready=False, timed_ticks=True)
     context = context_type(session, name, input_types, output_types, codec)
     module = _load_handler(handler)
     start = _callback(module, "on_start", 1)

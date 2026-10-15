@@ -9,12 +9,27 @@ catalogue-relative message ID, without S2PS/2 (the adapter adds/removes it).
 | Opcode | Direction | Body |
 | --- | --- | --- |
 | `I` INIT | Adapter → component | JSON component configuration, parameters and port catalogues |
-| `R` READY | Component → adapter | Empty |
+| `R` READY | Component → engine | Empty (legacy), or byte `0x01` to support timestamped TICKs |
 | `D` INPUT | Adapter → component | u16 port length, port, u32 catalogue length, catalogue, SDL2 payload |
-| `T` TICK | Adapter → component | Empty; preceding INPUT frames form this tick's snapshot |
+| `T` TICK | Engine → component | Empty (legacy), or u64 time_ns then u64 tick_index; preceding INPUTs form the snapshot |
 | `P` PUBLISH | Component → adapter | u16 port length, port, SDL2 payload |
 | `F` FINISHED | Component → adapter | Empty |
 | `X` STOP | Adapter → component | Empty |
+
+Timestamp fields are unsigned and big endian. An extended TICK has exactly 16
+body bytes and a positive component-local tick index, starting at one. A component
+advertises support with READY body `0x01`. The real-time adapter sends extended
+ticks only to capable components and retains empty ticks for legacy READYs.
+Simulation requires the capability and rejects legacy components before ticking.
+Other READY bodies and malformed TICK contexts are rejected.
+
+Updated generated containers advertise the capability automatically and accept
+empty historical ticks too, using time zero and the next local index. Raw Python
+components use `ComponentSession(timed_ticks=True)`; C uses `chain_ready()` and
+`chain_tick()`; Rust uses `send(b'R', TICK_CONTEXT)` and `tick()`. The raw Rust
+`initialize()` convenience function retains the legacy empty READY. Lifecycle
+ordering and callback signatures are unchanged. The [simulation guide](../docs/simulation.md)
+documents the clock context in all three languages.
 
 An INPUT with both catalogue length zero and an empty SDL2 payload represents
 an explicit null on a required input with a configured timeout. It has the same

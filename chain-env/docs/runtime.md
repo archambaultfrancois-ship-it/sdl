@@ -1,5 +1,9 @@
 # Runtime execution, ticks and message flow
 
+This document describes the default `realtime` engine. The
+[simulated engine](simulation.md) runs the same component callbacks with a central
+virtual clock, deterministic publication barriers and optional parallel workers.
+
 A **tick is one processing cycle of a modeled component**. Its adapter selects
 the input values for that cycle, sends them to the component, requests execution
 and waits for the component to report completion.

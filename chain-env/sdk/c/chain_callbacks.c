@@ -20,6 +20,10 @@ typedef struct {
     int active, failed;
 } Runtime;
 
+double chain_now(const ChainContext *ctx) { return (double)ctx->time_ns / 1000000000.0; }
+uint64_t chain_time_ns(const ChainContext *ctx) { return ctx->time_ns; }
+uint64_t chain_tick_index(const ChainContext *ctx) { return ctx->tick_index; }
+
 int chain_fail(ChainContext *ctx, const char *message) {
     Runtime *runtime = ctx->private_runtime;
     runtime->failed = 1;
@@ -123,12 +127,14 @@ int chain_run_callbacks(const char *name,
         if (!runtime.encoders[index]) goto cleanup;
     }
     initialized = 1;
-    if ((start && !start(&ctx)) || runtime.failed || !chain_send('R', NULL, 0)) goto cleanup;
+    if ((start && !start(&ctx)) || runtime.failed || !chain_ready()) goto cleanup;
     while (chain_read(&event)) {
         char op = event.op;
         int valid = 1;
         if (op == 'D') valid = admit(&ctx, &event);
-        else if (event.size || (op != 'T' && op != 'X')) valid = chain_fail(&ctx, "unexpected component event");
+        else if (op == 'T') {
+            if (!chain_tick(&event, &ctx.time_ns, &ctx.tick_index)) valid = chain_fail(&ctx, "invalid tick context");
+        } else if (event.size || op != 'X') valid = chain_fail(&ctx, "unexpected component event");
         chain_release(&event);
         if (!valid) goto cleanup;
         if (op == 'X') { result = 0; break; }

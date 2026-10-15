@@ -1,6 +1,7 @@
 #ifndef CHAIN_CALLBACKS_H
 #define CHAIN_CALLBACKS_H
 #include <stddef.h>
+#include <stdint.h>
 
 /* config_json is the received INIT document, valid through on_stop.
  * user_data belongs to the user; on_stop can release it. */
@@ -9,6 +10,7 @@ typedef struct ChainContext {
     const char *config_json;
     void *user_data;
     void *private_runtime;
+    uint64_t time_ns, tick_index;
 } ChainContext;
 
 typedef struct {
@@ -28,4 +30,7 @@ const void *chain_input_value(ChainContext *, size_t index);
 int chain_publish_value(ChainContext *, size_t index, const void *value);
 /* Report a user error and fail the current initialization/tick. */
 int chain_fail(ChainContext *, const char *message);
+double chain_now(const ChainContext *);
+uint64_t chain_time_ns(const ChainContext *);
+uint64_t chain_tick_index(const ChainContext *);
 #endif

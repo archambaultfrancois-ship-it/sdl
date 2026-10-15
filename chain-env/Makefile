@@ -4,7 +4,7 @@ export PYTHONPATH := $(CURDIR)/src
 MODEL := examples/acquisition/model.json
 DEPLOYMENT := examples/acquisition/deployment.json
 
-.PHONY: validate build demo test test-unit test-integration test-sdk
+.PHONY: validate build demo check test test-unit test-integration test-sdk test-simulated
 validate:
 	$(PYTHON) -m chain_env.cli validate --model $(MODEL) --deployment $(DEPLOYMENT) --sdl-root "$(SDL_ROOT)"
 build:
@@ -12,7 +12,9 @@ build:
 demo: build
 	$(PYTHON) -m chain_env.cli run --duration 2
 	$(PYTHON) -m chain_env.cli inspect --last
-test: test-unit test-sdk test-integration
+check:
+	@$(PYTHON) tests/run_check.py "$(MAKE)"
+test: test-unit test-sdk test-integration test-simulated
 test-unit:
 	$(PYTHON) -m unittest discover -s tests/unit -v
 test-sdk:
@@ -20,6 +22,8 @@ test-sdk:
 	CARGO_TARGET_DIR=$(CURDIR)/build/client-rust cargo test --offline --manifest-path sdk/client/rust/Cargo.toml
 test-integration:
 	SDL_ROOT="$(SDL_ROOT)" $(PYTHON) -m unittest discover -s tests/integration -v
+test-simulated:
+	SDL_ROOT="$(SDL_ROOT)" $(PYTHON) -m unittest discover -s tests/simulation -v
 
 .PHONY: client-native external-types external-native
 client-native:

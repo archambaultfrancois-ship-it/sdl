@@ -1,8 +1,6 @@
 """Per-component process: transport delivery, scheduling and bounded IPC."""
 import asyncio
 import json
-import os
-from pathlib import Path
 import sys
 import time
 from chain_env.codec.sdl2 import SDL2
@@ -10,7 +8,8 @@ from chain_env.delivery.buffers import Buffer
 from chain_env.delivery.policies import SubscriptionPolicy
 from chain_env.delivery.stores import MemoryStore
 from chain_env.execution import ipc
-from chain_env.execution.scheduler import Scheduler
+from chain_env.execution.process import start_component, tick_events, stop_component
+from chain_env.execution.scheduler import Scheduler, reserve_snapshot
 from chain_env.transport.tcp import Client
 from chain_env.transport.udp import UDP
 
@@ -36,6 +35,7 @@ class Adapter:
         self.scheduler = Scheduler(self.node, self.buffers)
         self.running = True
         self.started_at = time.monotonic()
+        self.timed_ticks, self.tick_index, self.activated_at_ns = False, 0, 0
 
     async def _tcp_data(self, header, body):
         # This callback runs on the subscription's data connection, never the control reader.
@@ -126,22 +126,10 @@ class Adapter:
                     pass
                 continue
             # Reserve the complete snapshot atomically before any pipe write can suspend.
-            for port, record in selected.items():
-                if record is not None and self.buffers[port].policy.buffer == "fifo":
-                    self.buffers[port].reserved.add(record["id"])
-            for port, record in selected.items():
-                body = ipc.port_data(port, b"", "") if record is None else ipc.port_data(port, record["payload"], record["catalogue"])
-                await ipc.send(self.process.stdin, "D", body)
-            await ipc.send(self.process.stdin, "T")
-            while True:
-                op, body = await ipc.receive(self.process.stdout)
-                if op == "F":
-                    break
-                if op != "P":
-                    raise ValueError("component must publish or finish a tick")
-                port, payload = ipc.unpack_port(body)
-                if port not in self.node["outputs"]:
-                    raise ValueError("component published unknown output")
+            reserve_snapshot(self.buffers, selected)
+            self.tick_index += 1
+            timestamp = time.monotonic_ns() - self.activated_at_ns if self.timed_ticks else None
+            async for port, payload in tick_events(self.process, self.node, selected, timestamp, self.tick_index):
                 desc = self.node["outputs"][port]
                 envelope = self.codec.wrap(desc["catalogue"], payload)
                 result, _ = await self.client.request("publish", envelope, timeout=self.request_timeout, topic=f"{self.name}.{port}")
@@ -170,14 +158,7 @@ class Adapter:
                     client = await Client.connect(host, port, on_data, self.plan["max_frame"])
                     self.data_clients[identity] = client
                     await client.request("attach", node=self.name, subscription=identity)
-            env = dict(os.environ, **self.node["env"])
-            env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2]) + os.pathsep + env.get("PYTHONPATH", "")
-            self.process = await asyncio.create_subprocess_exec(*self.node["command"], cwd=self.node["cwd"], env=env,
-                                                               stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
-            await ipc.send(self.process.stdin, "I", json.dumps(self.node).encode())
-            op, body = await asyncio.wait_for(ipc.receive(self.process.stdout), 15)
-            if op != "R" or body:
-                raise ValueError("component did not send READY")
+            self.process, self.timed_ticks = await start_component(self.node)
             await self.client.request("ready")
             # Supervisor activates delivery only after every component is ready.
             while True:
@@ -186,6 +167,7 @@ class Adapter:
                     break
                 await asyncio.sleep(.02)
             self.scheduler.start()
+            self.activated_at_ns = time.monotonic_ns()
             tasks = [*(asyncio.create_task(self._receiver(identity)) for identity in self.subscriptions),
                      asyncio.create_task(self._work()), asyncio.create_task(self._report()), self.client.task,
                      *(client.task for client in self.data_clients.values()), asyncio.create_task(self.process.wait())]
@@ -212,18 +194,4 @@ class Adapter:
             self.network_queues.clear()
 
     async def _stop_component(self):
-        async def stop():
-            await ipc.send(self.process.stdin, "X")
-            await self.process.wait()
-        try:
-            # The grace period includes drain(): a non-reading component can fill its pipe.
-            await asyncio.wait_for(stop(), .5)
-        except (ConnectionError, asyncio.TimeoutError):
-            if self.process.returncode is None:
-                self.process.terminate()
-            try:
-                await asyncio.wait_for(self.process.wait(), 1)
-            except asyncio.TimeoutError:
-                if self.process.returncode is None:
-                    self.process.kill()
-                await self.process.wait()
+        await stop_component(self.process)

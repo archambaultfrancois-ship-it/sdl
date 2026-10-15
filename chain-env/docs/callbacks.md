@@ -110,6 +110,15 @@ callbacks.
 
 ## Timed input callbacks
 
+Both execution engines expose a time value frozen during the callback:
+Python `ctx.now()`/`ctx.time_ns`/`ctx.tick_index`, C
+`chain_now(ctx)`/`chain_time_ns(ctx)`/`chain_tick_index(ctx)`, and Rust
+`ctx.now()`/`ctx.time_ns()`/`ctx.tick_index()`. Seconds are floating point;
+nanoseconds and tick indices are integers. Simulation uses virtual time starting
+at zero; real-time adapters provide elapsed monotonic time since activation.
+Use this clock rather than the system clock for time-dependent deterministic
+callbacks. See [simulation](simulation.md) for protocol compatibility and guarantees.
+
 For a required `input` carrying `Measurement` with `"timeout": 0.5`, the same
 callback receives both messages and timeout nulls. A handler can choose to emit
 no output on timeout, for example:

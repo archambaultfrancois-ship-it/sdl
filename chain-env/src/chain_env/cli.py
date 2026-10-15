@@ -2,6 +2,7 @@
 import argparse
 import asyncio
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -23,7 +24,12 @@ def main():
     command = commands.add_parser("run")
     command.add_argument("--plan", default="build/plan.json")
     command.add_argument("--duration", type=float)
-    command.add_argument("--port", type=int, default=0)
+    command.add_argument("--port", type=int)
+    command.add_argument("--mode", choices=("realtime", "simulated"), default="realtime")
+    command.add_argument("--workers", type=int)
+    command.add_argument("--scenario")
+    command.add_argument("--trace")
+    command.add_argument("--max-tick-output-bytes", type=int)
     command = commands.add_parser("inspect")
     command.add_argument("--endpoint", default="build/endpoint.json")
     command.add_argument("--last", action="store_true")
@@ -42,10 +48,24 @@ def main():
             else:
                 print(build(args.model, args.deployment, args.sdl_root, args.build_dir))
         elif args.action == "run":
-            from chain_env.execution.supervisor import run
-            if args.duration is not None and args.duration <= 0:
-                raise ValueError("duration must be positive")
-            asyncio.run(run(args.plan, args.duration, args.port))
+            if args.duration is not None and (not math.isfinite(args.duration) or args.duration <= 0):
+                raise ValueError("duration must be finite and positive")
+            if args.mode == "simulated":
+                from chain_env.execution.simulation import run
+                from chain_env.execution.simulation.coordinator import DEFAULT_OUTPUT_LIMIT
+                if args.duration is None:
+                    raise ValueError("simulated execution requires --duration in virtual seconds")
+                if args.port is not None:
+                    raise ValueError("--port is unavailable in simulated mode")
+                summary = asyncio.run(run(args.plan, args.duration,
+                    workers=1 if args.workers is None else args.workers, scenario=args.scenario, trace=args.trace,
+                    max_tick_output_bytes=DEFAULT_OUTPUT_LIMIT if args.max_tick_output_bytes is None else args.max_tick_output_bytes))
+                print(json.dumps(summary), flush=True)
+            else:
+                from chain_env.execution.supervisor import run
+                if any(value is not None for value in (args.workers, args.scenario, args.trace, args.max_tick_output_bytes)):
+                    raise ValueError("--workers, --scenario, --trace and --max-tick-output-bytes require simulated mode")
+                asyncio.run(run(args.plan, args.duration, args.port or 0))
         elif args.action == "inspect":
             if args.last:
                 print((Path(args.endpoint).parent / "last-status.json").read_text())

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "schemas": "../acquisition/schemas",
+  "external_topics": {"external.offset": {"root": "Measurement"}},
+  "components": {
+    "source": {"inputs": {}, "outputs": {"measure": {"root": "Measurement"}}, "trigger": {"mode": "periodic", "period_ms": 100}},
+    "left": {"inputs": {"input": {"root": "Measurement"}}, "outputs": {"result": {"root": "Measurement"}}, "trigger": {"mode": "on_change"}},
+    "right": {"inputs": {"input": {"root": "Measurement"}}, "outputs": {"result": {"root": "Measurement"}}, "trigger": {"mode": "on_change"}},
+    "join": {
+      "inputs": {"left": {"root": "Measurement"}, "right": {"root": "Measurement"}, "offset": {"root": "Measurement", "required": false}},
+      "outputs": {"result": {"root": "Measurement"}},
+      "trigger": {"mode": "on_change"}
+    }
+  },
+  "subscriptions": [
+    {"id": "source-left", "from": "source.measure", "to": "left.input"},
+    {"id": "source-right", "from": "source.measure", "to": "right.input"},
+    {"id": "left-join", "from": "left.result", "to": "join.left"},
+    {"id": "right-join", "from": "right.result", "to": "join.right"},
+    {"id": "offset-join", "from_topic": "external.offset", "to": "join.offset"}
+  ]
+}

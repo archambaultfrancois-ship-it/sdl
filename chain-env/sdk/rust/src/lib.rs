@@ -2,6 +2,20 @@
 use std::io::{self, Read, Write};
 
 pub const MAX_SIZE: usize = 1024 * 1024;
+pub const TICK_CONTEXT: &[u8] = &[1];
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TickContext { pub time_ns: u64, pub tick_index: u64 }
+pub fn tick(event: &Event, previous_index: u64) -> io::Result<TickContext> {
+    if event.op != b'T' { return Err(invalid("expected tick")); }
+    if event.data.is_empty() {
+        return Ok(TickContext { time_ns: 0, tick_index: previous_index + 1 });
+    }
+    if event.data.len() != 16 { return Err(invalid("invalid tick context")); }
+    let time_ns = u64::from_be_bytes(event.data[..8].try_into().unwrap());
+    let tick_index = u64::from_be_bytes(event.data[8..].try_into().unwrap());
+    if tick_index == 0 { return Err(invalid("tick index must be positive")); }
+    Ok(TickContext { time_ns, tick_index })
+}
 pub struct Event { pub op: u8, pub data: Vec<u8> }
 pub struct Input<'a> { pub port: &'a str, pub catalogue: &'a str, pub payload: &'a [u8] }
 impl Input<'_> {
@@ -56,6 +70,16 @@ fn invalid(text: &str) -> io::Error { io::Error::new(io::ErrorKind::InvalidData,
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn timestamped_ticks_and_legacy_frames() {
+        assert_eq!(tick(&Event { op: b'T', data: vec![] }, 2).unwrap(), TickContext { time_ns: 0, tick_index: 3 });
+        let data = [123456789_u64.to_be_bytes(), 4_u64.to_be_bytes()].concat();
+        assert_eq!(tick(&Event { op: b'T', data }, 0).unwrap(), TickContext { time_ns: 123456789, tick_index: 4 });
+        for size in [1, 15, 17] {
+            assert!(tick(&Event { op: b'T', data: vec![0; size] }, 0).is_err());
+        }
+        assert!(tick(&Event { op: b'T', data: vec![0; 16] }, 0).is_err());
+    }
     #[test]
     fn truncated_inputs_are_rejected() {
         for n in 0..6 { assert!(input(&Event {op:b'D',data:vec![0;n]}).is_err()); }
