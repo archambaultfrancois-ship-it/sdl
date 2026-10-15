@@ -415,7 +415,9 @@ impl Client {
                     Err(e)
                         if matches!(
                             e.kind(),
-                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            std::io::ErrorKind::WouldBlock
+                                | std::io::ErrorKind::TimedOut
+                                | std::io::ErrorKind::Interrupted
                         ) => {}
                     Err(e) => {
                         if let Some(c) = weak.upgrade() {

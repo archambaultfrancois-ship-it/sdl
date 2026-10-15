@@ -64,6 +64,7 @@ failure counts, as well as observed average publication and processing rates.
 ## Model and SDK
 
 See [architecture](docs/architecture.md) for document fields and process layout,
+[runtime execution](docs/runtime.md) for ticks, message flow and acknowledgements,
 [delivery](docs/delivery.md) for FIFO/latest semantics and transport guarantees,
 and [component protocol](sdk/protocol.md) for the Python, C and Rust SDK boundary.
 The example documents are complete runnable model/deployment templates.
@@ -76,6 +77,12 @@ the executable wrapper, native compilation commands, typed decoding and
 publication methods, and creates a handler skeleton only
 if the file is missing. See [callback containers](docs/callbacks.md) for the API,
 snapshot callbacks, lifecycle hooks and regeneration rules.
+
+Required inputs can set `"timeout": 0.5` (seconds). At expiry, the existing
+processing callback receives `None` in Python, `NULL` in C or `None` in Rust.
+All required inputs must have a value or an expired timeout before a tick starts.
+An input without a timeout keeps waiting indefinitely. See
+[required-input timeouts](docs/runtime.md#required-input-timeouts).
 
 The public Python component entry point is
 `from chain_env.execution.component import ComponentSession`.

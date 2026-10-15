@@ -43,6 +43,27 @@ class ModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reserved callback"):
             validate_graph(bad, self.deployment)
 
+    def test_required_input_timeout_validation(self):
+        for value in (.5, 1, 1e-6):
+            model = copy.deepcopy(self.model)
+            model["components"]["analyse"]["inputs"]["input"]["timeout"] = value
+            validate_graph(model, self.deployment)
+        for value in (0, -1, True, None, "0.5", float("nan"), float("inf"), 10 ** 1000):
+            with self.subTest(value=str(value)[:30]):
+                model = copy.deepcopy(self.model)
+                model["components"]["analyse"]["inputs"]["input"]["timeout"] = value
+                with self.assertRaisesRegex(ValueError, "finite positive"):
+                    validate_graph(model, self.deployment)
+        for direction in ("inputs", "outputs"):
+            model = copy.deepcopy(self.model)
+            model["components"]["analyse"][direction]["optional"] = dict(root="Measurement", required=False, timeout=.5)
+            with self.assertRaisesRegex(ValueError, "only supported on required inputs"):
+                validate_graph(model, self.deployment)
+        model = copy.deepcopy(self.model)
+        model["components"]["analyse"]["outputs"]["result"]["timeout"] = .5
+        with self.assertRaisesRegex(ValueError, "only supported on required inputs"):
+            validate_graph(model, self.deployment)
+
     def test_native_container_languages_and_port_identifiers(self):
         for language, suffix in (("c", ".c"), ("rust", ".rs")):
             deployment = copy.deepcopy(self.deployment)

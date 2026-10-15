@@ -52,7 +52,9 @@ class ComponentSession:
             op, data = self.receive()
             if op == "D":
                 port, catalogue, payload = unpack_port(data, True)
-                inputs[port] = (catalogue, payload)
+                if port in inputs:
+                    raise ValueError("duplicate input in tick")
+                inputs[port] = None if not catalogue and not payload else (catalogue, payload)
             elif op == "T":
                 yield inputs
                 self.send("F")

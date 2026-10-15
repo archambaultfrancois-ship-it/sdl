@@ -45,6 +45,12 @@ class CallbackContext:
                     raise ValueError(f"missing required input: {port}")
                 result[port] = None
                 continue
+            if raw[port] is None:
+                desc = self.config["inputs"][port]
+                if not desc.get("required", True) or "timeout" not in desc:
+                    raise ValueError(f"null input requires a timeout: {port}")
+                result[port] = None
+                continue
             catalogue, payload = raw[port]
             key = (port, catalogue)
             if key not in self._decoders:
@@ -118,7 +124,7 @@ def run_callbacks(*, name, handler, sdl_root, input_types, output_types,
                     _call(tick, context, inputs) if input_types else _call(tick, context)
                 else:
                     for port, callback in callbacks.items():
-                        if inputs[port] is not None:
+                        if inputs[port] is not None or port in raw:
                             _call(callback, context, inputs[port])
             finally:
                 context._active = False

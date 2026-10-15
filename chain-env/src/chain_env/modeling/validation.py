@@ -1,4 +1,5 @@
 """Structural graph validation, independent of SDL and execution."""
+import math
 import re
 from chain_env.modeling.model import fields
 
@@ -51,11 +52,21 @@ def validate_graph(model, deployment):
             for port, desc in node[direction].items():
                 if not port or "." in port:
                     raise ValueError("port names must be nonempty and contain no dots")
-                fields(desc, ("root", "schema", "required"), ("root",))
+                fields(desc, ("root", "schema", "required", "timeout"), ("root",))
                 if not isinstance(desc["root"], str) or not desc["root"]:
                     raise ValueError("port root must be a nonempty string")
                 if "required" in desc and type(desc["required"]) is not bool:
                     raise ValueError("required must be boolean")
+                if "timeout" in desc:
+                    timeout = desc["timeout"]
+                    if direction != "inputs" or not desc.get("required", True):
+                        raise ValueError("timeout is only supported on required inputs")
+                    try:
+                        valid = type(timeout) in (int, float) and math.isfinite(timeout) and timeout > 0
+                    except OverflowError:
+                        valid = False
+                    if not valid:
+                        raise ValueError("timeout must be a finite positive number of seconds")
                 if "schema" in desc and (not isinstance(desc["schema"], str) or not desc["schema"]):
                     raise ValueError("schema must be a nonempty path")
         trigger = node["trigger"]

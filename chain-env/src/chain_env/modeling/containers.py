@@ -82,8 +82,9 @@ def scaffold_handler(node, handler, types):
     if len(node["inputs"]) == 1:
         port, desc = next(iter(node["inputs"].items()))
         module, symbol = types[desc["root"]]
+        annotation = "InputMessage | None" if "timeout" in desc else "InputMessage"
         lines += [f"from {module} import {symbol} as InputMessage", "", "",
-                  f"def on_{port}(ctx, message: InputMessage):",
+                  f"def on_{port}(ctx, message: {annotation}):",
                   '    raise NotImplementedError("Implement the input callback")']
     else:
         args = "ctx, inputs" if node["inputs"] else "ctx"

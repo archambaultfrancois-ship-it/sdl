@@ -10,6 +10,7 @@ typedef struct {
     char *catalogue;
     size_t catalogue_size;
     void *message;
+    int present;
 } Input;
 typedef struct {
     const ChainPortSpec *inputs, *outputs;
@@ -61,7 +62,13 @@ static int admit(ChainContext *ctx, const ChainEvent *event) {
     if (index == runtime->input_count) return chain_fail(ctx, "unknown input port");
     input = &runtime->selected[index];
     spec = &runtime->inputs[index];
-    if (input->message) return chain_fail(ctx, "duplicate input in tick");
+    if (input->present) return chain_fail(ctx, "duplicate input in tick");
+    if (!text_size && !payload_size) {
+        if (!spec->required || spec->timeout <= 0)
+            return chain_fail(ctx, "null input requires a timeout");
+        input->present = 1;
+        return 1;
+    }
     if (!input->codec || input->catalogue_size != text_size || memcmp(input->catalogue, text, text_size)) {
         SdlCompatibilityDiagnostic *check = type_compare_catalogues(text, text_size,
             spec->catalogue, strlen(spec->catalogue), spec->root, true);
@@ -83,6 +90,7 @@ static int admit(ChainContext *ctx, const ChainEvent *event) {
     root = type_message_name(input->codec, payload, payload_size);
     if (!root || strcmp(root, spec->root)) return chain_fail(ctx, "wrong input message type");
     input->message = type_decode(input->codec, payload, payload_size);
+    input->present = input->message != NULL;
     return input->message ? 1 : chain_fail(ctx, "SDL input decoding failed");
 }
 
@@ -126,7 +134,7 @@ int chain_run_callbacks(const char *name,
         if (op == 'X') { result = 0; break; }
         if (op != 'T') continue;
         for (index = 0; index < input_count; ++index) {
-            if (inputs[index].required && !runtime.selected[index].message) {
+            if (inputs[index].required && !runtime.selected[index].present) {
                 chain_fail(&ctx, "missing required input"); goto cleanup;
             }
         }
@@ -136,6 +144,7 @@ int chain_run_callbacks(const char *name,
         if (!valid || runtime.failed || !chain_send('F', NULL, 0)) goto cleanup;
         for (index = 0; index < input_count; ++index) {
             type_free(runtime.selected[index].message); runtime.selected[index].message = NULL;
+            runtime.selected[index].present = 0;
         }
     }
 cleanup:

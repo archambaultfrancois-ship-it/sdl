@@ -127,10 +127,11 @@ class Adapter:
                 continue
             # Reserve the complete snapshot atomically before any pipe write can suspend.
             for port, record in selected.items():
-                if self.buffers[port].policy.buffer == "fifo":
+                if record is not None and self.buffers[port].policy.buffer == "fifo":
                     self.buffers[port].reserved.add(record["id"])
             for port, record in selected.items():
-                await ipc.send(self.process.stdin, "D", ipc.port_data(port, record["payload"], record["catalogue"]))
+                body = ipc.port_data(port, b"", "") if record is None else ipc.port_data(port, record["payload"], record["catalogue"])
+                await ipc.send(self.process.stdin, "D", body)
             await ipc.send(self.process.stdin, "T")
             while True:
                 op, body = await ipc.receive(self.process.stdout)
@@ -184,6 +185,7 @@ class Adapter:
                 if status["enabled"]:
                     break
                 await asyncio.sleep(.02)
+            self.scheduler.start()
             tasks = [*(asyncio.create_task(self._receiver(identity)) for identity in self.subscriptions),
                      asyncio.create_task(self._work()), asyncio.create_task(self._report()), self.client.task,
                      *(client.task for client in self.data_clients.values()), asyncio.create_task(self.process.wait())]

@@ -78,10 +78,11 @@ network packet alone does not run user code.
 
 - With named callbacks, each available input invokes `on_<port>(ctx, message)`
   once per tick, in model port order. Every declared input needs a callback;
-  absent optional inputs are skipped.
+  absent optional inputs are skipped. A timed-out required input invokes its
+  callback with a null value.
 - If `on_tick(ctx, inputs)` exists, it replaces named input dispatch. `inputs`
   is a complete dictionary of declared ports, with `None` for absent optional
-  inputs. This is useful for coherent processing across multiple required
+  inputs and timed-out required inputs. This is useful for processing multiple required
   inputs. A multi-input handler skeleton uses this form.
 - A source with no inputs supplies `on_tick(ctx)`. Its periodic trigger comes
   from the model.
@@ -91,11 +92,56 @@ current state and can therefore present the same value across several periodic
 ticks, or when another FIFO input triggers execution. No network ACK or retry
 policy is changed: ACK still means admission into the adapter's RAM queue.
 
+Set `"timeout": 0.5` on a required input to wait up to half a second for a value.
+Timeouts start after the READY barrier and rearm after each completed tick.
+The existing callback receives `None` in Python or `NULL` in C; Rust named
+callbacks for timed inputs take `Option<&MessageType>`. No extra timeout handler
+or event metadata is required. Inputs without a timeout preserve their current
+callback signatures and waiting behavior. Existing handlers are never rewritten;
+when adding a timeout, update the handler to accept and process a null value.
+See [required-input timeouts](runtime.md#required-input-timeouts) for multi-input
+readiness, periodic scheduling and latest-state behavior.
+
 All callbacks are synchronous and execute in one component process. Generated
 component and port names must be identifiers; C/Rust names must additionally be
 portable ASCII identifiers and ports cannot be language keywords or C macros.
 Input names `start`, `stop` and `tick` are reserved for lifecycle and snapshot
 callbacks.
+
+## Timed input callbacks
+
+For a required `input` carrying `Measurement` with `"timeout": 0.5`, the same
+callback receives both messages and timeout nulls. A handler can choose to emit
+no output on timeout, for example:
+
+```python
+from measurement import Measurement
+
+def on_input(ctx, message: Measurement | None):
+    if message is None:
+        return
+    ctx.publish_result(message)
+```
+
+```c
+static int on_input(ChainContext *ctx, const Measurement *message) {
+    if (!message) return 1;
+    return publish_result(ctx, message);
+}
+```
+
+```rust
+fn on_input(&mut self, ctx: &mut Context, message: Option<&Measurement>) -> Result {
+    if let Some(message) = message {
+        ctx.publish_result(message)?;
+    }
+    Ok(())
+```
+
+The C function belongs in the generated callback table; the Rust method belongs
+in the handler's `Callbacks` implementation, as shown below. A snapshot callback
+receives null in the corresponding input field instead. Returning successfully
+still completes the tick even if no output was published.
 
 ## C callbacks
 
@@ -124,7 +170,7 @@ Optional `.on_start` and `.on_stop` hooks accept `ChainContext *`. A source sets
 For a component with inputs, `.on_tick` has signature
 `int callback(ChainContext *, const ComponentInputs *)` and replaces named input
 dispatch when supplied. Each snapshot field is a `const MessageType *`; absent
-optional inputs are `NULL`. Without `.on_tick`, every input requires a named
+optional inputs and timed-out required inputs are `NULL`. Without `.on_tick`, every input requires a named
 callback; missing callback pointers are refused before READY.
 
 `ctx->name` identifies the component and `ctx->config_json` contains its actual
@@ -167,7 +213,10 @@ impl Callbacks for Handler {
 the snapshot method is
 `on_tick(&mut self, ctx: &mut Context, inputs: &Inputs<'_>) -> Result`; its default
 implementation dispatches available values to named input methods. Snapshot
-fields are `Option<&MessageType>`, so absent optional inputs are `None`.
+fields are `Option<&MessageType>`, so absent optional inputs and timed-out required
+inputs are `None`. A timed named input method has signature
+`fn on_input(&mut self, ctx: &mut Context, message: Option<&Measurement>) -> Result`;
+the default snapshot dispatcher calls it even when the value is `None`.
 Unimplemented input/tick methods return an error when first dispatched.
 
 State belongs in `Handler` fields. `ctx.name` identifies the component and

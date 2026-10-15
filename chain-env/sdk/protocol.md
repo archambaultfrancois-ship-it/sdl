@@ -16,6 +16,13 @@ catalogue-relative message ID, without S2PS/2 (the adapter adds/removes it).
 | `F` FINISHED | Component → adapter | Empty |
 | `X` STOP | Adapter → component | Empty |
 
+An INPUT with both catalogue length zero and an empty SDL2 payload represents
+an explicit null on a required input with a configured timeout. It has the same
+`D` opcode and port encoding. Other INPUT frames contain a nonempty catalogue
+and valid SDL2 payload. Generated containers reject explicit nulls for untimed
+or optional inputs, duplicate INPUTs and missing required INPUT frames.
+Application callbacks receive only `None`/`NULL`, without timeout event metadata.
+
 All lengths are big endian. The component receives INIT, initializes its local
 codec and sends READY. After zero or more INPUT frames, TICK permits processing.
 It may publish zero or more outputs, then sends FINISHED. One tick is in flight
@@ -25,6 +32,8 @@ exit. A full stdin pipe cannot postpone this deadline. It then sends SIGTERM,
 waits up to one second, and kills/reaps the component if necessary.
 
 FINISHED removes selected FIFO inputs after processing; it is not a network ACK.
+Null inputs consume no FIFO record. Required-input deadlines rearm after the
+adapter completes the tick. Timeouts do not create network messages or ACKs.
 An error must terminate the component with a nonzero status. All pending inputs
 are volatile and disappear on restart. Network retries can repeat transmissions;
 the adapter deduplicates them within its bounded, in-memory history.
@@ -38,6 +47,10 @@ callbacks run at TICK, never directly on a network receive; see
 C: `ChainEvent.data` owns the body and must be released; `chain_input()` returns
 borrowed fields, with catalogues explicitly sized rather than NUL terminated.
 Rust: `initialize()` returns INIT JSON bytes; `input()` borrows the decoded
-fields from its event. The C and Rust stdio SDKs do not depend on a JSON parser
+fields from its event and `Input::is_null()` recognizes an explicit null frame.
+Python `ComponentSession.ticks()` maps that frame to a `None` entry; normal entries
+remain `(catalogue, payload)` pairs. In C, `chain_input()` returns zero catalogue
+and payload sizes for an explicit null. Raw SDK users must handle this value when
+enabling input timeouts. The C and Rust stdio SDKs do not depend on a JSON parser
 or SDL. The optional C callback runner and generated Rust container use the
 public SDL runtime to decode and release typed snapshots.

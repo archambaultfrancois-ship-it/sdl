@@ -1,5 +1,6 @@
 import asyncio
 import os
+import signal
 from pathlib import Path
 import subprocess
 import threading
@@ -17,7 +18,7 @@ class NativeExternalTests(external.ExternalTests):
             raise unittest.SkipTest('set SDL_ROOT')
         subprocess.run(['make','external-native'],cwd=ROOT,check=True,stdout=subprocess.DEVNULL)
 
-    async def exchange(self,language,transport,evolved=False):
+    async def exchange(self,language,transport,evolved=False,resume=False):
         c=await self.client('driver')
         message_type=self.Message
         if evolved:
@@ -35,6 +36,15 @@ class NativeExternalTests(external.ExternalTests):
             if line!=b'READY\n':
                 _,error=await proc.communicate()
                 self.fail(f'{language} startup {line!r}: {error.decode()}')
+            if resume:
+                # Linux may interrupt recv_from with a socket timeout after SIGCONT.
+                proc.send_signal(signal.SIGSTOP)
+                try:
+                    await asyncio.sleep(.3)
+                finally:
+                    proc.send_signal(signal.SIGCONT)
+                await asyncio.sleep(.15)
+                self.assertIn('external-' + language, {s.client_id for s in self.broker.sessions.values()})
             event=threading.Event();received=[]
             def callback(value,info): received.append(value);event.set()
             await asyncio.to_thread(c.subscribe,f'{language}.result',self.Message,callback,qos=Latest())
@@ -54,6 +64,12 @@ class NativeExternalTests(external.ExternalTests):
     async def test_native_rust_udp(self): await self.exchange('rust','udp')
     async def test_c_evolved_catalogue(self): await self.exchange('c','tcp',True)
     async def test_rust_evolved_catalogue(self): await self.exchange('rust','udp',True)
+
+    @unittest.skipUnless(hasattr(signal, 'SIGSTOP'), 'requires POSIX process suspension')
+    async def test_c_session_survives_process_resume(self): await self.exchange('c','tcp',resume=True)
+
+    @unittest.skipUnless(hasattr(signal, 'SIGSTOP'), 'requires POSIX process suspension')
+    async def test_rust_session_survives_process_resume(self): await self.exchange('rust','udp',resume=True)
 
     # Shared fixture only; these behaviors are already tested by ExternalTests.
     test_external_model_binding_and_internal_topic_ownership=None

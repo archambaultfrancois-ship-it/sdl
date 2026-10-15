@@ -4,6 +4,10 @@ use std::io::{self, Read, Write};
 pub const MAX_SIZE: usize = 1024 * 1024;
 pub struct Event { pub op: u8, pub data: Vec<u8> }
 pub struct Input<'a> { pub port: &'a str, pub catalogue: &'a str, pub payload: &'a [u8] }
+impl Input<'_> {
+    /// Explicit null input from the adapter, allowed only on a required timed input.
+    pub fn is_null(&self) -> bool { self.catalogue.is_empty() && self.payload.is_empty() }
+}
 
 pub fn receive() -> io::Result<Event> {
     let mut reader = io::stdin().lock();

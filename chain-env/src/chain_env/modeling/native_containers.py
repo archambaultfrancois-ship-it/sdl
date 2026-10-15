@@ -104,8 +104,9 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
         source.append(f"static const ChainPortSpec {direction}[] = {{")
         for port, desc in node[direction].items():
             source.append("    {" + ", ".join((c_string(port), c_string(desc["root"]), c_string(desc["catalogue"]),
-                                               "1" if desc.get("required", True) else "0")) + "},")
-        source += ["    {NULL, NULL, NULL, 0}", "};"]
+                                               "1" if desc.get("required", True) else "0",
+                                               repr(float(desc.get("timeout", 0))))) + "},")
+        source += ["    {NULL, NULL, NULL, 0, 0}", "};"]
     for index, (port, desc) in enumerate(node["outputs"].items()):
         source += [f"int publish_{port}(ChainContext *ctx, const {types[desc['root']][1]} *message) {{",
                    f"    return chain_publish_value(ctx, {index}, message);", "}"]
@@ -115,8 +116,9 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
         for index, port in enumerate(node["inputs"]):
             source.append(f"    selected.{port} = chain_input_value(ctx, {index});")
         source.append("    if (component_callbacks.on_tick) return component_callbacks.on_tick(ctx, &selected);")
-        for port in node["inputs"]:
-            source.append(f"    if (selected.{port} && !component_callbacks.on_{port}(ctx, selected.{port})) return 0;")
+        for port, desc in node["inputs"].items():
+            condition = "" if "timeout" in desc else f"selected.{port} && "
+            source.append(f"    if ({condition}!component_callbacks.on_{port}(ctx, selected.{port})) return 0;")
         source.append("    return 1;")
     else:
         source.append("    return component_callbacks.on_tick(ctx);")
@@ -169,12 +171,18 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
               "    fn on_stop(&mut self, _ctx: &mut Context) -> Result { Ok(()) }"]
     for port, desc in node["inputs"].items():
         module, symbol = types[desc["root"]]
-        lines += [f"    fn on_{port}(&mut self, _ctx: &mut Context, _message: &crate::types::{module}::{symbol}) -> Result {{",
+        argument = f"&crate::types::{module}::{symbol}"
+        if "timeout" in desc:
+            argument = f"Option<{argument}>"
+        lines += [f"    fn on_{port}(&mut self, _ctx: &mut Context, _message: {argument}) -> Result {{",
                   f'        Err("implement on_{port} or on_tick".into())', "    }"]
     if node["inputs"]:
         lines.append("    fn on_tick(&mut self, ctx: &mut Context, inputs: &Inputs<'_>) -> Result {")
-        for port in node["inputs"]:
-            lines.append(f"        if let Some(message) = inputs.{port} {{ self.on_{port}(ctx, message)?; }}")
+        for port, desc in node["inputs"].items():
+            if "timeout" in desc:
+                lines.append(f"        self.on_{port}(ctx, inputs.{port})?;")
+            else:
+                lines.append(f"        if let Some(message) = inputs.{port} {{ self.on_{port}(ctx, message)?; }}")
         lines.append("        Ok(())")
     else:
         lines += ["    fn on_tick(&mut self, _ctx: &mut Context) -> Result {", '        Err("implement on_tick".into())']
@@ -188,6 +196,7 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
     for port, desc in node["inputs"].items():
         module, symbol = types[desc["root"]]
         lines += [f"        let mut selected_{port}: Option<crate::types::{module}::{symbol}> = None;",
+                  f"        let mut received_{port} = false;",
                   f"        let mut decoder_{port}: Option<(String, sdl_runtime::Context)> = None;"]
     lines += ["        handler.on_start(&mut ctx)?;", "        send(b'R', &[])?;", "        loop {", "            let event = receive()?;",
               "            match event.op {", "                b'D' => {", "                    let data = input(&event)?;",
@@ -195,18 +204,26 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
     for port, desc in node["inputs"].items():
         module, symbol = types[desc["root"]]
         lines += [f"                        {rust_string(port)} => {{",
-                  f'                            if selected_{port}.is_some() {{ return Err("duplicate input in tick".into()); }}',
-                  f"                            if decoder_{port}.as_ref().map(|(text, _)| text.as_str()) != Some(data.catalogue) {{",
+                  f'                            if received_{port} {{ return Err("duplicate input in tick".into()); }}',
+                  f"                            received_{port} = true;"]
+        if "timeout" in desc:
+            lines += ["                            if data.is_null() {",
+                      f"                                selected_{port} = None;",
+                      "                            } else {"]
+        lines += [f"                            if decoder_{port}.as_ref().map(|(text, _)| text.as_str()) != Some(data.catalogue) {{",
                   f"                                let check = sdl_runtime::compare_catalogues(data.catalogue, {rust_string(desc['catalogue'])}, Some({rust_string(desc['root'])}), true);",
                   '                                if !check.compatible() { return Err(format!("{} at {}", check.code, check.path).into()); }',
                   f"                                let prepared = codec(sdl_runtime::prepare(data.catalogue, &[crate::types::{module}::{symbol}::type_info()]))?;",
                   f"                                decoder_{port} = Some((data.catalogue.to_owned(), prepared));", "                            }",
-                  f"                            selected_{port} = Some(codec(sdl_runtime::decode(&decoder_{port}.as_ref().unwrap().1, data.payload))?);", "                        }"]
+                  f"                            selected_{port} = Some(codec(sdl_runtime::decode(&decoder_{port}.as_ref().unwrap().1, data.payload))?);"]
+        if "timeout" in desc:
+            lines.append("                            }")
+        lines.append("                        }")
     lines += ['                        _ => return Err("unknown input port".into()),', "                    }", "                }",
               "                b'T' if event.data.is_empty() => {"]
     for port, desc in node["inputs"].items():
         if desc.get("required", True):
-            lines.append(f'                    if selected_{port}.is_none() {{ return Err("missing required input: {port}".into()); }}')
+            lines.append(f'                    if !received_{port} {{ return Err("missing required input: {port}".into()); }}')
     lines.append("                    ctx.active = true;")
     if node["inputs"]:
         fields = ", ".join(f"{port}: selected_{port}.as_ref()" for port in node["inputs"])
@@ -216,6 +233,7 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
     lines += ["                    ctx.active = false;", "                    send(b'F', &[])?;"]
     for port in node["inputs"]:
         lines.append(f"                    selected_{port} = None;")
+        lines.append(f"                    received_{port} = false;")
     lines += ["                }", "                b'X' if event.data.is_empty() => return Ok(()),",
               '                _ => return Err("unexpected component event".into()),', "            }", "        }", "    }));",
               "    ctx.active = false;", "    let stop = handler.on_stop(&mut ctx);", "    match execution {",
@@ -262,7 +280,10 @@ def scaffold_native(node, handler, types, language):
         if len(node["inputs"]) == 1:
             port, desc = next(iter(node["inputs"].items()))
             module, symbol = types[desc["root"]]
-            lines += [f"    fn on_{port}(&mut self, _ctx: &mut Context, _message: &crate::types::{module}::{symbol}) -> Result {{",
+            argument = f"&crate::types::{module}::{symbol}"
+            if "timeout" in desc:
+                argument = f"Option<{argument}>"
+            lines += [f"    fn on_{port}(&mut self, _ctx: &mut Context, _message: {argument}) -> Result {{",
                       '        Err("implement the input callback".into())']
         else:
             args = "&mut self, _ctx: &mut Context, _inputs: &crate::container::Inputs<'_>" if node["inputs"] else "&mut self, _ctx: &mut Context"

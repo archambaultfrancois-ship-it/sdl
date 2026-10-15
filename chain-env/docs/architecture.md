@@ -21,8 +21,10 @@ Documents require integer `version: 1`; duplicate and unsupported keys are
 rejected. Model `schemas` names a source file or directory relative to the model.
 `components` is a map of component names to `inputs`, `outputs`, `trigger` and
 optional `parameters`. A port has a logical `root`, optional overriding `schema`
-and, for inputs, optional `required` (default true). Names cannot contain dots;
-an endpoint is `component.port`. Each output endpoint is a separate topic.
+and, for inputs, optional `required` (default true) and `timeout`. A timeout is a
+finite positive number of seconds, accepts fractional values and is supported
+only on required inputs. Omitting it preserves an unbounded wait. Names cannot
+contain dots; an endpoint is `component.port`. Each output endpoint is a separate topic.
 
 `subscriptions` is a list of `{id, from, to, qos?}`. IDs are unique. Each input
 has at most one producer; required inputs must be connected. Connected roots
@@ -33,13 +35,22 @@ allowed. Cycles are rejected.
 Triggers are `{mode: "on_change"}` or `{mode: "periodic", period_ms: positive}`.
 Sources require periodic triggers. Periodic deadlines start after completion,
 so missed periods do not accumulate. Optional inputs do not gate readiness.
-Required FIFO inputs must each have a pending message; required latest inputs
-must each have an initial value. One message per available FIFO input and each
-latest state form a tick. All selected FIFO inputs are removed only on FINISHED.
+Required inputs must each have a usable value or an expired configured timeout.
+An expired empty input contributes `None`/`NULL` to the tick; a required input
+without a timeout continues to wait. One message per available FIFO input and
+each latest state form a tick. All selected FIFO inputs are removed only on FINISHED.
 An on-change component combines current latest values with queued FIFO events;
 updates received during processing are handled in the next eligible tick.
-Processing wakes on input admission or its next configured periodic deadline;
+Processing wakes on input admission, an input timeout or its periodic deadline;
 there is no fixed 5 ms polling delay in the message-processing path.
+
+Input timeout deadlines start after the READY barrier and are rearmed when the
+adapter completes each successful tick. An expired empty input can trigger an
+`on_change` tick, subject to readiness of the other required inputs. Periodic
+components also obey their periodic deadline. Available data wins over timeout;
+a retained latest state does not expire. No timeout callbacks or extra callback
+event metadata are introduced. See [input timeouts](runtime.md#required-input-timeouts)
+for examples and exact timing rules.
 
 Deployment `components` covers exactly the model components. Each entry has an
 argv `command` or a `container: {language: "python" | "c" | "rust", handler: "path/to/logic"}`
@@ -61,6 +72,9 @@ specifies the delivery requirements. Compilation resolves both into the plan,
 never silently weakening an unsupported profile.
 
 ## Process lifecycle
+
+See [runtime execution, ticks and message flow](runtime.md) for a detailed
+walkthrough of startup, input selection, callbacks and delivery confirmations.
 
 The supervisor hosts the broker and launches a Python adapter process per
 component. Each adapter starts its component process. All components initialize

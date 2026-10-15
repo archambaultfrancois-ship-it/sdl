@@ -37,8 +37,99 @@ class ProtocolTests(unittest.TestCase):
         session.ready()
         self.assertEqual(writer.getvalue(), frame("R"))
 
+    def test_explicit_null_input_and_duplicate_detection(self):
+        null = frame("D", port_data("input", b"", ""))
+        writer = io.BytesIO()
+        session = ComponentSession(io.BytesIO(frame("I", b"{}") + null + frame("T") + frame("X")), writer)
+        self.assertEqual(list(session.ticks()), [{"input": None}])
+        self.assertEqual(writer.getvalue(), frame("R") + frame("F"))
+        for second in (null, frame("D", port_data("input", b"payload", "SDL2|"))):
+            session = ComponentSession(io.BytesIO(frame("I", b"{}") + null + second + frame("T")), io.BytesIO())
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                list(session.ticks())
+
 
 class SchedulerTests(unittest.TestCase):
+    def timed(self, inputs, trigger=None):
+        now = [0.0]
+        buffers = {port: Buffer(Policy(), MemoryStore()) for port in inputs}
+        scheduler = Scheduler(dict(inputs=inputs, trigger=trigger or {"mode": "on_change"}), buffers, lambda: now[0])
+        return scheduler, buffers, now
+
+    def test_all_required_inputs_must_have_a_value_or_expire(self):
+        scheduler, buffers, now = self.timed({"a": {"timeout": .2}, "b": {"timeout": .5}})
+        self.assertIsNone(scheduler.select())
+        self.assertEqual(scheduler.wait_timeout(), .5)
+        now[0] = .2
+        self.assertIsNone(scheduler.select())
+        self.assertAlmostEqual(scheduler.wait_timeout(), .3)
+        now[0] = .5
+        selected = scheduler.select()
+        self.assertEqual(selected, {"a": None, "b": None})
+        now[0] = 2.0  # A slow callback does not consume the next wait budget.
+        scheduler.complete(selected)
+        self.assertIsNone(scheduler.select())
+        self.assertAlmostEqual(scheduler.wait_timeout(), .5)
+        now[0] = 2.5
+        self.assertEqual(scheduler.select(), {"a": None, "b": None})
+
+    def test_data_wins_over_expired_timeout_and_only_real_fifo_records_are_consumed(self):
+        scheduler, buffers, now = self.timed({"a": {}, "b": {"timeout": .5}})
+        record = lambda n: dict(id=str(n), epoch="e", sequence=n)
+        buffers["a"].admit(record(1))
+        buffers["a"].admit(record(2))
+        now[0] = .5
+        selected = scheduler.select()
+        self.assertEqual(selected["a"]["id"], "1")
+        self.assertIsNone(selected["b"])
+        # Arrival during a null tick is kept for the following tick.
+        buffers["b"].admit(record(3))
+        scheduler.complete(selected)
+        selected = scheduler.select()
+        self.assertEqual((selected["a"]["id"], selected["b"]["id"]), ("2", "3"))
+        scheduler.complete(selected)
+        self.assertIsNone(buffers["a"].take())
+        self.assertIsNone(buffers["b"].take())
+
+    def test_available_latest_state_never_expires(self):
+        scheduler, buffers, now = self.timed({"state": {"timeout": .1}})
+        buffers["state"] = Buffer(Policy.resolve({"buffer": "latest"}), MemoryStore())
+        buffers["state"].admit(dict(id="1", epoch="e", sequence=1))
+        scheduler.complete(scheduler.select())
+        now[0] = 10
+        self.assertIsNone(scheduler.select())
+        self.assertIsNone(scheduler.wait_timeout())
+        self.assertEqual(buffers["state"].take()["id"], "1")
+
+    def test_untimed_required_input_still_waits_without_busy_loop(self):
+        scheduler, buffers, now = self.timed({"a": {}, "b": {"timeout": .1}})
+        now[0] = 10
+        self.assertIsNone(scheduler.select())
+        self.assertIsNone(scheduler.wait_timeout())
+        buffers["a"].admit(dict(id="1", epoch="e", sequence=1))
+        self.assertEqual(scheduler.wait_timeout(), 0)
+        self.assertIsNone(scheduler.select()["b"])
+
+    def test_periodic_timeout_uses_both_period_and_input_readiness(self):
+        scheduler, buffers, now = self.timed({"input": {"timeout": .5}}, {"mode": "periodic", "period_ms": 1000})
+        self.assertEqual(scheduler.wait_timeout(), .5)
+        now[0] = .5
+        scheduler.complete(scheduler.select())
+        now[0] = 1
+        self.assertIsNone(scheduler.select())
+        self.assertEqual(scheduler.wait_timeout(), .5)
+        now[0] = 1.5
+        self.assertEqual(scheduler.select(), {"input": None})
+
+    def test_start_rearms_after_component_initialization(self):
+        scheduler, buffers, now = self.timed({"input": {"timeout": .5}, "optional": {"required": False}})
+        now[0] = 100
+        scheduler.start()
+        self.assertIsNone(scheduler.select())
+        self.assertEqual(scheduler.wait_timeout(), .5)
+        now[0] = 100.5
+        self.assertEqual(scheduler.select(), {"input": None})
+
     def test_coalesced_latest_and_required_fifo(self):
         latest = Buffer(Policy.resolve({"buffer": "latest"}), MemoryStore())
         fifo = Buffer(Policy(), MemoryStore())
