@@ -6,7 +6,10 @@ from chain_env.modeling.model import fields
 
 def validate_graph(model, deployment):
     fields(model, ("version", "schemas", "components", "subscriptions", "external_topics"), ("version", "schemas", "components", "subscriptions"))
-    fields(deployment, ("version", "components", "subscriptions", "max_frame", "max_datagram", "broker"), ("version", "components"))
+    fields(deployment, ("version", "components", "subscriptions", "max_frame", "max_datagram", "broker", "execution"), ("version", "components"))
+    if deployment.get("execution", "local") not in ("local", "distributed"):
+        raise ValueError("execution must be local or distributed")
+    distributed = deployment.get("execution") == "distributed"
     if not isinstance(model["schemas"], str) or not model["schemas"]:
         raise ValueError("schemas must be a nonempty path")
     if not isinstance(deployment["components"], dict) or not isinstance(deployment.get("subscriptions", {}), dict):
@@ -104,8 +107,19 @@ def validate_graph(model, deployment):
                         raise ValueError("generated native port names must be portable, non-reserved ASCII identifiers")
                     if direction == "inputs" and port in ("start", "stop", "tick"):
                         raise ValueError(f"input {port!r} conflicts with a reserved callback")
-        if execution.get("placement", "local") != "local":
-            raise ValueError("only local placement is implemented")
+        placement = execution.get("placement", "local")
+        if placement != "local":
+            if not distributed:
+                raise ValueError("remote placement requires execution=distributed")
+            fields(placement, ("node_selector", "resources"))
+            selector = placement.get("node_selector", {})
+            if not isinstance(selector, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in selector.items()):
+                raise ValueError("node_selector must map strings to strings")
+            resources = placement.get("resources", {})
+            fields(resources, ("requests", "limits"))
+            for quantities in resources.values():
+                if not isinstance(quantities, dict) or not all(isinstance(k, str) and isinstance(v, str) and v for k, v in quantities.items()):
+                    raise ValueError("resource quantities must be nonempty strings")
         if not isinstance(execution.get("build", []), list):
             raise ValueError("build must be a list of argv commands")
         if not isinstance(execution.get("cwd", "."), str):

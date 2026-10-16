@@ -5,7 +5,7 @@ export PYTHONPATH := $(CURDIR)/src
 MODEL := examples/acquisition/model.json
 DEPLOYMENT := examples/acquisition/deployment.json
 
-.PHONY: validate build demo check test test-unit test-integration test-sdk test-simulated
+.PHONY: validate build demo check test test-unit test-integration test-sdk test-simulated test-distributed
 validate:
 	$(PYTHON) -m chain_env.cli validate --model $(MODEL) --deployment $(DEPLOYMENT) --sdl-root "$(SDL_ROOT)"
 build:
@@ -23,6 +23,8 @@ test-sdk:
 	CARGO_TARGET_DIR=$(CURDIR)/build/client-rust cargo test --offline --manifest-path sdk/client/rust/Cargo.toml
 test-integration:
 	SDL_ROOT="$(SDL_ROOT)" $(PYTHON) -m unittest discover -s tests/integration -v
+test-distributed:
+	SDL_ROOT="$(SDL_ROOT)" $(PYTHON) -m unittest discover -s tests/integration -p 'test_distributed.py' -v
 test-simulated:
 	SDL_ROOT="$(SDL_ROOT)" $(PYTHON) -m unittest discover -s tests/simulation -v
 

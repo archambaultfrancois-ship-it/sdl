@@ -27,6 +27,10 @@ make demo
 make check
 ```
 
+For multi-machine real-time execution, see [distributed deployment](docs/distributed.md).
+OSE provides authenticated `serve`/`worker` processes, direct or broker routes,
+cold component replacement and Kubernetes manifest export.
+
 `SDL_ROOT` defaults to the sibling SDL project (`../sdl`). To use another checkout,
 set `SDL_ROOT=/absolute/path/to/sdl` in the environment or on the `make` command
 line. The CLI also accepts `--sdl-root`, which takes precedence over `SDL_ROOT`.

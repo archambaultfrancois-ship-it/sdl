@@ -7,7 +7,7 @@ This repository contains two projects that evolve together:
   recording/replay tools, and a Wireshark adapter.
 - **[OSE](ose/README.md)** (Orchestration, Simulation, Exécution) orchestrates
   and executes component graphs with SDL message contracts, bounded RAM delivery, external clients,
-  and deterministic parallel simulation.
+  deterministic parallel simulation, and [distributed real-time deployment](ose/docs/distributed.md).
 
 OSE depends on SDL's public generator and runtime APIs. SDL builds and
 runs independently of OSE. Each project owns its sources, tests,

@@ -21,6 +21,33 @@ def main():
         command.add_argument("--sdl-root", default=os.environ.get("SDL_ROOT", str(Path(__file__).resolve().parents[3] / "sdl")),
                              help="SDL checkout (default: SDL_ROOT or the sibling sdl directory of the OSE source checkout)")
         command.add_argument("--build-dir", default="build")
+        if name == "build":
+            command.add_argument("--component", help="compile only this component, retaining the complete plan")
+    for name in ("serve", "worker", "cluster-status"):
+        command = commands.add_parser(name)
+        command.add_argument("--host", default="127.0.0.1", help="listen address for serve; coordinator address otherwise")
+        command.add_argument("--port", type=int, default=7000)
+        command.add_argument("--tls-ca")
+        command.add_argument("--tls-cert")
+        command.add_argument("--tls-key")
+        command.add_argument("--insecure", action="store_true", help="explicit loopback-only development mode")
+        if name != "cluster-status":
+            command.add_argument("--plan", default="build/plan.json")
+        if name == "serve":
+            command.add_argument("--lease-seconds", type=float, default=6)
+            command.add_argument("--kubernetes-lease", help="pre-created Kubernetes Lease for coordinator fencing")
+            command.add_argument("--namespace", default="default")
+        if name == "worker":
+            command.add_argument("--node", required=True)
+            command.add_argument("--listen-host", default="127.0.0.1")
+            command.add_argument("--listen-port", type=int, default=0)
+            command.add_argument("--advertise-host", default="127.0.0.1")
+    command = commands.add_parser("export-kubernetes")
+    command.add_argument("--plan", default="build/plan.json")
+    command.add_argument("--images", required=True)
+    command.add_argument("--namespace", default="ose-app")
+    command.add_argument("--image-pull-secret", action="append", default=[])
+    command.add_argument("--output", required=True)
     command = commands.add_parser("run")
     command.add_argument("--plan", default="build/plan.json")
     command.add_argument("--duration", type=float)
@@ -46,7 +73,35 @@ def main():
                 validate(args.model, args.deployment, args.sdl_root)
                 print(json.dumps({"valid": True}))
             else:
-                print(build(args.model, args.deployment, args.sdl_root, args.build_dir))
+                print(build(args.model, args.deployment, args.sdl_root, args.build_dir, args.component))
+        elif args.action == "export-kubernetes":
+            from chain_env.modeling.kubernetes import export
+            export(args.plan, args.images, args.namespace, args.output, args.image_pull_secret)
+        elif args.action in ("serve", "worker", "cluster-status"):
+            from chain_env.transport.secure import contexts, connect
+            hosts = [args.host]
+            if args.action == "worker":
+                hosts += [args.listen_host, args.advertise_host]
+            server_context, client_context = contexts(args.tls_ca, args.tls_cert, args.tls_key,
+                                                     insecure=args.insecure, hosts=hosts)
+            if args.action == "serve":
+                from chain_env.execution.distributed import serve
+                asyncio.run(serve(args.plan, args.host, args.port, server_context, args.lease_seconds,
+                                  args.kubernetes_lease, args.namespace))
+            elif args.action == "worker":
+                from chain_env.execution.distributed import work
+                asyncio.run(work(args.plan, args.node, args.host, args.port, listen_host=args.listen_host,
+                    listen_port=args.listen_port, advertise_host=args.advertise_host,
+                    server_context=server_context, client_context=client_context))
+            else:
+                async def status():
+                    client = await connect(args.host, args.port, 1024 * 1024, client_context, "coordinator")
+                    try:
+                        result, _ = await client.request("status")
+                        print(json.dumps({k: v for k, v in result.items() if k not in ("op", "request", "content")}, indent=2))
+                    finally:
+                        await client.close()
+                asyncio.run(status())
         elif args.action == "run":
             if args.duration is not None and (not math.isfinite(args.duration) or args.duration <= 0):
                 raise ValueError("duration must be finite and positive")
@@ -63,6 +118,8 @@ def main():
                 print(json.dumps(summary), flush=True)
             else:
                 from chain_env.execution.supervisor import run
+                if json.loads(Path(args.plan).read_text()).get("execution") == "distributed":
+                    raise ValueError("use serve and worker for a distributed plan")
                 if any(value is not None for value in (args.workers, args.scenario, args.trace, args.max_tick_output_bytes)):
                     raise ValueError("--workers, --scenario, --trace and --max-tick-output-bytes require simulated mode")
                 asyncio.run(run(args.plan, args.duration, args.port or 0))

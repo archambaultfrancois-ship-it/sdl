@@ -91,6 +91,8 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
         node["build"] = [[expand(v) for v in command] for command in execution.get("build", [])] + generated_build
         node["cwd"] = str((deployment_path.parent / expand(execution.get("cwd", "."))).resolve())
         node["env"] = {k: expand(v) for k, v in execution.get("env", {}).items()}
+        if "placement" in execution:
+            node["placement"] = execution["placement"]
         components[name] = node
     external_topics = {}
     for topic, desc in model.get("external_topics", {}).items():
@@ -111,21 +113,34 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
             raise ValueError("connected port roots must have the same logical name")
         codec.compare(publisher["catalogue"], consumer["catalogue"], publisher["root"])
         binding = deployment.get("subscriptions", {}).get(sub["id"], {})
-        fields(binding, ("transport",))
+        fields(binding, ("transport", "routing"))
+        routing = binding.get("routing", "broker")
+        if routing not in ("broker", "direct"):
+            raise ValueError("routing must be broker or direct")
+        if routing == "direct" and deployment.get("execution") != "distributed":
+            raise ValueError("direct routes require execution=distributed")
         policy = SubscriptionPolicy.resolve(sub.get("qos"), binding.get("transport", "tcp"))
-        subscriptions.append({**sub, "from": sub.get("from", sub.get("from_topic")), "policy": policy.to_dict()})
+        if deployment.get("execution") == "distributed" and policy.transport != "tcp":
+            raise ValueError("distributed execution currently requires TCP")
+        subscriptions.append({**sub, "from": sub.get("from", sub.get("from_topic")), "policy": policy.to_dict(),
+                              **({"routing": routing} if deployment.get("execution") == "distributed" else {})})
     for key, default in (("max_frame", 1024 * 1024), ("max_datagram", 1200)):
         value = deployment.get(key, default)
         if type(value) is not int or value < 128 or (key == "max_datagram" and value > 65507):
             raise ValueError(f"invalid {key}")
-    return {"version": 1, "sdl_root": str(codec.root), "components": components, "subscriptions": subscriptions,
+    if deployment.get("execution") == "distributed" and external_topics:
+        raise ValueError("distributed v1 does not support external client topics")
+    return {"version": 1, "execution": deployment.get("execution", "local"), "sdl_root": str(codec.root), "components": components, "subscriptions": subscriptions,
             "external_topics": external_topics, "broker": deployment.get("broker", {}), "build_dir": str(destination), "max_frame": deployment.get("max_frame", 1024 * 1024),
             "max_datagram": deployment.get("max_datagram", 1200)}
 
 
-def build(model, deployment, sdl_root, destination):
+def build(model, deployment, sdl_root, destination, component=None):
     plan = compile_plan(model, deployment, sdl_root, destination)
-    for node in plan["components"].values():
+    if component is not None and component not in plan["components"]:
+        raise ValueError("unknown component to build")
+    nodes = plan["components"].values() if component is None else [plan["components"][component]]
+    for node in nodes:
         if "container" in node:
             container = node["container"]
             if container["language"] == "python":

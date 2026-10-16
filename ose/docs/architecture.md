@@ -55,7 +55,7 @@ for examples and exact timing rules.
 Deployment `components` covers exactly the model components. Each entry has an
 argv `command` or a `container: {language: "python" | "c" | "rust", handler: "path/to/logic"}`
 definition, optional `build` list of argv commands, `cwd`, `env`, and
-`placement` (currently only `local`). No shell interprets commands. `cwd` is
+`placement` (`local`, or Kubernetes constraints in distributed deployments). No shell interprets commands. `cwd` is
 relative to the deployment file. Supported substitutions in commands and env:
 `{python}`, `{project}` (model directory), `{sdl_root}`, `{build}`, `{generated}`.
 The latter names the shared generated directory; schema overrides have separate
@@ -103,5 +103,6 @@ There is no automatic restart.
 The CLI and the SDK protocol are the supported v1 interfaces. Python internal
 classes are implementation details. The resolved plan is versioned but intended
 for the matching CLI version. Future transports implement byte movement;
-delivery policy stays in the common delivery engine. A distributed supervisor
-can consume the same graph after adding remote placement and deployment rules.
+delivery policy stays in the common delivery engine. The
+[distributed real-time engine](distributed.md) provides remote workers, direct
+TCP routes and Kubernetes export; the ordinary supervisor remains local.
