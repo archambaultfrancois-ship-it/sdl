@@ -83,10 +83,12 @@ def validate_graph(model, deployment):
             raise ValueError("each component needs exactly one command or container")
         if "container" in execution:
             container = execution["container"]
-            fields(container, ("language", "handler"), ("language", "handler"))
+            fields(container, ("language", "handler", "class", "unit"), ("language", "handler"))
             language = container["language"]
-            if language not in ("python", "c", "rust"):
-                raise ValueError("container language must be python, c or rust")
+            if language not in ("python", "c", "rust", "java", "ada"):
+                raise ValueError("container language must be python, c, rust, java or ada")
+            from chain_env.modeling.managed_containers import validate_names
+            validate_names(language, name, node, container)
             if not isinstance(container["handler"], str) or not container["handler"]:
                 raise ValueError("container handler must be a nonempty file path")
             if not name.isidentifier():
@@ -98,7 +100,7 @@ def validate_graph(model, deployment):
                 for port in node[direction]:
                     if not port.isidentifier():
                         raise ValueError("generated port names must be identifiers")
-                    if language != "python" and (not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", port) or port in native_keywords):
+                    if language in ("c", "rust") and (not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", port) or port in native_keywords):
                         raise ValueError("generated native port names must be portable, non-reserved ASCII identifiers")
                     if direction == "inputs" and port in ("start", "stop", "tick"):
                         raise ValueError(f"input {port!r} conflicts with a reserved callback")

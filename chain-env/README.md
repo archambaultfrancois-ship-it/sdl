@@ -6,7 +6,10 @@ separate repository. By default, it uses the enclosing SDL checkout; an explicit
 path supports a separate dependency checkout.
 
 Requirements: Python 3.10+, a C99 compiler, Rust/Cargo, and a compatible SDL
-checkout. The Python engine uses only the standard library. All delivery queues,
+checkout. Java components additionally need a Java 7-compatible compiler/JVM;
+Ada components need GNAT with the full Ada 2012 runtime. The complete `make check`
+requires both toolchains; `make check TEST_LANGUAGES=python,c,rust` selects the
+original three-language suites. The Python engine uses only the standard library. All delivery queues,
 catalogues, retry state and deduplication history live in bounded RAM structures.
 The dependency revision and repository are recorded in `sdl-dependency.json`.
 Development accepts an explicit compatible checkout; CI should use the pinned
@@ -67,7 +70,7 @@ See [architecture](docs/architecture.md) for document fields and process layout,
 [runtime execution](docs/runtime.md) for ticks, message flow and acknowledgements,
 [simulation](docs/simulation.md) for reproducible virtual-time execution and parallel workers,
 [delivery](docs/delivery.md) for FIFO/latest semantics and transport guarantees,
-and [component protocol](sdk/protocol.md) for the Python, C and Rust SDK boundary.
+and [component protocol](sdk/protocol.md) for the Python, C, Rust, Java and Ada SDK boundary.
 The example documents are complete runnable model/deployment templates.
 
 Components can provide only user callbacks: declare
@@ -134,7 +137,10 @@ examples, tests and dependency lock. The nested `.github/workflows` directory
 becomes active when this directory becomes the repository root. No source paths
 need changing; build plans are regenerated for the new checkout location.
 
-The [Python, C and Rust external client SDKs](docs/clients.md) support publishing
+The [Python, C, Rust, Java and Ada external client SDKs](docs/clients.md) support publishing
 and subscribing to the broker without a client-side model. The application model
 can also declare `external_topics` and connect a topic to an input using
 `from_topic`. See the examples in `examples/external/`.
+
+Java and Ada: see [SDKs, callbacks, external clients and toolchains](docs/java-ada.md).
+The [multilingual example](examples/multilingual/model.json) connects Python, C, Rust, Java and Ada in one graph.

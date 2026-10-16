@@ -165,17 +165,39 @@ class ExternalTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.to_thread(publisher.publish,self.Message(sequence=0,value=0.))
         c=await self.client('receiver');values=[];event=threading.Event()
         def callback(value,info):values.append(value.sequence);event.set()
-        await asyncio.to_thread(c.subscribe,'topic',self.Message,callback,transport='udp',qos=Fifo(ack='received',retry=Retry(ack_timeout_ms=20)))
+        sub=await asyncio.to_thread(c.subscribe,'topic',self.Message,callback,transport='udp',qos=Fifo(ack='received',retry=Retry(ack_timeout_ms=20)))
         self.assertFalse(await asyncio.to_thread(event.wait,.05))
+        engine=self.broker.engines[sub.identity]
+        now=[0.]
+        engine.clock=lambda:now[0]
+        async def wait_for_metric(metric,count):
+            async def wait():
+                while engine.metrics[metric]<count:
+                    await asyncio.sleep(.005)
+            await asyncio.wait_for(wait(),3)
         original=self.broker.udp.send;attempts=[0]
         async def lose_first(header,payload=b'',address=None):
             attempts[0]+=1
             if attempts[0]>1:await original(header,payload,address)
         self.broker.udp.send=lose_first
+        original_ack=c.udp.send;acks=[0]
+        async def lose_first_ack(header,payload=b'',address=None):
+            acks[0]+=1
+            if acks[0]>1:await original_ack(header,payload,address)
+        c.udp.send=lose_first_ack
         await asyncio.to_thread(publisher.publish,self.Message(sequence=1,value=1.))
+        await wait_for_metric('sent',1)
+        # Advance retry time explicitly; socket and codec scheduling must not
+        # determine how many attempts occur before an ACK is processed.
+        now[0]+=1;engine.store.notify()
         self.assertTrue(await asyncio.to_thread(event.wait,2))
-        await asyncio.sleep(.1)
-        self.assertEqual(values,[1]);self.assertEqual(attempts[0],2)
+        await wait_for_metric('sent',2)
+        now[0]+=1;engine.store.notify()
+        await wait_for_metric('acknowledged',1)
+        stats=await asyncio.to_thread(sub.stats)
+        self.assertEqual(values,[1]);self.assertEqual(attempts[0],3)
+        self.assertEqual(acks[0],2)
+        self.assertEqual(stats['client']['duplicates'],1)
 
     async def test_concurrent_publication_ids_keep_their_sequence(self):
         c=await self.client('concurrent');p=await asyncio.to_thread(c.publisher,'topic',self.Message)

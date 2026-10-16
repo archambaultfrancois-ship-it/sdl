@@ -1,7 +1,7 @@
 # Deterministic simulated execution
 
 `simulated` is a functional execution engine for the same compiled graph and
-Python, C and Rust callback containers used by `realtime`. It runs real component
+Python, C, Rust, Java and Ada callback containers used by `realtime`. It runs real component
 processes, controls their ticks centrally and advances a virtual clock without
 waiting for wall time. The default engine remains `realtime`.
 
@@ -30,7 +30,7 @@ early with `stop_reason: "quiescent"`, listing any required inputs still waiting
 An empty input without a timeout does not make the engine wait in real time.
 
 `--workers` defaults to `1` and must be a positive integer. It limits concurrent
-component calculations, using the separate Python, C and Rust processes already
+component calculations, using the separate Python, C, Rust, Java and Ada processes already
 provided by the framework. It does not allocate CPU affinity or parallelize a
 single callback. A sequential graph offers little parallel speedup.
 

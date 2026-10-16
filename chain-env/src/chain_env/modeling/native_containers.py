@@ -31,7 +31,7 @@ def rust_string(value):
 
 def merge_schemas(name, language, schemas, destination):
     files, types = {}, {}
-    suffixes = (".c", ".h") if language == "c" else (".rs",)
+    suffixes = {"c": (".c", ".h"), "rust": (".rs",), "java": (".java",), "ada": (".ads", ".adb")}[language]
     for directory, bindings in schemas:
         for path in Path(directory).rglob("*"):
             if not path.is_file() or path.suffix not in suffixes or path.name in ("sdl_registry.c", "sdl_registry.h", "mod.rs"):

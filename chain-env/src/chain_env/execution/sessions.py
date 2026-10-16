@@ -133,6 +133,10 @@ class Sessions:
         if identity not in session.subscriptions:
             raise ClientError("ownership", "subscription does not belong to session")
         session.subscriptions.remove(identity)
+        # Explicit state also terminates a loop if wait_for absorbs a cancellation
+        # racing an already completed wakeup on Python 3.10/3.11.
+        self.subscriptions[identity]["closing"] = True
+        self.engines[identity].store.notify()
         task = self.external_tasks.pop(identity)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

@@ -1,0 +1,164 @@
+package org.sdlchain;
+
+import java.io.*;
+import java.math.BigInteger;
+import java.nio.ByteBuffer;
+import java.nio.charset.*;
+import java.util.*;
+import sdl.runtime.SdlCodec;
+
+/** CH/1 component runtime. Standard output belongs exclusively to this protocol. */
+public final class Component {
+    public static final int MAX_FRAME = 1024 * 1024;
+    private static final Charset UTF8 = Charset.forName("UTF-8");
+    private static final BigInteger MAX_U64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+    public static String text(byte[] bytes) throws IOException {
+        return UTF8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
+    }
+    public static byte[] utf8(String text) throws IOException {
+        ByteBuffer bytes = UTF8.newEncoder().onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT).encode(java.nio.CharBuffer.wrap(text));
+        byte[] result = new byte[bytes.remaining()]; bytes.get(result); return result;
+    }
+    public static final class Frame {
+        public final int op; public final byte[] body;
+        Frame(int op, byte[] body) { this.op = op; this.body = body; }
+    }
+    public static Frame read(InputStream input) throws IOException {
+        DataInputStream in = new DataInputStream(input);
+        int size = in.readInt();
+        if (size < 1 || size > MAX_FRAME) throw new IOException("invalid CH/1 frame size");
+        int op = in.readUnsignedByte(); byte[] body = new byte[size - 1]; in.readFully(body);
+        return new Frame(op, body);
+    }
+    public static void send(OutputStream output, int op, byte[] body) throws IOException {
+        if (body.length >= MAX_FRAME) throw new IOException("CH/1 frame exceeds limit");
+        DataOutputStream out = new DataOutputStream(output);
+        out.writeInt(body.length + 1); out.writeByte(op); out.write(body); out.flush();
+    }
+    public static String resource(Class<?> owner, String path) throws IOException {
+        InputStream in = owner.getResourceAsStream(path);
+        if (in == null) throw new IOException("missing catalogue resource " + path);
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream(); byte[] buffer = new byte[4096]; int n;
+            while ((n = in.read(buffer)) != -1) {
+                if (out.size() + n > MAX_FRAME) throw new IOException("catalogue exceeds limit");
+                out.write(buffer, 0, n);
+            }
+            return text(out.toByteArray());
+        } finally { in.close(); }
+    }
+    public static final class Port {
+        public final String name, root, catalogue;
+        public final Class<? extends SdlCodec.Message> type;
+        public final boolean required, timed;
+        private String remote;
+        private SdlCodec.Context decoder;
+        final SdlCodec.Context encoder;
+        public Port(String name, String root, String catalogue, Class<? extends SdlCodec.Message> type,
+                    boolean required, boolean timed) {
+            this.name = name; this.root = root; this.catalogue = catalogue; this.type = type;
+            this.required = required; this.timed = timed;
+            encoder = SdlCodec.prepare(catalogue, type);
+        }
+        Object decode(String cat, byte[] bytes) throws IOException {
+            if (!cat.equals(remote)) {
+                if (!SdlCodec.compareCatalogues(cat, catalogue, root, true).compatible())
+                    throw new IOException("incompatible input catalogue for " + name);
+                decoder = SdlCodec.prepare(cat, type); remote = cat;
+            }
+            Object value = SdlCodec.decode(decoder, bytes);
+            if (!type.isInstance(value)) throw new IOException("wrong message root for " + name);
+            return value;
+        }
+    }
+    public static class Context {
+        public final String name;
+        public String configJson;
+        private BigInteger time = BigInteger.ZERO, index = BigInteger.ZERO;
+        private Thread owner;
+        private final Port[] outputs;
+        private final OutputStream stream;
+        public Context(String name, Port[] outputs) { this(name, outputs, System.out); }
+        public Context(String name, Port[] outputs, OutputStream stream) {
+            this.name = name; this.outputs = outputs; this.stream = stream;
+        }
+        public BigInteger timeNs() { return time; }
+        public BigInteger tickIndex() { return index; }
+        public double now() { return time.doubleValue() / 1000000000.0; }
+        protected final void publish(int index, SdlCodec.Message message) throws IOException {
+            if (owner != Thread.currentThread()) throw new IllegalStateException("publication requires the active tick callback");
+            Port port = outputs[index];
+            if (!port.type.isInstance(message)) throw new IllegalArgumentException("wrong output type");
+            byte[] name = utf8(port.name), payload = SdlCodec.encode(port.encoder, message);
+            if (name.length > 65535 || payload.length == 0 || name.length + payload.length > MAX_FRAME - 3)
+                throw new IOException("invalid publication size");
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream(); DataOutputStream out = new DataOutputStream(bytes);
+            out.writeShort(name.length); out.write(name); out.write(payload); send(stream, 'P', bytes.toByteArray());
+        }
+        private void tick(byte[] bytes) throws IOException {
+            if (bytes.length == 0) { time = BigInteger.ZERO; index = index.add(BigInteger.ONE); }
+            else if (bytes.length == 16) {
+                time = new BigInteger(1, Arrays.copyOfRange(bytes, 0, 8));
+                index = new BigInteger(1, Arrays.copyOfRange(bytes, 8, 16));
+            } else throw new IOException("invalid TICK body");
+            if (index.signum() == 0 || index.compareTo(MAX_U64) > 0) throw new IOException("invalid tick index");
+        }
+    }
+    public interface Callbacks {
+        void start() throws Exception;
+        void tick(Object[] inputs) throws Exception;
+        void stop() throws Exception;
+    }
+    public static void run(Context ctx, Port[] inputs, Callbacks callbacks) throws Exception {
+        run(ctx, inputs, callbacks, System.in);
+    }
+    public static void run(Context ctx, Port[] inputs, Callbacks callbacks, InputStream stream) throws Exception {
+        Frame init = read(stream);
+        if (init.op != 'I') throw new IOException("expected INIT");
+        ctx.configJson = text(init.body);
+        // Validate JSON before exposing INIT to user code.
+        if (!(Json.parse(ctx.configJson) instanceof Map)) throw new IOException("INIT must be a JSON object");
+        boolean started = false; Throwable failure = null;
+        try {
+            started = true; callbacks.start(); send(ctx.stream, 'R', new byte[]{1});
+            Object[] selected = new Object[inputs.length]; boolean[] present = new boolean[inputs.length];
+            for (;;) {
+                Frame event = read(stream);
+                if (event.op == 'X') { if (event.body.length != 0) throw new IOException("invalid STOP"); break; }
+                if (event.op == 'D') {
+                    DataInputStream data = new DataInputStream(new ByteArrayInputStream(event.body));
+                    int size = data.readUnsignedShort();
+                    if (size == 0 || size > data.available() - 4) throw new IOException("invalid input port size");
+                    byte[] portBytes = new byte[size]; data.readFully(portBytes); String name = text(portBytes);
+                    int slot = -1;
+                    for (int i = 0; i < inputs.length; ++i) if (inputs[i].name.equals(name)) slot = i;
+                    if (slot < 0 || present[slot]) throw new IOException("unknown or duplicate input " + name);
+                    int catSize = data.readInt();
+                    if (catSize < 0 || catSize > data.available()) throw new IOException("invalid catalogue size");
+                    byte[] cat = new byte[catSize]; data.readFully(cat);
+                    byte[] payload = new byte[data.available()]; data.readFully(payload);
+                    Port port = inputs[slot];
+                    if (catSize == 0 && payload.length == 0) {
+                        if (!port.required || !port.timed) throw new IOException("unexpected null input");
+                    } else {
+                        if (catSize == 0 || payload.length == 0) throw new IOException("incomplete input");
+                        selected[slot] = port.decode(text(cat), payload);
+                    }
+                    present[slot] = true;
+                } else if (event.op == 'T') {
+                    for (int i = 0; i < inputs.length; ++i)
+                        if (inputs[i].required && !present[i]) throw new IOException("missing required input " + inputs[i].name);
+                    ctx.tick(event.body); ctx.owner = Thread.currentThread();
+                    try { callbacks.tick(selected); } finally { ctx.owner = null; }
+                    Arrays.fill(selected, null); Arrays.fill(present, false); send(ctx.stream, 'F', new byte[0]);
+                } else throw new IOException("unexpected CH/1 opcode");
+            }
+        } catch (Throwable error) { failure = error; throw error; }
+        finally {
+            if (started) try { callbacks.stop(); }
+            catch (Throwable stop) { if (failure != null) failure.addSuppressed(stop); else throw stop; }
+        }
+    }
+}

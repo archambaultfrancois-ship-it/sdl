@@ -10,6 +10,7 @@ typedef struct {
     CenvOnMessage on_message;
     void (*destroy)(void *);
 } CenvHooks;
+char *cenv_copy_string(const char *);
 void cenv_set_error(const char *code, const char *message);
 int cenv_declare(CenvClient *, const char *topic, const char *root, const char *catalogue);
 int cenv_release_publisher(CenvClient *, const char *topic);

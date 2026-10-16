@@ -24,7 +24,7 @@ Three actors participate in a message exchange:
 
 The current implementation runs each component and its Python adapter as two
 separate processes. The supervisor hosts the broker and launches the adapters.
-The component process can use Python, C or Rust.
+The component process can use Python, C, Rust, Java or Ada.
 
 ```mermaid
 flowchart LR

@@ -1,0 +1,42 @@
+name: Chain language SDKs
+on:
+  push:
+    paths: ['chain-env/**', 'runtime/**', 'gen/**', '.github/workflows/chain.yml']
+  pull_request:
+    paths: ['chain-env/**', 'runtime/**', 'gen/**', '.github/workflows/chain.yml']
+jobs:
+  full:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        python: ['3.10', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Ada toolchain
+        run: sudo apt-get update && sudo apt-get install -y gnat
+      - name: Install package
+        run: python -m pip install ./chain-env
+      - name: Verify all languages and execution modes
+        run: make -C chain-env check SDL_ROOT="$PWD"
+      - name: Installed SDK smoke test
+        run: python chain-env/tests/installed_sdk.py
+  java7:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '7'
+      - name: Verify actual Java 7 compilation and execution
+        run: make -C chain-env test-java SDL_ROOT="$PWD"

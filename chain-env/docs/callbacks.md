@@ -14,8 +14,10 @@ an executable command:
 
 The handler path is relative to the deployment document; existing substitutions
 such as `{project}` also work. The component must specify exactly one of
-`command` or `container`. `language` accepts `python`, `c` and `rust`, with a
-`.py`, `.c` or `.rs` handler respectively. Existing command-based components
+`command` or `container`. `language` accepts `python`, `c`, `rust`, `java` and
+`ada`, with a `.py`, `.c`, `.rs`, `.java` or `.adb` handler respectively. Java
+requires the fully qualified `class`; Ada requires the package `unit` and its
+`.ads` specification alongside the body. Existing command-based components
 continue to use the same binary SDK protocol.
 
 `build` generates the wrapper, component-specific SDL bindings, compilation
@@ -26,6 +28,8 @@ commands and executable command in the resolved plan:
 | Python | `build/components/<name>/container.py`, `types/` | Python wrapper |
 | C | `build/components/<name>/component.h`, `container.c`, `types/` | `build/components/<name>/component` |
 | Rust | `build/components/<name>/src/container.rs`, `src/types/`, `Cargo.toml` | `build/rust-target/release/chain-component-<name>` |
+| Java | `org.sdlchain.generated.<name>.API`, `Main`, typed bindings | JVM with generated classes |
+| Ada | `Chain_<name>`, typed bindings, generated main | `build/components/<name>/component` |
 
 C uses the compiler from `CC` (default `cc`), C99 and the SDL C runtime.
 Rust builds offline with local paths to the SDK and SDL runtime; components
@@ -251,3 +255,9 @@ components have separate binding directories and processes, so they can use
 different revisions of the same module.
 Python schema modules must not shadow standard library or SDK modules; C and
 Rust do not have this Python import restriction (for example, `types.sdl` works).
+
+## Java and Ada callbacks
+
+See [Java and Ada SDKs](java-ada.md) for typed handlers, complete snapshots,
+nullable timed inputs, toolchain configuration and external clients. Both use
+the same scheduler and CH/1 protocol in real-time and simulated execution.

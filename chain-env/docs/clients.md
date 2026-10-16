@@ -1,6 +1,6 @@
 # External clients
 
-A Python, C or Rust program can publish and subscribe directly to an application's
+A Python, C, Rust, Java or Ada program can publish and subscribe directly to an application's
 CENV/1 broker without a client-side model or a second broker. Generated message
 types and the SDL runtime remain application dependencies. The existing component
 SDKs that use stdin/stdout remain independent of these network SDKs.
@@ -165,3 +165,9 @@ Configure dynamic limits in `broker.external`:
 Transport limits remain `max_frame` and `max_datagram`. Exceeding a limit or
 requesting an unsupported quality of service produces an explicit refusal.
 Sessions close on disconnect, and their subscriptions and queues are deleted.
+
+## Java and Ada
+
+Java uses the shared Rust engine through JNI; Ada uses its C ABI with typed SDL
+codecs. See [build commands, APIs and lifetime rules](java-ada.md#external-java-client).
+Neither client requires a model or Python at runtime.

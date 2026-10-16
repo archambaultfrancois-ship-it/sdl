@@ -325,7 +325,7 @@ class Broker(Sessions):
     async def _send_loop(self, identity, engine):
         sub = self.subscriptions[identity]
         node = sub["to"].split(".")[0]
-        while True:
+        while not self.closing and not sub.get("closing", False):
             engine.store.changed.clear()
             available, failed = False, False
             external = self.sessions.get(sub.get("session"))

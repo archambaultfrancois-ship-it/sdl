@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "schemas": "schemas",
+  "components": {
+    "source": {
+      "inputs": {},
+      "outputs": {
+        "value": {
+          "root": "Measurement"
+        }
+      },
+      "trigger": {
+        "mode": "periodic",
+        "period_ms": 100
+      }
+    },
+    "c_worker": {
+      "inputs": {
+        "input": {
+          "root": "Measurement"
+        }
+      },
+      "outputs": {
+        "value": {
+          "root": "Measurement"
+        }
+      },
+      "trigger": {
+        "mode": "on_change"
+      }
+    },
+    "rust_worker": {
+      "inputs": {
+        "input": {
+          "root": "Measurement"
+        }
+      },
+      "outputs": {
+        "value": {
+          "root": "Measurement"
+        }
+      },
+      "trigger": {
+        "mode": "on_change"
+      }
+    },
+    "java_worker": {
+      "inputs": {
+        "input": {
+          "root": "Measurement"
+        }
+      },
+      "outputs": {
+        "value": {
+          "root": "Measurement"
+        }
+      },
+      "trigger": {
+        "mode": "on_change"
+      }
+    },
+    "ada_worker": {
+      "inputs": {
+        "input": {
+          "root": "Measurement"
+        }
+      },
+      "outputs": {
+        "value": {
+          "root": "Measurement"
+        }
+      },
+      "trigger": {
+        "mode": "on_change"
+      }
+    },
+    "join": {
+      "inputs": {
+        "c_worker": {
+          "root": "Measurement"
+        },
+        "rust_worker": {
+          "root": "Measurement"
+        },
+        "java_worker": {
+          "root": "Measurement"
+        },
+        "ada_worker": {
+          "root": "Measurement"
+        }
+      },
+      "outputs": {
+        "value": {
+          "root": "Measurement"
+        }
+      },
+      "trigger": {
+        "mode": "on_change"
+      }
+    }
+  },
+  "subscriptions": [
+    {
+      "id": "source-c_worker",
+      "from": "source.value",
+      "to": "c_worker.input"
+    },
+    {
+      "id": "source-rust_worker",
+      "from": "source.value",
+      "to": "rust_worker.input"
+    },
+    {
+      "id": "source-java_worker",
+      "from": "source.value",
+      "to": "java_worker.input"
+    },
+    {
+      "id": "source-ada_worker",
+      "from": "source.value",
+      "to": "ada_worker.input"
+    },
+    {
+      "id": "c_worker-join",
+      "from": "c_worker.value",
+      "to": "join.c_worker"
+    },
+    {
+      "id": "rust_worker-join",
+      "from": "rust_worker.value",
+      "to": "join.rust_worker"
+    },
+    {
+      "id": "java_worker-join",
+      "from": "java_worker.value",
+      "to": "join.java_worker"
+    },
+    {
+      "id": "ada_worker-join",
+      "from": "ada_worker.value",
+      "to": "join.ada_worker"
+    }
+  ]
+}

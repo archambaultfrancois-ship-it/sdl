@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "components": {
+    "source": {
+      "container": {
+        "language": "python",
+        "handler": "components/source.py"
+      }
+    },
+    "join": {
+      "container": {
+        "language": "python",
+        "handler": "components/join.py"
+      }
+    },
+    "c_worker": {
+      "container": {
+        "language": "c",
+        "handler": "components/c_worker.c"
+      }
+    },
+    "rust_worker": {
+      "container": {
+        "language": "rust",
+        "handler": "components/rust_worker.rs"
+      }
+    },
+    "java_worker": {
+      "container": {
+        "language": "java",
+        "handler": "components/JavaWorker.java",
+        "class": "example.JavaWorker"
+      }
+    },
+    "ada_worker": {
+      "container": {
+        "language": "ada",
+        "handler": "components/ada_worker_handler.adb",
+        "unit": "Ada_Worker_Handler"
+      }
+    }
+  }
+}

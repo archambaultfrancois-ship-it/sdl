@@ -12,6 +12,9 @@ from chain_env.modeling.model import load, fields
 from chain_env.modeling.validation import validate_graph
 from chain_env.modeling.containers import generate_python, scaffold_handler
 from chain_env.modeling.native_containers import generate_c, generate_rust, scaffold_native
+from chain_env.modeling.managed_containers import generate_java, generate_ada, scaffold_managed
+
+BACKENDS = {"c": generate_c, "rust": generate_rust, "java": generate_java, "ada": generate_ada}
 
 
 def compile_plan(model_path, deployment_path, sdl_root, destination):
@@ -21,13 +24,21 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
     destination = Path(destination).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     codec, schema_cache, generated_paths = SDL2(sdl_root), {}, {}
+    schema_languages = {}
+    for component, node in model["components"].items():
+        language = deployment["components"][component].get("container", {}).get("language")
+        for direction in ("inputs", "outputs"):
+            for desc in node[direction].values():
+                schema_path = (model_path.parent / desc.get("schema", model["schemas"])).resolve()
+                if language:
+                    schema_languages.setdefault(schema_path, set()).add(language)
     def catalogue(path):
         path = (model_path.parent / path).resolve()
         if path not in schema_cache:
             shared = path == (model_path.parent / model["schemas"]).resolve()
             name = "shared" if shared else hashlib.sha256(str(path).encode()).hexdigest()[:12]
             generated_paths[path] = destination / "generated" / name
-            schema_cache[path] = codec.generate(path, generated_paths[path])
+            schema_cache[path] = codec.generate(path, generated_paths[path], schema_languages.get(path, ()))
         return schema_cache[path]
     components = {}
     substitutions = {"project": str(model_path.parent), "build": str(destination),
@@ -41,7 +52,7 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
     for name, execution in deployment["components"].items():
         if "container" in execution:
             handler = (deployment_path.parent / expand(execution["container"]["handler"])).resolve()
-            suffix = {"python": ".py", "c": ".c", "rust": ".rs"}[execution["container"]["language"]]
+            suffix = {"python": ".py", "c": ".c", "rust": ".rs", "java": ".java", "ada": ".adb"}[execution["container"]["language"]]
             if handler.suffix != suffix or (handler.exists() and not handler.is_file()):
                 raise ValueError(f"container handler must name a {suffix} file")
             if handler.is_relative_to(destination):
@@ -71,9 +82,10 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
                 types = {logical: binding for _, bindings in schemas for logical, binding in bindings.items()}
                 node["command"] = [sys.executable, str(wrapper)]
             else:
-                generated = (generate_c if language == "c" else generate_rust)(name, node, handler, codec.root, schemas, component_dir)
+                kwargs = {"identity": execution["container"].get("class", execution["container"].get("unit"))} if language in ("java", "ada") else {}
+                generated = BACKENDS[language](name, node, handler, codec.root, schemas, component_dir, **kwargs)
                 types, node["command"], generated_build = generated["types"], generated["command"], generated["build"]
-            node["container"] = {"language": language, "handler": str(handler), "types": types}
+            node["container"] = {**execution["container"], "handler": str(handler), "types": types}
         else:
             node["command"] = [expand(v) for v in execution["command"]]
         node["build"] = [[expand(v) for v in command] for command in execution.get("build", [])] + generated_build
@@ -118,6 +130,8 @@ def build(model, deployment, sdl_root, destination):
             container = node["container"]
             if container["language"] == "python":
                 scaffold_handler(node, container["handler"], container["types"])
+            elif container["language"] in ("java", "ada"):
+                scaffold_managed(node, container)
             else:
                 scaffold_native(node, container["handler"], container["types"], container["language"])
         env = dict(os.environ, **node["env"])

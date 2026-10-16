@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the chain test suites with compact progress and full logs on failure."""
 
+import os
 import shlex
 import subprocess
 import sys
@@ -12,6 +13,12 @@ SUITES = (
     ("Integration", "test-integration"),
     ("Simulation", "test-simulated"),
 )
+LANGUAGES = set(os.environ.get("TEST_LANGUAGES", "python,c,rust,java,ada").split(","))
+if LANGUAGES - {"python", "c", "rust", "java", "ada"}:
+    raise ValueError("unknown TEST_LANGUAGES entry")
+SUITES += tuple((language.title(), "test-" + language) for language in ("java", "ada") if language in LANGUAGES)
+if {"java", "ada"} <= LANGUAGES:
+    SUITES += (("Five-language integration", "test-mixed"),)
 BAR_WIDTH = 24
 
 
@@ -46,7 +53,10 @@ def main():
                 sys.stdout.write("\n")
             return result.returncode
         progress(index + 1, "{} passed".format(suite))
-    sys.stdout.write("\nAll chain checks passed.\n")
+    sys.stdout.write("\nSelected chain checks passed.\n")
+    omitted = {"java", "ada"} - LANGUAGES
+    if omitted:
+        print("Not verified: " + ", ".join(sorted(omitted)))
     return 0
 
 

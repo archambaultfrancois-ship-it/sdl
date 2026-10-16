@@ -50,6 +50,11 @@ pub unsafe extern "C" fn cenv_set_error(code: *const c_char, message: *const c_c
         Ok(1)
     });
 }
+/// Copy UTF-8 into an owned ABI string for language bridges.
+#[no_mangle]
+pub unsafe extern "C" fn cenv_copy_string(p: *const c_char) -> *mut c_char {
+    guard(|| Ok(cstring(string(p)?).into_raw()))
+}
 #[no_mangle]
 pub unsafe extern "C" fn cenv_string_free(p: *mut c_char) {
     if !p.is_null() {

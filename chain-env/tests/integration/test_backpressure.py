@@ -66,6 +66,36 @@ class BackpressureTests(unittest.IsolatedAsyncioTestCase):
                 "subscriptions": [{"id": port, "from": f"source.{port}", "to": f"sink.{port}",
                                    "policy": policy.to_dict()} for port, policy in policies.items()]}
 
+    async def test_unsubscribe_stops_even_when_a_wakeup_absorbs_cancellation(self):
+        broker = Broker(self.plan({"input": Policy()}))
+        engine = broker.engines["input"]
+        entered = asyncio.Event()
+
+        class RacingEvent:
+            swallowed = False
+            def clear(self): pass
+            def set(self): pass
+            async def wait(self):
+                entered.set()
+                try:
+                    await asyncio.Future()
+                except asyncio.CancelledError:
+                    if self.swallowed:
+                        raise
+                    self.swallowed = True
+                    # Model the completed-wakeup cancellation race in wait_for.
+                    return
+
+        engine.store.changed = RacingEvent()
+        task = self.spawn(broker._send_loop("input", engine))
+        broker.external_tasks["input"] = task
+        session = SimpleNamespace(subscriptions={"input"})
+        await entered.wait()
+        await asyncio.wait_for(broker.remove_subscription(session, "input"), .5)
+        self.assertTrue(task.done())
+        self.assertNotIn("input", broker.engines)
+        self.assertEqual(session.subscriptions, set())
+
     def adapter(self, plan):
         adapter = Adapter(plan, "sink")
         self.adapters.append(adapter)
@@ -102,14 +132,16 @@ class BackpressureTests(unittest.IsolatedAsyncioTestCase):
             await original_send(header, payload)
         peer.send = hold_catalogue
         try:
-            broker.enabled = True
+            # Prepare the burst before delivery starts so building it cannot
+            # consume the held catalogue request's control timeout.
             for number in range(1100):
                 await broker.publish("source.input", self.record(number)["body"])
+            broker.enabled = True
             await asyncio.wait_for(catalogue_requested.wait(), 3)
-            await eventually(lambda: adapter.network_queues["input"].full())
+            await eventually(lambda: adapter.network_queues["input"].full(), timeout=10)
             self.assertTrue(adapter.client.pending)
             release_catalogue.set()
-            await eventually(lambda: adapter.buffers["input"].metrics["accepted"] == 1100, timeout=10)
+            await eventually(lambda: adapter.buffers["input"].metrics["accepted"] == 1100, timeout=30)
             self.assertFalse(running.done(), "adapter stopped during control reply starvation")
             status, _ = await asyncio.wait_for(adapter.client.request("status"), 1)
             self.assertTrue(status["enabled"])

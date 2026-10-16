@@ -29,7 +29,8 @@ components use `ComponentSession(timed_ticks=True)`; C uses `chain_ready()` and
 `chain_tick()`; Rust uses `send(b'R', TICK_CONTEXT)` and `tick()`. The raw Rust
 `initialize()` convenience function retains the legacy empty READY. Lifecycle
 ordering and callback signatures are unchanged. The [simulation guide](../docs/simulation.md)
-documents the clock context in all three languages.
+documents the clock context in all five languages. Java uses unsigned `BigInteger`
+clock values; Ada uses `Interfaces.Unsigned_64`.
 
 An INPUT with both catalogue length zero and an empty SDL2 payload represents
 an explicit null on a required input with a configured timeout. It has the same
@@ -54,7 +55,7 @@ are volatile and disappear on restart. Network retries can repeat transmissions;
 the adapter deduplicates them within its bounded, in-memory history.
 
 Python: `ComponentSession` supplies configuration, `ticks()` and `publish()`.
-Generated Python/C/Rust containers supply typed callback dispatch and output
+Generated Python/C/Rust/Java/Ada containers supply typed callback dispatch and output
 methods on top of the binary SDK. They defer READY until codec and handler initialization
 succeed, and send FINISHED only after callbacks return successfully. Their
 callbacks run at TICK, never directly on a network receive; see
@@ -69,3 +70,8 @@ and payload sizes for an explicit null. Raw SDK users must handle this value whe
 enabling input timeouts. The C and Rust stdio SDKs do not depend on a JSON parser
 or SDL. The optional C callback runner and generated Rust container use the
 public SDL runtime to decode and release typed snapshots.
+
+Java and Ada use the same frames and capability byte. Java owns decoded objects
+through the JVM; Ada containers own selected values and expose borrowed constant
+references during callbacks. See [Java and Ada SDKs](../docs/java-ada.md) for
+public APIs, timeout nulls and lifetime rules.

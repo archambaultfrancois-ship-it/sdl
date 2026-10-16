@@ -24,9 +24,9 @@ class SDL2(Runtime):
         if origin != runtime / "sdl_runtime.py":
             raise ValueError("a different SDL runtime is already loaded")
 
-    def generate(self, schema, destination):
+    def generate(self, schema, destination, languages=()):
         subprocess.run([sys.executable, str(self.root / "gen/generator.py"), "-python", "-c", "-rust",
-                        str(schema), str(destination)], check=True)
+                        *("-" + lang for lang in sorted(set(languages) & {"java", "ada"})), str(schema), str(destination)], check=True)
         # A separate interpreter prevents class/module collisions between schema revisions.
         program = '''import importlib.util, json, pathlib, sys
 from sdl_runtime import description, message_name, SdlMessage
@@ -57,6 +57,9 @@ print(json.dumps({'catalogue':description(types), 'types':{message_name(t):[t.__
 
     def native_bindings(self, destination, language):
         """Resolve public generated header/module names and verify their symbols."""
+        if language in ("java", "ada"):
+            from chain_env.modeling.managed_containers import discover_bindings
+            return discover_bindings(destination, language, self.python_bindings(destination))
         result = {}
         directory = Path(destination) / language
         for logical, (module, _) in self.python_bindings(destination).items():
