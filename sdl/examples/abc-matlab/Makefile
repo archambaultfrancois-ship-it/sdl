@@ -15,7 +15,7 @@ endif
 
 generate:
 	mkdir -p $(GENERATED_DIR)
-	$(PYTHON) $(ROOT)/gen/generator.py -matlab schema $(GENERATED_DIR)
+	$(PYTHON) $(ROOT)/sdlc/generator.py -matlab schema $(GENERATED_DIR)
 
 run: generate
 	$(MATLAB_RUN)

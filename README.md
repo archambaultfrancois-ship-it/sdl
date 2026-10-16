@@ -15,7 +15,7 @@ examples, documentation, dependencies, and build outputs.
 
 ```text
 sdl/                    SDL project root
-  gen/                  Message binding generators
+  sdlc/                 SDL compiler and binding generators
   runtime/              Language runtimes and optional services
   schemas/              Shared source schemas
   tests/                Tests, fixtures, and benchmarks
@@ -54,7 +54,7 @@ make -C ose demo
 
 See each project's README for its toolchains and optional dependencies.
 OSE uses `sdl/` by default. Set `SDL_ROOT` or pass `--sdl-root` to select
-another SDL project directory, including an older checkout with SDL at its root.
+another SDL project directory containing `sdlc/` and `runtime/`.
 The root Makefile also accepts `SDL_ROOT=/absolute/path/to/sdl` for OSE targets.
 The former `check-chain` and `test-chain` targets remain aliases for
 `check-ose` and `test-ose`.
@@ -63,13 +63,14 @@ The former `check-chain` and `test-chain` targets remain aliases for
 
 SDL's former root-level directories now live under `sdl/`. The schema directory
 was renamed from `sdl/` to `sdl/schemas/`, `tst/` to `sdl/tests/`, and `samples/`
-to `sdl/examples/`. The former `chain-env/` project directory is now `ose/`.
+to `sdl/examples/`. The compiler lives in `sdl/sdlc/`.
+The former `chain-env/` project directory is now `ose/`.
 Run the commands in SDL documentation from `sdl/`.
 For example:
 
 ```sh
 cd sdl
-python3 gen/generator.py -c -rust -python -java -ada -matlab schemas build/generated
+python3 sdlc/generator.py -c -rust -python -java -ada -matlab schemas build/generated
 make -C examples/abc-c run
 ```
 
@@ -77,7 +78,6 @@ Existing Git history is retained. Rebuild generated sources, executables and
 OSE plans after moving a checkout: they can contain absolute paths.
 SDL and OSE build products remain in `sdl/build/` and `ose/build/`.
 
-The standalone OSE workflow reads the revision and subdirectory from
-`ose/sdl-dependency.json`. Historical SDL revisions use `.`; revisions
-with this layout use `sdl`. The current pin remains on the tested historical
-revision. Change both fields together when advancing that pin.
+The standalone OSE workflow reads the SDL reference and subdirectory from
+`ose/sdl-dependency.json`. It follows `main` and uses its `sdl/` project,
+with the compiler at `sdl/sdlc/generator.py`.

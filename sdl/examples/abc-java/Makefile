@@ -12,7 +12,7 @@ $(GENERATED_DIR)/java/abc.java: generate
 
 generate:
 	mkdir -p $(GENERATED_DIR)
-	$(PYTHON) $(ROOT)/gen/generator.py -java schema $(GENERATED_DIR)
+	$(PYTHON) $(ROOT)/sdlc/generator.py -java schema $(GENERATED_DIR)
 
 $(CLASSES_DIR)/.stamp: generate java/Main.java $(ROOT)/runtime/java/SdlCodec.java
 	mkdir -p $(CLASSES_DIR)

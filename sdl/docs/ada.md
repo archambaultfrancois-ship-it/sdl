@@ -3,7 +3,7 @@
 Generate Ada 2012 bindings with:
 
 ```sh
-python3 gen/generator.py -ada sdl build/generated
+python3 sdlc/generator.py -ada schemas build/generated
 make test-ada bench-ada
 ```
 

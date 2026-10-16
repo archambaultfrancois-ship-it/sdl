@@ -11,11 +11,11 @@ Ada components need GNAT with the full Ada 2012 runtime. The complete `make chec
 requires both toolchains; `make check TEST_LANGUAGES=python,c,rust` selects the
 original three-language suites. The Python engine uses only the standard library. All delivery queues,
 catalogues, retry state and deduplication history live in bounded RAM structures.
-The dependency revision, repository, and subdirectory within that repository are
-recorded in `sdl-dependency.json`. The pinned historical revision uses `.`; revisions
-with the two-project layout use `sdl`. Update the revision and subdirectory together.
-Development accepts an explicit compatible checkout; CI should use the pinned
-revision. Neither building nor running automatically downloads SDL.
+The dependency reference, repository, and subdirectory within that repository are
+recorded in `sdl-dependency.json`. Standalone CI follows `main` and uses its `sdl/`
+project. Development accepts an explicit compatible checkout containing
+`sdlc/generator.py` and `runtime/`. Neither building nor running automatically
+downloads SDL. OSE uses `sdlc/generator.py` for compilation.
 
 ## Quick start
 

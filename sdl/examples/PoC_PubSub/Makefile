@@ -5,9 +5,9 @@ export PYTHONPATH := $(abspath $(ROOT)/runtime/python):$(abspath build/v1/python
 .PHONY: generate demo test broker validate
 
 generate:
-	$(PYTHON) $(ROOT)/gen/generator.py -python schema/temperature_v1.sdl build/v1
-	$(PYTHON) $(ROOT)/gen/generator.py -python schema/temperature_v2.sdl build/v2
-	$(PYTHON) $(ROOT)/gen/generator.py -python schema/temperature_bad.sdl build/bad
+	$(PYTHON) $(ROOT)/sdlc/generator.py -python schema/temperature_v1.sdl build/v1
+	$(PYTHON) $(ROOT)/sdlc/generator.py -python schema/temperature_v2.sdl build/v2
+	$(PYTHON) $(ROOT)/sdlc/generator.py -python schema/temperature_bad.sdl build/bad
 
 demo: generate
 	$(PYTHON) app.py demo

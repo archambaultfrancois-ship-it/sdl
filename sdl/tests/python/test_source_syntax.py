@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / 'gen'))
+sys.path.insert(0, str(ROOT / 'sdlc'))
 from generator import MsgParser, canonical_type_descriptor, parse_schemas
 from c_backend import generate_c
 from rust_backend import generate_rust

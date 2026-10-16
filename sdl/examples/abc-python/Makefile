@@ -6,7 +6,7 @@ GENERATED_DIR := $(BUILD_DIR)/generated
 
 generate:
 	mkdir -p $(GENERATED_DIR)
-	$(PYTHON) $(ROOT)/gen/generator.py -python schema $(GENERATED_DIR)
+	$(PYTHON) $(ROOT)/sdlc/generator.py -python schema $(GENERATED_DIR)
 
 run: generate
 	PYTHONPATH=$(ROOT)/runtime/python:$(GENERATED_DIR)/python $(PYTHON) python/main.py

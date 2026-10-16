@@ -73,7 +73,7 @@ def write_pcapng(records):
 
 
 def main():
-   subprocess.run([sys.executable, str(ROOT/'gen/generator.py'), '-python',
+   subprocess.run([sys.executable, str(ROOT/'sdlc/generator.py'), '-python',
       str(ROOT/'schemas'), str(ROOT/'build/generated')], check=True)
    sys.path[:0]=[str(ROOT/'runtime/python'),str(ROOT/'build/generated/python')]
    from sdl_runtime import description, prepare, encode

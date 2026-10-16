@@ -218,7 +218,7 @@ def main():
  parser=argparse.ArgumentParser();parser.add_argument('--gnatmake',default='gnatmake');parser.add_argument('--matlab');args=parser.parse_args()
  with tempfile.TemporaryDirectory(prefix='sdl-representation-') as tmp:
   work=Path(tmp);generated=work/'generated'
-  run([sys.executable,str(ROOT/'gen/generator.py'),'-c','-rust','-python','-java','-ada','-matlab',str(ROOT/'tests/fixtures/representation'),str(generated)])
+  run([sys.executable,str(ROOT/'sdlc/generator.py'),'-c','-rust','-python','-java','-ada','-matlab',str(ROOT/'tests/fixtures/representation'),str(generated)])
   def expand(source):
    for k,v in {'PACKET':PACKET,'UNSIGNED':UNSIGNED,'ARRAYS':ARRAYS,'RECORDS':RECORDS,'QUANTIZED':QUANTIZED,'QUANTUM_WIDE':QUANTUM_WIDE,'GENERATED':str(generated)}.items():source=source.replace('@'+k+'@',v)
    source=source.replace('fn main(){','fn main(){quantized();').replace('main(String[]args){','main(String[]args){quantized();')

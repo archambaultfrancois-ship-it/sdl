@@ -18,9 +18,9 @@ all: $(BINARY)
 
 generate: $(GENERATED_DIR)/.stamp
 
-$(GENERATED_DIR)/.stamp: schema/abc.sdl $(ROOT)/gen/generator.py $(ROOT)/gen/ada_backend.py $(ROOT)/gen/ada_direct.py
+$(GENERATED_DIR)/.stamp: schema/abc.sdl $(ROOT)/sdlc/generator.py $(ROOT)/sdlc/ada_backend.py $(ROOT)/sdlc/ada_direct.py
 	mkdir -p $(GENERATED_DIR)
-	$(PYTHON) $(ROOT)/gen/generator.py -ada schema $(GENERATED_DIR)
+	$(PYTHON) $(ROOT)/sdlc/generator.py -ada schema $(GENERATED_DIR)
 	touch $@
 
 $(BUILD_DIR)/c/%.o: $(ROOT)/runtime/c/%.c $(wildcard $(ROOT)/runtime/c/*.h)

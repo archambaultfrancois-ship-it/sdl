@@ -16,7 +16,7 @@ C_RUNTIME := $(ROOT)/runtime/c/type_engine.c $(ROOT)/runtime/c/type_registry.c \
 	$(ROOT)/runtime/c/sdl_dynamic.c $(ROOT)/runtime/c/type_display.c
 
 generate:
-	$(PYTHON) $(ROOT)/gen/generator.py -c -rust -python schema $(GENERATED_DIR)
+	$(PYTHON) $(ROOT)/sdlc/generator.py -c -rust -python schema $(GENERATED_DIR)
 
 $(C_BINARY): generate c/main.c
 	mkdir -p $(BUILD_DIR)

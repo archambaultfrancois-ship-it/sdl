@@ -190,9 +190,9 @@ bench-java: $(GENERATED_DIR)/.stamp
 	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $$(find $(JAVA_GENERATED_DIR) -name '*.java') tests/java/*.java
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaBench
 
-$(GENERATED_DIR)/.stamp: $(SDL_DIRS) $(SDL_FILES) gen/generator.py gen/c_backend.py gen/rust_backend.py gen/python_backend.py gen/matlab_backend.py gen/java_backend.py gen/ada_backend.py gen/ada_filter.py gen/ada_direct.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m runtime/matlab/sdl_mex_context.m runtime/matlab/sdl_representation.m Makefile
+$(GENERATED_DIR)/.stamp: $(SDL_DIRS) $(SDL_FILES) sdlc/generator.py sdlc/c_backend.py sdlc/rust_backend.py sdlc/python_backend.py sdlc/matlab_backend.py sdlc/java_backend.py sdlc/ada_backend.py sdlc/ada_filter.py sdlc/ada_direct.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m runtime/matlab/sdl_mex_context.m runtime/matlab/sdl_representation.m Makefile
 	mkdir -p $(GENERATED_DIR)
-	$(PYTHON) gen/generator.py -c -rust -python -matlab -java -ada schemas $(GENERATED_DIR)
+	$(PYTHON) sdlc/generator.py -c -rust -python -matlab -java -ada schemas $(GENERATED_DIR)
 	touch $@
 
 $(C_GENERATED_DIR)/schema.h $(C_GENERATED_DIR)/codec_cases.h $(C_GENERATED_DIR)/benchmark.h $(C_GENERATED_DIR)/empty_message.h $(C_GENERATED_DIR)/sdl_registry.h: $(GENERATED_DIR)/.stamp

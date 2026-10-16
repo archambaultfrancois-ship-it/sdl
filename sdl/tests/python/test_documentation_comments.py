@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(ROOT / 'gen'), str(ROOT / 'runtime/python')]
+sys.path[:0] = [str(ROOT / 'sdlc'), str(ROOT / 'runtime/python')]
 from generator import MsgParser, canonical_type_descriptor
 from c_backend import generate_c
 from rust_backend import generate_rust

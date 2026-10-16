@@ -4,7 +4,7 @@ import tempfile
 import unittest
 import warnings
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'gen'))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'sdlc'))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'runtime/python'))
 
 from c_backend import CBackend, generate_c
@@ -86,7 +86,7 @@ message Batch {
          root = pathlib.Path(temporary)
          source = root / 'warning.sdl'
          source.write_text('message Batch {\n packed uint64 values wire(encoding=varint);\n}\n')
-         result = subprocess.run([sys.executable, str(repo / 'gen/generator.py'),
+         result = subprocess.run([sys.executable, str(repo / 'sdlc/generator.py'),
             '-c', '-rust', '-python', '-java', '-ada', '-matlab', str(source),
             str(root / 'generated')], capture_output=True, text=True)
          self.assertEqual(result.returncode, 0, result.stderr)

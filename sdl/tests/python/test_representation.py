@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / 'gen'))
+sys.path.insert(0, str(ROOT / 'sdlc'))
 from generator import MsgParser, canonical_type_descriptor
 from python_backend import generate_python
 from sdl_runtime import CodecError, description, prepare, encode, encode_into, decode, decode_dynamic, compare_catalogues

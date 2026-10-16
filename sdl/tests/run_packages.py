@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / 'gen'), str(ROOT / 'runtime/python')]
+sys.path[:0] = [str(ROOT / 'sdlc'), str(ROOT / 'runtime/python')]
 from generator import c_identifier
 from ada_backend import typ
 
@@ -185,7 +185,7 @@ def main():
    parser.add_argument('--matlab')
    args = parser.parse_args()
    BUILD.mkdir(parents=True, exist_ok=True)
-   run([sys.executable, 'gen/generator.py', '-c', '-rust', '-python', '-java', '-matlab', '-ada',
+   run([sys.executable, 'sdlc/generator.py', '-c', '-rust', '-python', '-java', '-matlab', '-ada',
       str(ROOT / 'tests/fixtures/packages'), str(GENERATED)])
    hex_value = python_check()
    replacements = {'HEX': hex_value, 'GENERATED': str(GENERATED),

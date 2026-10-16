@@ -13,7 +13,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Read SDL revision
         id: sdl
-        run: python -c 'import json,os; d=json.load(open("sdl-dependency.json")); open(os.environ["GITHUB_OUTPUT"],"a").write("revision="+d["revision"]+"\nsubdirectory="+d.get("subdirectory", ".")+"\n")'
+        run: python -c 'import json,os; d=json.load(open("sdl-dependency.json")); open(os.environ["GITHUB_OUTPUT"],"a").write("revision="+d["revision"]+"\nsubdirectory="+d["subdirectory"]+"\n")'
       - uses: actions/checkout@v4
         with:
           repository: archambaultfrancois-ship-it/sdl
@@ -48,7 +48,7 @@ jobs:
           java-version: '7'
       - name: Read SDL revision
         id: sdl
-        run: python -c 'import json,os; d=json.load(open("sdl-dependency.json")); open(os.environ["GITHUB_OUTPUT"],"a").write("revision="+d["revision"]+"\nsubdirectory="+d.get("subdirectory", ".")+"\n")'
+        run: python -c 'import json,os; d=json.load(open("sdl-dependency.json")); open(os.environ["GITHUB_OUTPUT"],"a").write("revision="+d["revision"]+"\nsubdirectory="+d["subdirectory"]+"\n")'
       - uses: actions/checkout@v4
         with:
           repository: archambaultfrancois-ship-it/sdl

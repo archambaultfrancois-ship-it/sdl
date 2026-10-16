@@ -7,7 +7,7 @@ RECORDING_FORMAT ?= pcapng
 CAPTURE := build/radio.$(RECORDING_FORMAT)
 
 generate:
-	$(PYTHON) $(ROOT)/gen/generator.py -python ../radio_capture/schema build/generated
+	$(PYTHON) $(ROOT)/sdlc/generator.py -python ../radio_capture/schema build/generated
 
 recording-deps:
 	@PYTHONPATH="$(RECORDING_DEPS)" $(PYTHON) -c "from importlib.metadata import version; from mcap.writer import Writer; from mcap.stream_reader import StreamReader; assert version('mcap') == '1.5.0'" >/dev/null 2>&1 || \

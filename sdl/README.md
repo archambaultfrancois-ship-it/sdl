@@ -32,8 +32,10 @@ See [unsigned integers](docs/schema.md#unsigned-integers) and
 
 ## Generate bindings
 
+The SDL compiler and its language backends live in `sdlc/`.
+
 ```sh
-python3 gen/generator.py -c -rust -python -matlab -java -ada schemas build/generated
+python3 sdlc/generator.py -c -rust -python -matlab -java -ada schemas build/generated
 ```
 
 Select any combination of backends. The input can be a file or directory;

@@ -7,7 +7,7 @@ GENERATED_DIR := $(BUILD_DIR)/generated
 
 generate:
 	mkdir -p $(GENERATED_DIR)
-	$(PYTHON) $(ROOT)/gen/generator.py -rust schema $(BUILD_DIR)/generated
+	$(PYTHON) $(ROOT)/sdlc/generator.py -rust schema $(BUILD_DIR)/generated
 
 run: generate
 	$(CARGO) run --manifest-path Cargo.toml

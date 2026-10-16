@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'runtime/python'))
-sys.path.insert(0, str(ROOT / 'gen'))
+sys.path.insert(0, str(ROOT / 'sdlc'))
 
 from mcap.data_stream import RecordBuilder
 from mcap.reader import make_reader

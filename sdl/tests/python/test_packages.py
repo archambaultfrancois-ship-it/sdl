@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(ROOT / 'gen'), str(ROOT / 'runtime/python')]
+sys.path[:0] = [str(ROOT / 'sdlc'), str(ROOT / 'runtime/python')]
 from generator import MsgParser, canonical_type_descriptor, parse_schemas, c_identifier
 from python_backend import generate_python
 from c_backend import generate_c, CBackend

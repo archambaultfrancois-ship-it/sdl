@@ -13,7 +13,7 @@ C_RUNTIME := $(ROOT)/runtime/c/type_engine.c $(ROOT)/runtime/c/type_registry.c \
 
 generate:
 	mkdir -p $(GENERATED_DIR)
-	$(PYTHON) $(ROOT)/gen/generator.py -c schema $(GENERATED_DIR)
+	$(PYTHON) $(ROOT)/sdlc/generator.py -c schema $(GENERATED_DIR)
 
 $(BINARY): generate c/main.c
 	mkdir -p $(BUILD_DIR)

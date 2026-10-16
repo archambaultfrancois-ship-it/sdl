@@ -25,7 +25,7 @@ class SDL2(Runtime):
             raise ValueError("a different SDL runtime is already loaded")
 
     def generate(self, schema, destination, languages=()):
-        subprocess.run([sys.executable, str(self.root / "gen/generator.py"), "-python", "-c", "-rust",
+        subprocess.run([sys.executable, str(self.root / "sdlc/generator.py"), "-python", "-c", "-rust",
                         *("-" + lang for lang in sorted(set(languages) & {"java", "ada"})), str(schema), str(destination)], check=True)
         # A separate interpreter prevents class/module collisions between schema revisions.
         program = '''import importlib.util, json, pathlib, sys

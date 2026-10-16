@@ -50,8 +50,8 @@ def cases_files(cases):
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--gnatmake',default=os.environ.get('GNATMAKE','/home/t0005140/opt/gnat-21.1/bin/gnatmake'));parser.add_argument('--matlab');args=parser.parse_args()
-    run([sys.executable,'gen/generator.py','-c','-rust','-python','-java','-ada','-matlab','tests/fixtures/filter',OUT/'generated'])
-    run([sys.executable,'gen/generator.py','-matlab','tests/fixtures/filter_review',OUT/'review-generated'])
+    run([sys.executable,'sdlc/generator.py','-c','-rust','-python','-java','-ada','-matlab','tests/fixtures/filter',OUT/'generated'])
+    run([sys.executable,'sdlc/generator.py','-matlab','tests/fixtures/filter_review',OUT/'review-generated'])
     sys.path[:0]=[str(ROOT/'runtime/filter/python'),str(OUT/'release'),str(ROOT/'runtime/python'),str(OUT/'generated/python')]
     cases=json.loads((ROOT/'tests/filter/cases.json').read_text());cases_files(cases)
     from telemetry.model import Sample

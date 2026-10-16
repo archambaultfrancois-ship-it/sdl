@@ -44,7 +44,7 @@ def main():
         if 'java' in args.backends: options.append('--jni')
         if 'octave' in args.backends: options.append('--mex')
         run(options, OUT / 'bench-build.log')
-    run([sys.executable, 'gen/generator.py', '-c', '-rust', '-python', '-java', '-ada', '-matlab',
+    run([sys.executable, 'sdlc/generator.py', '-c', '-rust', '-python', '-java', '-ada', '-matlab',
          'tests/fixtures/filter', OUT / 'generated'], OUT / 'bench-generation.log')
     cc = shlex.split(os.environ.get('CC', 'cc'))
     link = ['-L' + str(OUT / 'release'), '-lsdl_filter', '-Wl,-rpath,' + str(OUT / 'release')]
