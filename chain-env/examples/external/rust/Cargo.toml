@@ -1,8 +1,0 @@
-[package]
-name = "chain-external-example"
-version = "0.1.0"
-edition = "2021"
-[dependencies]
-sdl-chain-client = { path = "../../../sdk/client/rust" }
-# SDL runtime and generated messages are application dependencies.
-sdl-runtime = { path = "../../../../runtime/rust" }

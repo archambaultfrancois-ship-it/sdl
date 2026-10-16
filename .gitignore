@@ -1,10 +1,2 @@
 /build/
-/tst/rust/target/
-samples/**/build/
-samples/**/target/
 __pycache__/
-
-/runtime/rust/target/
-/runtime/rust/Cargo.lock
-
-/runtime/recording/target/

@@ -1,0 +1,35 @@
+name: SDL codecs and services
+on:
+  push:
+    paths: ['sdl/**', 'Makefile', '.github/workflows/sdl.yml']
+  pull_request:
+    paths: ['sdl/**', 'Makefile', '.github/workflows/sdl.yml']
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        python: ['3.10', '3.13']
+    env:
+      GNAT_HOME: /usr
+      GNATMAKE: gnatmake
+      ADA_RTS: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Ada and Octave toolchains
+        run: sudo apt-get update && sudo apt-get install -y gnat octave liboctave-dev
+      - name: Install recording dependencies
+        run: python -m pip install -r sdl/tools/recording/requirements.txt
+      - name: Verify all six SDL backends
+        run: make check-sdl
+      - name: Verify native Python adapter
+        run: make -C sdl sdl-python-native test-python
+      - name: Verify filtering and recording
+        run: make -C sdl test-filter test-recording test-recording-native test-recording-jni test-recording-ada
