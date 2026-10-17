@@ -1,7 +1,9 @@
 # OSE — Orchestration, Simulation, Exécution
 
 Executable component graphs with SDL2 contracts and per-subscription quality of
-service. This directory is a standalone project designed for extraction into a
+service. See the [feature overview](docs/features.md) for the available user-facing services.
+
+This directory is a standalone project designed for extraction into a
 separate repository. By default, it uses the sibling `../sdl` project in this repository; an
 explicit path supports a separate SDL dependency checkout.
 
