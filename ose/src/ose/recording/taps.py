@@ -9,6 +9,7 @@ import uuid
 
 from ose.transport.protocol import encode
 from ose.codec.runtime import Runtime
+from ose.recording import DEFAULT_LABEL, session_label
 from ose.recording.filters import prepare_filter
 
 
@@ -40,6 +41,7 @@ class TapHub:
             point = self.points()[header["topic"]]
             return {k: v for k, v in point.items() if k != "catalogue"}, point["catalogue"].encode()
         if op == "recording_open":
+            label = session_label(header.get("label", DEFAULT_LABEL))
             selections = header.get("points")
             filters = header.get("filters", {})
             capacity, budget = header.get("capacity", 256), header.get("byte_budget", 8 * 1024 * 1024)
@@ -72,11 +74,11 @@ class TapHub:
                     predicate.close()
                 raise
             token = uuid.uuid4().hex
-            self.sessions[token] = dict(peer=peer, points={t: points[t] for t in selections},
+            self.sessions[token] = dict(peer=peer, label=label, points={t: points[t] for t in selections},
                 capacity=capacity, budget=budget, queue=deque(), bytes=0, active=True,
                 predicates=predicates, identities=identities,
                 changed=asyncio.Event(), polling=False, error=None, counts=Counter())
-            return {"session": token, "filtering": "source"}, None
+            return {"session": token, "label": label, "filtering": "source"}, None
         session = self.sessions[header["session"]]
         if session["peer"] is not peer:
             raise ValueError("recording session belongs to another connection")
@@ -111,7 +113,7 @@ class TapHub:
 
     @staticmethod
     def stats(session):
-        return {"counts": dict(session["counts"]), "queued": len(session["queue"]),
+        return {"label": session["label"], "counts": dict(session["counts"]), "queued": len(session["queue"]),
                 "queued_bytes": session["bytes"], "stopped": not session["active"], "capture_error": session["error"]}
 
     @staticmethod
@@ -156,7 +158,7 @@ class TapHub:
             try:
                 # Replies add control fields; reserve room for them before admission.
                 encode({"op": "result", "request": 2**63, "record": metadata,
-                        "counts": {}, "padding": " " * 512}, body, self.max_frame)
+                        "label": session["label"], "counts": {}, "padding": " " * 512}, body, self.max_frame)
             except ValueError:
                 session["counts"]["oversize"] += 1
                 continue

@@ -48,6 +48,30 @@ class TapTests(unittest.IsolatedAsyncioTestCase):
         self.hub.disconnected(self.peer)
         self.assertEqual(self.hub.sessions, {})
 
+    async def test_labels_are_informational_and_duplicate_labels_keep_separate_owners(self):
+        default = await self.open()
+        self.assertEqual(self.hub.sessions[default]["label"], "recorder")
+        self.hub.close()
+        first = await self.open(label="essai moteur")
+        other_peer = object()
+        opened, _ = await self.hub.request(other_peer, dict(op="recording_open",
+            points={"source.value": "first"}, label="essai moteur"))
+        second = opened["session"]
+        self.assertNotEqual(first, second)
+        self.assertEqual(opened["label"], "essai moteur")
+        with self.assertRaisesRegex(ValueError, "another connection"):
+            await self.hub.request(other_peer, dict(op="recording_stop", session=first, label="essai moteur"))
+        stats, _ = await self.hub.request(self.peer, dict(op="recording_stop", session=first))
+        self.assertEqual(stats["label"], "essai moteur")
+        self.assertTrue(self.hub.sessions[second]["active"])
+        self.hub.close()
+
+    async def test_invalid_labels_are_rejected_without_allocating_sessions(self):
+        for label in (None, 42, "", "  ", "é" * 129):
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, "label"):
+                await self.open(label=label)
+        self.assertEqual(self.hub.sessions, {})
+
     async def test_schema_or_generation_changes_end_capture(self):
         token = await self.open()
         self.point["catalogue"] = "SDL2|Value{1:uint16:x;}"

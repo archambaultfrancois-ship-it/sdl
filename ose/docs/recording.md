@@ -70,8 +70,23 @@ such as `sensor_1.signal`, including outputs with no model subscriber. The local
 broker also exposes externally declared topics. An unavailable point can be
 selected for later use, but cannot be recorded until its producer is available.
 
+Each recording session carries an informational `label`, defaulting to
+`recorder`, the recorder client's component name. Set it at launch with
+`record --label moteur-1` (or `ose-ctl record -l moteur-1`). The console's
+`label` command shows the current value; `label "essai moteur 1"` changes it
+before the next recording. The label is frozen while a capture is running.
+Labels accept nonempty text up to 256 UTF-8 bytes and need not be unique.
+
+The label is sent to each source with `recording_open`, retained in source
+session statistics, shown by recorder `status` and final summaries, and stored
+in the file's `sdl.recording` and `ose.session` metadata (visible through
+`record-info FILE`). Each source still assigns an independent UUID, and session
+operations remain bound to the connection that created it. Labels do not
+identify application graph nodes or grant access to another session.
+
 ```text
 record> list
+record> label moteur-1
 record> show alarm.event
 record> select sensor_*.signal analyzer_*.result alarm.event
 record> selected

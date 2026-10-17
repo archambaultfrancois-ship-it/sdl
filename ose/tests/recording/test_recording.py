@@ -73,7 +73,35 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(r.log_time_ns > 10**18 and r.publish_time_ns == r.log_time_ns for r in records))
             self.assertEqual([r.decode().fields["value"] for r in records], list(range(5)))
             self.assertEqual(self.recorder.status()["state"], "stopped")
+            self.assertEqual(self.recorder.status()["label"], "recorder")
+            metadata = reader.info()["metadata"]
+            self.assertEqual(next(item["data"]["label"] for item in metadata if item["name"] == "sdl.recording"), "recorder")
             self.assertEqual(self.broker.recording.sessions, {})
+
+    async def test_custom_label_reaches_source_status_and_files_and_is_frozen_while_recording(self):
+        console = Console(self.recorder, io.StringIO())
+        self.assertEqual(self.recorder.status()["label"], "recorder")
+        for format in ("pcapng", "mcap"):
+            label = "Essai moteur α " + format
+            await console.execute('label "' + label + '"')
+            await console.execute("label")
+            path = self.root / ("labelled." + format)
+            await self.recorder.start(path, format=format)
+            self.assertEqual(self.recorder.status()["label"], label)
+            self.assertEqual({session["label"] for session in self.broker.recording.sessions.values()}, {label})
+            with self.assertRaisesRegex(ValueError, "stop"):
+                await console.execute("label changed")
+            await self.publish(1)
+            await self.recorder.stop()
+            metadata = RecordingReader(path).info()["metadata"]
+            self.assertEqual(next(item["data"]["label"] for item in metadata if item["name"] == "sdl.recording"), label)
+            final = next(item["data"] for item in metadata if item["name"] == "ose.session")
+            self.assertEqual(final["label"], label)
+            self.assertEqual(json.loads(final["status"])["label"], label)
+        with self.assertRaisesRegex(ValueError, "label"):
+            await console.execute('label ""')
+        with self.assertRaisesRegex(ValueError, "quote"):
+            await console.execute("label too many words")
 
     async def test_filters_are_typed_and_operate_on_wire_values(self):
         with self.assertRaises(ValueError):
@@ -337,6 +365,7 @@ asyncio.run(main())
         path = self.root / "cli.pcapng"
         process = await asyncio.create_subprocess_exec(sys.executable, "-m", "ose.cli", "record",
             "--host", "127.0.0.1", "--port", str(self.broker.port), "--sdl-root", SDL_ROOT,
+            "--label=essai-cli",
             "--command", "select *", "--command", f"start {path}", "--command", "wait 30",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         try:
@@ -355,6 +384,8 @@ asyncio.run(main())
             self.assertEqual(process.returncode, 130, stderr.decode() + stdout.decode())
             RecordingReader(path).validate()
             self.assertEqual(len(list(RecordingReader(path).iter_records())), 1)
+            self.assertEqual(next(item["data"]["label"] for item in RecordingReader(path).info()["metadata"]
+                                  if item["name"] == "sdl.recording"), "essai-cli")
         finally:
             if process.returncode is None:
                 process.kill()
@@ -367,6 +398,7 @@ asyncio.run(main())
         env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"))
         process = await asyncio.create_subprocess_exec(sys.executable, "-m", "ose.cli", "record",
             "--host", "127.0.0.1", "--port", str(self.broker.port), "--sdl-root", SDL_ROOT,
+            "-l", "essai-isolé",
             "--command", "select source.value", "--command", "filter 1 value >= 3 && sequence < 5",
             "--command", f"start {path}", "--command", "wait 30", env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -387,6 +419,8 @@ asyncio.run(main())
             reader = RecordingReader(path)
             reader.validate()
             self.assertEqual([r.decode().fields["value"] for r in reader.iter_records()], [3., 4.])
+            self.assertEqual(next(item["data"]["label"] for item in reader.info()["metadata"]
+                                  if item["name"] == "sdl.recording"), "essai-isolé")
         finally:
             if process.returncode is None:
                 process.kill()
@@ -446,7 +480,7 @@ class DistributedRecordingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_two_recorders_filter_direct_and_broker_routes_at_workers(self):
         await self.start_graph()
-        rejected, accepted = await self.recorder(), await self.recorder()
+        rejected, accepted = await self.recorder(label="rejetés"), await self.recorder(label="acceptés")
         topics = ("source.value", "middle.value")
         for recorder, expression in ((rejected, "value < 0"), (accepted, "value >= 0")):
             recorder.selected = dict.fromkeys(topics)
@@ -457,6 +491,9 @@ class DistributedRecordingTests(unittest.IsolatedAsyncioTestCase):
         await rejected.start(empty_path)
         capture = await accepted.start(kept_path)
         await self.until(lambda: all(capture.topic_counts[topic] >= 3 for topic in topics) and len(self.values()) >= 3)
+        for name in ("source", "middle"):
+            self.assertEqual({session["label"] for session in self.workers[name].recording.sessions.values()},
+                             {"rejetés", "acceptés"})
         await rejected.stop()
         await accepted.stop()
         self.assertFalse(rejected.capture.error)

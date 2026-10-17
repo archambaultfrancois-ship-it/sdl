@@ -7,16 +7,18 @@ from pathlib import Path
 import time
 
 from ose.codec.runtime import Runtime
+from ose.recording import DEFAULT_LABEL, session_label
 from ose.recording.filters import prepare_filter
 from ose.transport.secure import connect, loopback, finish_cleanup
 
 
 class Recorder:
     def __init__(self, host, port, *, context=None, distributed=False, capacity=256,
-                 byte_budget=8 * 1024 * 1024, max_frame=1024 * 1024):
+                 byte_budget=8 * 1024 * 1024, max_frame=1024 * 1024, label=DEFAULT_LABEL):
         self.host, self.port, self.context = host, port, context
         self.distributed, self.capacity, self.byte_budget = distributed, capacity, byte_budget
         self.max_frame = max_frame
+        self.label = session_label(label)
         self.points, self.selected = {}, {}
         self.capture = None
         self.client = None
@@ -50,7 +52,7 @@ class Recorder:
 
     def editable(self):
         if self.capture and not self.capture.task.done():
-            raise ValueError("stop the recording before changing its selection or filters")
+            raise ValueError("stop the recording before changing its label, selection or filters")
 
     async def set_filter(self, topic, expression):
         self.editable()
@@ -61,6 +63,10 @@ class Recorder:
             predicate = prepare_filter(desc, expression)
             predicate.close()
         self.selected[topic] = expression
+
+    def set_label(self, label):
+        self.editable()
+        self.label = session_label(label)
 
     async def start(self, path, *, format="pcapng", finished=None):
         self.editable()
@@ -80,7 +86,7 @@ class Recorder:
 
     def status(self):
         if not self.capture:
-            return {"state": "idle", "selected": dict(self.selected)}
+            return {"state": "idle", "label": self.label, "selected": dict(self.selected)}
         return self.capture.status()
 
     async def close(self):
@@ -95,6 +101,7 @@ class Capture:
     def __init__(self, recorder, descriptions, path, format, finished):
         self.recorder, self.descriptions = recorder, descriptions
         self.path, self.format = str(Path(path).resolve()), format
+        self.label = recorder.label
         self.filters = dict(recorder.selected)
         self.finished = finished
         self.feeds, self.pumps = [], []
@@ -117,7 +124,7 @@ class Capture:
                              "make the SDL Python runtime (including sdl_recording) available") from error
         self.runtime = Runtime()
         self.writer = RecordingWriter(self.path, format=self.format, metadata={
-            "producer": "ose-recorder", "started_at_ns": str(time.time_ns()),
+            "producer": "ose-recorder", "label": self.label, "started_at_ns": str(time.time_ns()),
             "filters": json.dumps(self.filters, sort_keys=True), "filtering": "source",
             "timestamps": "recorder Unix arrival time; production time unavailable",
             "sequence": "source publication sequence modulo 2^32; generation in channel metadata"})
@@ -151,7 +158,7 @@ class Capture:
                 self.feeds.append(feed)
                 filters = {topic: self.filters[topic] for topic in points if self.filters[topic]}
                 result, _ = await client.request("recording_open", points=points,
-                    filters=filters,
+                    filters=filters, label=self.label,
                     capacity=self.recorder.capacity, byte_budget=self.recorder.byte_budget)
                 feed["session"] = result["session"]
                 if filters and result.get("filtering") != "source":
@@ -209,7 +216,8 @@ class Capture:
     def finish(self):
         if self.writer:
             try:
-                self.writer.write_metadata("ose.session", {"error": self.error or "", "status": json.dumps(self.status())})
+                self.writer.write_metadata("ose.session", {"label": self.label, "error": self.error or "",
+                                                           "status": json.dumps(self.status())})
             finally:
                 self.writer.close()
 
@@ -255,7 +263,7 @@ class Capture:
         for key in ("filtered", "indeterminate", "filter_errors"):
             if key in remote:
                 counts[key] += remote[key]
-        return {"state": self.state, "file": self.path, "format": self.format,
+        return {"state": self.state, "label": self.label, "file": self.path, "format": self.format,
                 "counts": dict(counts), "topics": dict(self.topic_counts),
                 "capture_counts": dict(remote), "error": self.error,
                 "selected": dict(self.filters)}

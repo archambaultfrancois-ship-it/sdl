@@ -76,6 +76,10 @@ then `start` on separate lines. `start` generates a fresh timestamped filename.
 Finish with `stop` and `quit`; use `record-info FILE`, `record-inspect FILE --limit 5`,
 or `record-inspect FILE --check` afterwards. Recording paths are relative to the application
 directory. Each invocation of `record` opens an independent recorder.
+Sessions have the informational label `recorder` by default; use
+`record --label moteur-1` (or `-l moteur-1`) to customize it. The console's
+`label` command shows or changes it while stopped. Labels appear in capture
+status and file metadata, and can be shared by independent sessions.
 `record-inspect` displays every selected message unless `--limit N` is supplied.
 Use `--summary` for counts by topic, log-time bounds and `duration_seconds`, or `--check` to also
 validate selected message bodies. Both modes accept `--topic`, `--from`, `--to`

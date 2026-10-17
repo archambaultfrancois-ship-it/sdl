@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 from ose.modeling.compiler import build, validate
+from ose.recording import DEFAULT_LABEL, session_label
 
 
 def main():
@@ -61,6 +62,8 @@ def main():
     command.add_argument("--endpoint", default="build/endpoint.json")
     command.add_argument("--last", action="store_true")
     command = commands.add_parser("record", help="discover and interactively record live application outputs")
+    command.add_argument("-l", "--label", type=session_label, default=DEFAULT_LABEL,
+                         help="informational session label (default: recorder)")
     command.add_argument("--endpoint", help="local broker endpoint JSON (default: build/endpoint.json when present)")
     command.add_argument("--host")
     command.add_argument("--port", type=int)

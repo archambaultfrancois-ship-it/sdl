@@ -19,6 +19,7 @@ reconnect                     reconnect after an application/coordinator restart
 select POINT_OR_PATTERN ...  select points (names, list numbers, or glob patterns)
 unselect POINT_OR_PATTERN ...
 selected                      show the selection and its filters
+label [NAME]                  show/set the session label (default: recorder)
 show POINT                    show its SDL catalogue and applicable field types
 filter POINT EXPRESSION        prepare an SDL filter for a selected point
 filter POINT off               remove its filter
@@ -94,6 +95,13 @@ class Console:
             self.print(json.dumps(self.recorder.selected, sort_keys=True))
         elif command == "selected":
             self.print(json.dumps(self.recorder.selected, sort_keys=True))
+        elif command == "label":
+            values = shlex.split(rest)
+            if len(values) > 1:
+                raise ValueError('label [NAME]; quote names containing spaces')
+            if values:
+                self.recorder.set_label(values[0])
+            self.print(json.dumps({"label": self.recorder.label}, ensure_ascii=False))
         elif command == "show":
             names = self.names([rest.strip()])
             for name in names:
@@ -188,7 +196,8 @@ async def run(args):
     if distributed:
         _, context = contexts(args.tls_ca, args.tls_cert, args.tls_key, insecure=args.insecure, hosts=[host])
     recorder = Recorder(host, port, context=context, distributed=distributed,
-                        capacity=args.capacity, byte_budget=args.byte_budget, max_frame=args.max_frame)
+                        capacity=args.capacity, byte_budget=args.byte_budget, max_frame=args.max_frame,
+                        label=args.label)
     console = Console(recorder)
     commands = CommandInput()
     try:
