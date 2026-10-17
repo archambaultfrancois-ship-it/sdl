@@ -4,42 +4,45 @@ from datetime import datetime, timezone
 import fnmatch
 import json
 import math
-import os
 from pathlib import Path
 import shlex
-import stat
 import sys
 
 from ose.recording.recorder import Recorder
+from ose.recording.command_input import CommandInput
 from ose.recording.rotation import parse_size
 from ose.transport.secure import contexts
 
 
 HELP = """list [PATTERN]                discover/refresh recording points
 reconnect                     reconnect after an application/coordinator restart
-select POINT_OR_PATTERN ...  select points (names, list numbers, or glob patterns)
-unselect POINT_OR_PATTERN ...
+select POINT_OR_PATTERN ...    select by point name, message type, number, or glob
+select all                    select all discovered recording points
+unselect POINT_OR_PATTERN ...  same matching rules; all clears the selection
 selected                      show the selection and its filters
 label [NAME]                  show/set the session label (default: recorder)
-max-size [SIZE|off]            rotate at SIZE bytes (B/KiB/MiB/GiB; default: off)
+max-size [SIZE|off]            rotate at SIZE bytes (B/KB/MB/GB; default: off)
 cycle [N|off]                 keep N files with increasing indices (default: off)
 show POINT                    show its SDL catalogue and applicable field types
 filter POINT EXPRESSION        prepare an SDL filter for a selected point
 filter POINT off               remove its filter
 start [PATH] [pcapng|mcap]      start a new capture with the current file settings
-status                        show counts, losses and errors
+status                        show a text summary of files, counts, losses and errors
 stop                          stop capture, drain queues and finalize the file
 wait SECONDS                  keep recording (also useful in scripts)
 help
 quit                          stop cleanly and exit
 
 Examples: select sensor_*.signal alarm.event
+          select Signal* Analys?s
+          select all
           filter alarm.event state == 1 && rms > 1.0
-          max-size 100MiB
+          max-size 100MB
           cycle 3
           start capture.pcapng
 Only matching messages are written. Indeterminate results are counted and skipped.
 Filters run on original encoded values at the source, before capture queueing and transfer.
+Size units: KB/MB/GB use powers of 1000.
 """
 
 
@@ -52,7 +55,7 @@ class Console:
     def print(self, value):
         print(value, file=self.output, flush=True)
 
-    def names(self, patterns, *, unselect=False):
+    def names(self, patterns, *, unselect=False, match_types=False):
         names = list(sorted(self.recorder.points))
         found = []
         for pattern in patterns:
@@ -60,14 +63,51 @@ class Console:
                 number = int(pattern)
                 matches = [names[number - 1]] if 1 <= number <= len(names) else []
             else:
-                matches = fnmatch.filter(sorted(self.recorder.selected) if unselect else names, pattern)
+                candidates = sorted(self.recorder.selected) if unselect else names
+                matches = [name for name in candidates
+                           if fnmatch.fnmatchcase(name, pattern) or
+                           (match_types and fnmatch.fnmatchcase(
+                               self.recorder.points.get(name, {}).get("root", ""), pattern))]
             if not matches:
                 raise ValueError(f"no recording point matches {pattern!r}")
             found.extend(matches)
         return sorted(set(found))
 
+    def print_status(self, status):
+        max_size, cycle = status["max_size"], status["cycle"]
+        lines = [f"State: {status['state']}", f"Label: {status['label']}",
+                 f"Max size: {str(max_size) + ' B' if max_size is not None else 'off'}",
+                 f"Cycle: {str(cycle) + ' files' if cycle is not None else 'off'}"]
+        if "file" in status:
+            lines.extend([f"File: {status['file']}", f"Format: {status['format']}",
+                          f"Base file: {status['base_file']}",
+                          f"File index: {status['file_index']}",
+                          f"Files retained: {status['file_count']}",
+                          f"Rotations: {status['rotations']}",
+                          f"Messages in current file: {status['file_message_count']}"])
+            for title, field, defaults in (
+                ("Messages", "counts", ("received", "written", "filtered", "indeterminate", "filter_errors")),
+                ("Source capture", "capture_counts", ("observed", "delivered", "filtered", "indeterminate",
+                                                       "filter_errors", "dropped", "oversize")),
+            ):
+                counts = status[field]
+                lines.append(f"{title}:")
+                for key in dict.fromkeys((*defaults, *sorted(counts))):
+                    lines.append(f"  {key.replace('_', ' ').capitalize()}: {counts.get(key, 0)}")
+        selected = status["selected"]
+        lines.append(f"Selected points ({len(selected)}):")
+        if not selected:
+            lines.append("  none")
+        for name, expression in sorted(selected.items()):
+            lines.append(f"  {name} — filter: {expression or 'off'}")
+            if "file" in status:
+                lines.append(f"    Written: {status['topics'].get(name, 0)}; "
+                             f"in current file: {status['file_topics'].get(name, 0)}")
+        lines.append(f"Error: {status.get('error') or 'none'}")
+        self.print("\n".join(lines))
+
     def completed(self, status):
-        self.print(json.dumps(status, sort_keys=True))
+        self.print_status(status)
         if status["error"]:
             self.failed = True
 
@@ -91,8 +131,9 @@ class Console:
             self.recorder.editable()
             patterns = shlex.split(rest)
             if not patterns:
-                raise ValueError(f"{command} requires a point, list number or pattern")
-            for name in self.names(patterns, unselect=command == "unselect"):
+                raise ValueError(f"{command} requires a point, message type, list number, pattern or all")
+            patterns = ["*" if pattern == "all" else pattern for pattern in patterns]
+            for name in self.names(patterns, unselect=command == "unselect", match_types=True):
                 if command == "select":
                     self.recorder.selected.setdefault(name, None)
                 else:
@@ -144,7 +185,7 @@ class Console:
             self.failed = False
             self.print(f"Recording to {self.recorder.capture.path}")
         elif command == "status":
-            self.print(json.dumps(self.recorder.status(), sort_keys=True))
+            self.print_status(self.recorder.status())
         elif command == "stop":
             await self.recorder.stop()
         elif command == "wait":
@@ -159,25 +200,6 @@ class Console:
         else:
             raise ValueError(f"unknown command: {command}; type help")
         return True
-
-
-class CommandInput:
-    def __init__(self):
-        self.transport, self.reader = None, None
-
-    async def readline(self):
-        # Regular command files cannot block on user input and are not selectable.
-        if stat.S_ISREG(os.fstat(sys.stdin.fileno()).st_mode):
-            return sys.stdin.readline()
-        if self.reader is None:
-            self.reader = asyncio.StreamReader(limit=128 * 1024)
-            self.transport, _ = await asyncio.get_running_loop().connect_read_pipe(
-                lambda: asyncio.StreamReaderProtocol(self.reader), sys.stdin)
-        return (await self.reader.readline()).decode(sys.stdin.encoding or "utf-8")
-
-    def close(self):
-        if self.transport:
-            self.transport.close()
 
 
 async def run(args):
@@ -226,8 +248,6 @@ async def run(args):
                     break
         else:
             while True:
-                if sys.stdin.isatty():
-                    print("record> ", end="", flush=True)
                 line = await commands.readline()
                 if not line:
                     break

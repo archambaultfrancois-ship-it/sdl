@@ -356,10 +356,31 @@ asyncio.run(main())
         for n in range(2):
             await console.execute(f"start {self.root / str(n)} pcapng")
             await self.publish(3)
+            await self.until(lambda: self.recorder.status()["counts"].get("written") == 1)
+            output.seek(0)
+            output.truncate()
+            await console.execute("status")
+            self.assertIn("State: recording\n", output.getvalue())
+            self.assertIn("Written: 1", output.getvalue())
             await console.execute("stop")
+            self.assertIn("State: stopped\n", output.getvalue())
+            self.assertIn("source.value — filter: value > 1", output.getvalue())
         await console.execute("filter 1 off")
         self.assertIsNone(self.recorder.selected["source.value"])
         self.assertFalse(await console.execute("quit"))
+
+    async def test_console_type_pattern_and_all_selection_record_messages(self):
+        console = Console(self.recorder, io.StringIO())
+        await console.execute("select all")
+        await console.execute("unselect Val?e")
+        self.assertEqual(self.recorder.selected, {})
+        await console.execute("select V[ao]*")
+        self.assertEqual(self.recorder.selected, {"source.value": None})
+        path = self.root / "type-selection.pcapng"
+        await console.execute(f"start {path}")
+        await self.publish(42)
+        await console.execute("stop")
+        self.assertEqual(len(list(RecordingReader(path).iter_records())), 1)
 
     async def test_cli_script_and_sigterm_close_the_file(self):
         path = self.root / "cli.pcapng"

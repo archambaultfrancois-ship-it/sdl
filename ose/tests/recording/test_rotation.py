@@ -142,11 +142,11 @@ class RotationTests(unittest.IsolatedAsyncioTestCase):
     async def test_interactive_settings_query_disable_and_freeze(self):
         output = io.StringIO()
         console = Console(self.recorder, output)
-        for command in ("max-size", "cycle", "max-size 1.5KiB", "cycle 3", "max-size", "cycle"):
+        for command in ("max-size", "cycle", "max-size 1.5KB", "cycle 3", "max-size", "cycle"):
             await console.execute(command)
-        self.assertEqual(self.recorder.max_size, 1536)
+        self.assertEqual(self.recorder.max_size, 1500)
         self.assertEqual(self.recorder.cycle, 3)
-        self.assertIn('"max-size": 1536', output.getvalue())
+        self.assertIn('"max-size": 1500', output.getvalue())
         capture = await self.recorder.start(self.root / "settings.pcapng")
         for command in ("max-size off", "cycle off"):
             with self.assertRaisesRegex(ValueError, "stop"):
@@ -156,10 +156,11 @@ class RotationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "cycle requires"):
             await self.recorder.start(self.root / "invalid.pcapng")
         await console.execute("cycle off")
-        for command in ("cycle 0", "cycle -1", "cycle 1.5", "max-size 0", "max-size 1.1B"):
+        for command in ("cycle 0", "cycle -1", "cycle 1.5", "max-size 0", "max-size 1.1B",
+                        "max-size 1KiB", "max-size 1MiB", "max-size 1GiB"):
             with self.assertRaises(ValueError):
                 await console.execute(command)
-        self.assertEqual(capture.status()["max_size"], 1536)
+        self.assertEqual(capture.status()["max_size"], 1500)
         plain = self.root / "plain.pcapng"
         await self.recorder.start(plain)
         await self.recorder.stop()

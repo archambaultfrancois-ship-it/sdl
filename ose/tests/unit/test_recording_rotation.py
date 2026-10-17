@@ -15,10 +15,17 @@ class RotationTests(unittest.TestCase):
         self.root = Path(temporary.name)
 
     def test_size_units_and_exact_fractional_bytes(self):
-        for text, expected in (("off", None), ("123", 123), ("2B", 2), ("1.5KiB", 1536),
-                               ("100MiB", 100 * 1024**2), ("1GiB", 1024**3)):
-            self.assertEqual(parse_size(text), expected)
-        for text in ("0", "-1B", "1GB", "nan", "0.1B", "1.000000000000000000000000000001B"):
+        for text, expected in (("off", None), ("123", 123), ("2B", 2),
+                               ("1KB", 1000), ("1MB", 1000**2), ("1GB", 1000**3),
+                               ("1.5KB", 1500), ("100MB", 100_000_000), ("1.5GB", 1_500_000_000),
+                               ("0.001KB", 1), ("0.000001MB", 1), ("0.000000001GB", 1),
+                               ("2kb", 2000), ("2mB", 2_000_000), ("2Gb", 2_000_000_000)):
+            with self.subTest(text=text):
+                self.assertEqual(parse_size(text), expected)
+        for text in ("0", "-1B", "1TB", "1K", "nan", "0.1B", "0.0001KB",
+                     "0.0000001MB", "0.0000000001GB", "1.000000000000000000000000000001B",
+                     "1.000000000000000000000000000001GB",
+                     "1KiB", "100MiB", "1GiB", "1.5KiB", "1kib", "1mib", "1gib"):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 parse_size(text)
 

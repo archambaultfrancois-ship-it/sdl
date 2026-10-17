@@ -70,6 +70,10 @@ such as `sensor_1.signal`, including outputs with no model subscriber. The local
 broker also exposes externally declared topics. An unavailable point can be
 selected for later use, but cannot be recorded until its producer is available.
 
+At the interactive `record>` prompt, use Up/Down to recall commands from the
+current console session (up to 1,000 entries). Recalled commands can be edited
+before pressing Enter. Down past the newest entry restores the unfinished line.
+
 Each recording session carries an informational `label`, defaulting to
 `recorder`, the recorder client's component name. Set it at launch with
 `record --label moteur-1` (or `ose-ctl record -l moteur-1`). The console's
@@ -107,6 +111,18 @@ names, types, enums and nested declarations usable by filters. List numbers may
 replace point names. Numbers follow the most recent directory ordering; names
 are preferable in scripts. Selection and filters are frozen while recording.
 
+`select` and `unselect` match each argument against both the point name and its
+root message type (the type displayed by `list`). Matching is case-sensitive and
+supports glob patterns: `*`, `?`, and `[abc]`. For example, `select SignalBlock`
+selects every point carrying that message type; `select Signal* Analys?s` selects
+matching signal and analysis types. Point names, types, patterns and list numbers
+can be mixed in the same command. A pattern matching both names and types selects
+the union of those points, preserving any existing filters.
+
+`select all` selects all discovered recording points, like `select *`.
+`unselect all` clears the selection. Unavailable points are included by selection
+patterns and `all`; they must become available before recording can start.
+
 `start` without a path generates a UTC timestamped `.pcapng` filename in the
 current directory. Paths are local to the recorder process, even for a remote
 application. Quote paths containing spaces. Files are created exclusively;
@@ -118,7 +134,7 @@ The filename extension does not select the format: pass `mcap` explicitly.
 Configure rotation before `start`; both settings default to `off`:
 
 ```text
-record> max-size 100MiB
+record> max-size 100MB
 record> cycle 3
 record> start moteur.pcapng
 record> status
@@ -127,8 +143,10 @@ record> cycle off
 record> max-size off
 ```
 
-`max-size SIZE` accepts bytes (`1000000` or `1000000B`) and `KiB`, `MiB`, `GiB`
-suffixes, including fractions resolving to whole bytes (`1.5MiB`). A bare
+`max-size SIZE` accepts bytes (`1000000` or `1000000B`) and decimal suffixes
+`KB`, `MB`, `GB` (1,000, 1,000,000 and 1,000,000,000 bytes). These are the only
+supported size suffixes, along with `B`. Suffixes are case-insensitive;
+fractions must resolve to whole bytes (`1.5KB` is 1,500 bytes). A bare
 `max-size` shows the current setting; `max-size off` disables rotation.
 `cycle N` retains at most N files, including the current file. A bare `cycle`
 shows the setting; `cycle off` keeps every numbered file. N must be positive.
@@ -242,7 +260,11 @@ The recorder serializes disk IO on a dedicated thread. It does not re-evaluate
 source filters. Source filter plans are released on stop, close, disconnect,
 generation changes, evaluation errors and source shutdown.
 `status` and the final summary report written, filtered, indeterminate, dropped
-and oversized counts. The final `ose.session` recording metadata retains these
+and oversized counts as readable text. The summary includes the state, label,
+size and retention settings, current file and rotation details, selected points
+with their filters, per-point written counts and any error. Missing counters
+are displayed as zero. Before the first capture, `status` shows the settings
+and selection with state `idle`. The final `ose.session` recording metadata retains these
 counts and any failure. Inspect them before treating a recording as complete.
 `counts.received` counts matching messages received over the network;
 `counts.filtered` and `counts.indeterminate` aggregate the source counters,

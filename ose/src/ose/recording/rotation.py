@@ -17,10 +17,10 @@ def positive_setting(value, name):
 def parse_size(value):
     if value.lower() == "off":
         return None
-    match = re.fullmatch(r"(\d+(?:\.\d+)?)(B|KiB|MiB|GiB)?", value, re.IGNORECASE)
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)(B|[KMG]B)?", value, re.IGNORECASE)
     if not match:
-        raise ValueError("max-size expects a positive size in B, KiB, MiB or GiB, or off")
-    scale = {"b": 1, "kib": 1024, "mib": 1024**2, "gib": 1024**3}[(match[2] or "B").lower()]
+        raise ValueError("max-size expects a positive size in B, KB, MB or GB, or off")
+    scale = {"b": 1, "kb": 1000, "mb": 1000**2, "gb": 1000**3}[(match[2] or "B").lower()]
     with localcontext() as context:
         context.prec = max(28, len(match[1]) + 12)
         size = Decimal(match[1]) * scale
