@@ -4,8 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from chain_env.modeling.managed_containers import tool, validate_names
-from chain_env.modeling.native_client_build import writable_manifest
+from ose.modeling.managed_containers import tool, validate_names
+from ose.modeling.native_client_build import writable_manifest
 
 
 class ManagedNamesTests(unittest.TestCase):

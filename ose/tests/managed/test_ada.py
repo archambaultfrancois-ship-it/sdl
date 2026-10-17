@@ -7,9 +7,9 @@ import struct
 import subprocess
 import tempfile
 import unittest
-from chain_env.modeling.compiler import build
-from chain_env.execution.ipc import frame, port_data, unpack_port
-from chain_env.codec.sdl2 import SDL2
+from ose.modeling.compiler import build
+from ose.execution.ipc import frame, port_data, unpack_port
+from ose.codec.sdl2 import SDL2
 from generation_cases import check_generation
 
 SDL = Path(os.environ.get('SDL_ROOT', Path(__file__).resolve().parents[3] / "sdl"))

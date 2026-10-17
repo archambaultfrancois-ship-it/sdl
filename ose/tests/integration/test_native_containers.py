@@ -8,10 +8,10 @@ import struct
 import subprocess
 import tempfile
 import unittest
-from chain_env.codec.sdl2 import SDL2
-from chain_env.execution.component import read_exact
-from chain_env.execution.ipc import frame, port_data, unpack_port
-from chain_env.modeling.compiler import build, validate
+from ose.codec.sdl2 import SDL2
+from ose.execution.component import read_exact
+from ose.execution.ipc import frame, port_data, unpack_port
+from ose.modeling.compiler import build, validate
 
 SDL_ROOT = os.environ.get("SDL_ROOT")
 SIMPLE = "message Measurement {1: required uint64 sequence; 2: required fl64 value;}"

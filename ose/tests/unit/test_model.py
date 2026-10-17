@@ -2,7 +2,7 @@ import copy
 import json
 from pathlib import Path
 import unittest
-from chain_env.modeling.validation import validate_graph
+from ose.modeling.validation import validate_graph
 
 
 class ModelTests(unittest.TestCase):

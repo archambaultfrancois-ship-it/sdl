@@ -11,11 +11,11 @@ import tempfile
 import threading
 import unittest
 
-from chain_env.client import Client
-from chain_env.codec.sdl2 import SDL2
-from chain_env.execution.component import read_exact
-from chain_env.execution.ipc import frame, port_data, unpack_port
-from chain_env.modeling.compiler import build
+from ose.client import Client
+from ose.codec.sdl2 import SDL2
+from ose.execution.component import read_exact
+from ose.execution.ipc import frame, port_data, unpack_port
+from ose.modeling.compiler import build
 
 SDL_ROOT = os.environ.get("SDL_ROOT")
 SCHEMA = "message Measurement {1: required uint64 sequence;2: required fl64 value;}"
@@ -203,7 +203,7 @@ class TimeoutRuntimeTests(unittest.IsolatedAsyncioTestCase):
             m, d = root / "model.json", root / "deployment.json"
             m.write_text(json.dumps(model)); d.write_text(json.dumps(deployment))
             plan = await asyncio.to_thread(build, m, d, SDL_ROOT, root / "build")
-            process = await asyncio.create_subprocess_exec(sys.executable, "-m", "chain_env.cli", "run", "--plan", str(plan),
+            process = await asyncio.create_subprocess_exec(sys.executable, "-m", "ose.cli", "run", "--plan", str(plan),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             client = None
             try:

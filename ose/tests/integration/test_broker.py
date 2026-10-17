@@ -5,13 +5,13 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
-from chain_env.codec.sdl2 import SDL2
-from chain_env.delivery.buffers import Buffer
-from chain_env.delivery.policies import SubscriptionPolicy as Policy
-from chain_env.delivery.stores import MemoryStore
-from chain_env.execution.broker import Broker
-from chain_env.transport.tcp import Client
-from chain_env.transport.udp import UDP
+from ose.codec.sdl2 import SDL2
+from ose.delivery.buffers import Buffer
+from ose.delivery.policies import SubscriptionPolicy as Policy
+from ose.delivery.stores import MemoryStore
+from ose.execution.broker import Broker
+from ose.transport.tcp import Client
+from ose.transport.udp import UDP
 
 SDL_ROOT = os.environ.get("SDL_ROOT")
 CATALOGUE = "SDL2|Measurement{1:uint64:sequence;2:fl64:value;}"

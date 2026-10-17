@@ -31,13 +31,13 @@ internal paths such as `/app`, since commands in resolved plans are absolute.
 Build normally, then start a coordinator and one worker per logical component:
 
 ```sh
-sdl-chain serve --plan /app/build/plan.json --host 0.0.0.0 --port 7000 \
+ose-ctl serve --plan /app/build/plan.json --host 0.0.0.0 --port 7000 \
   --tls-ca ca.crt --tls-cert coordinator.crt --tls-key coordinator.key
-sdl-chain worker --plan /app/build/plan.json --node source \
+ose-ctl worker --plan /app/build/plan.json --node source \
   --host coordinator.example --port 7000 --listen-host 0.0.0.0 \
   --listen-port 7001 --advertise-host source.example \
   --tls-ca ca.crt --tls-cert source.crt --tls-key source.key
-sdl-chain cluster-status --host coordinator.example --port 7000 \
+ose-ctl cluster-status --host coordinator.example --port 7000 \
   --tls-ca ca.crt --tls-cert observer.crt --tls-key observer.key
 ```
 
@@ -106,7 +106,7 @@ Supply a JSON image map covering `coordinator` and every component. Values must
 be pinned registry references: `registry/image@sha256:<64 hex digits>`.
 
 ```sh
-sdl-chain export-kubernetes --plan build/plan.json --images build/images.json \
+ose-ctl export-kubernetes --plan build/plan.json --images build/images.json \
   --namespace my-app --output build/kubernetes.json
 kubectl apply -f build/kubernetes.json
 ```

@@ -5,8 +5,8 @@ from pathlib import Path
 import subprocess
 from unittest.mock import patch
 
-from chain_env.execution.ipc import frame
-from chain_env.modeling.compiler import build, compile_plan
+from ose.execution.ipc import frame
+from ose.modeling.compiler import build, compile_plan
 
 
 def check_generation(case, root, sdl, language):

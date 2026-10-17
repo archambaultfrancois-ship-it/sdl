@@ -3,9 +3,9 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from chain_env.codec.sdl2 import SDL2
-from chain_env.execution.broker import Broker
-from chain_env.modeling.ada_client_build import build_ada
+from ose.codec.sdl2 import SDL2
+from ose.execution.broker import Broker
+from ose.modeling.ada_client_build import build_ada
 
 ROOT = Path(__file__).resolve().parents[2]
 SDL = Path(os.environ.get('SDL_ROOT', ROOT.parent / 'sdl'))

@@ -18,9 +18,9 @@ deployment field changes are required:
 
 ```sh
 make build
-PYTHONPATH=src python3 -m chain_env.cli run --plan build/plan.json \
+PYTHONPATH=src python3 -m ose.cli run --plan build/plan.json \
   --mode simulated --duration 60 --workers 4 --trace build/simulation.jsonl
-PYTHONPATH=src python3 -m chain_env.cli inspect --last
+PYTHONPATH=src python3 -m ose.cli inspect --last
 ```
 
 `--duration` is required and specifies a finite positive virtual horizon in
@@ -191,9 +191,9 @@ join with an optional externally scripted offset. Run from `ose`:
 make build MODEL=examples/simulated/model.json DEPLOYMENT=examples/simulated/deployment.json
 export PYTHONPATH="$PWD/src:$PWD/build/generated/shared/python:$PWD/../sdl/runtime/python"
 python3 examples/simulated/make_scenario.py
-python3 -m chain_env.cli run --mode simulated --duration 0.5 --workers 1 \
+python3 -m ose.cli run --mode simulated --duration 0.5 --workers 1 \
   --scenario build/simulated-scenario/scenario.json --trace build/sim-1.jsonl
-python3 -m chain_env.cli run --mode simulated --duration 0.5 --workers 4 \
+python3 -m ose.cli run --mode simulated --duration 0.5 --workers 4 \
   --scenario build/simulated-scenario/scenario.json --trace build/sim-4.jsonl
 cmp build/sim-1.jsonl build/sim-4.jsonl
 ```

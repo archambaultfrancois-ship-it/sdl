@@ -4,7 +4,7 @@ import asyncio
 import threading
 import unittest
 import urllib.error
-from chain_env.execution.leadership import KubernetesLease
+from ose.execution.leadership import KubernetesLease
 
 
 class Store:

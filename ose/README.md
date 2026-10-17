@@ -3,6 +3,11 @@
 Executable component graphs with SDL2 contracts and per-subscription quality of
 service. See the [feature overview](docs/features.md) for the available user-facing services.
 
+The Python distribution and import namespace are `ose`; the command-line tool is
+`ose-ctl`. Install with `python3 -m pip install .`, then use `ose-ctl --help` or
+`python3 -m ose.cli --help`. Rebuild application plans and generated containers
+after upgrading from an earlier package layout.
+
 This directory is a standalone project designed for extraction into a
 separate repository. By default, it uses the sibling `../sdl` project in this repository; an
 explicit path supports a separate SDL dependency checkout.
@@ -33,7 +38,7 @@ For multi-machine real-time execution, see [distributed deployment](docs/distrib
 OSE provides authenticated `serve`/`worker` processes, direct or broker routes,
 cold component replacement and Kubernetes manifest export.
 
-The optional [interactive recorder](docs/recording.md), `sdl-chain record`, discovers
+The optional [interactive recorder](docs/recording.md), `ose-ctl record`, discovers
 live outputs without a model, selects points and SDL filters, and starts/stops
 local PCAPNG or MCAP files. It supports the local broker and distributed workers.
 
@@ -58,17 +63,17 @@ You can also install the CLI with `python3 -m pip install .`. Without installing
 
 ```sh
 export PYTHONPATH="$PWD/src"
-python3 -m chain_env.cli validate --model examples/acquisition/model.json \
+python3 -m ose.cli validate --model examples/acquisition/model.json \
   --deployment examples/acquisition/deployment.json
-python3 -m chain_env.cli build --model examples/acquisition/model.json \
+python3 -m ose.cli build --model examples/acquisition/model.json \
   --deployment examples/acquisition/deployment.json
-python3 -m chain_env.cli run --plan build/plan.json
+python3 -m ose.cli run --plan build/plan.json
 ```
 
 In another terminal, with the same environment:
 
 ```sh
-python3 -m chain_env.cli inspect
+python3 -m ose.cli inspect
 ```
 
 Ctrl+C stops the chain and its component processes. `run --duration 2` provides
@@ -101,7 +106,7 @@ An input without a timeout keeps waiting indefinitely. See
 [required-input timeouts](docs/runtime.md#required-input-timeouts).
 
 The public Python component entry point is
-`from chain_env.execution.component import ComponentSession`.
+`from ose.execution.component import ComponentSession`.
 The C stdio SDK is compiled from `sdk/c`; its optional callback runner uses SDL.
 The dependency-free Rust stdio crate lives in
 `sdk/rust`. They expose the same binary lifecycle while generated SDL bindings
@@ -115,7 +120,7 @@ prints the complete output of a failing suite and stops immediately. Use
 
 `make test-simulated` checks deterministic virtual-time execution across worker
 counts, native containers, scenarios, timeouts and bounded queue admission.
-Choose `sdl-chain run --mode simulated --duration 60 --workers 4` to simulate
+Choose `ose-ctl run --mode simulated --duration 60 --workers 4` to simulate
 60 virtual seconds. The default remains real-time execution. See the
 [parallel simulation example](docs/simulation.md#runnable-parallel-example).
 

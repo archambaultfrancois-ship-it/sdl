@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 import sys
-from chain_env.codec.runtime import TypedCodec
+from ose.codec.runtime import TypedCodec
 from measurement import Measurement
 
 

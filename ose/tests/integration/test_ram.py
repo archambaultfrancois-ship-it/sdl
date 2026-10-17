@@ -7,10 +7,10 @@ import struct
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from chain_env.codec.sdl2 import SDL2
-from chain_env.delivery.policies import SubscriptionPolicy as Policy
-from chain_env.execution.adapter import Adapter
-from chain_env.execution.broker import Broker
+from ose.codec.sdl2 import SDL2
+from ose.delivery.policies import SubscriptionPolicy as Policy
+from ose.execution.adapter import Adapter
+from ose.execution.broker import Broker
 
 SDL_ROOT = os.environ.get("SDL_ROOT")
 CATALOGUE = "SDL2|Measurement{1:uint64:sequence;2:fl64:value;}"

@@ -13,11 +13,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from chain_env.codec.sdl2 import SDL2
-from chain_env.delivery.policies import SubscriptionPolicy as Policy
-from chain_env.execution.simulation import Simulation
-from chain_env.execution.ipc import frame, port_data
-from chain_env.modeling.compiler import build
+from ose.codec.sdl2 import SDL2
+from ose.delivery.policies import SubscriptionPolicy as Policy
+from ose.execution.simulation import Simulation
+from ose.execution.ipc import frame, port_data
+from ose.modeling.compiler import build
 
 SDL_ROOT = os.environ.get("SDL_ROOT")
 SCHEMA = "message Measurement {1: required uint64 sequence;2: required fl64 value;}"
@@ -61,7 +61,7 @@ def on_tick(ctx, inputs):
     ctx.publish_out(Measurement(sequence=ctx.tick_index, value=inputs["left"].value + inputs["right"].value))
 '''
 RAW = '''import os, signal, struct, time
-from chain_env.execution.component import ComponentSession
+from ose.execution.component import ComponentSession
 s = ComponentSession(auto_ready=False, timed_ticks=True)
 p = s.config.get("parameters", {})
 if p.get("stderr_path"):
@@ -197,7 +197,7 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
                         yield None
                 finally:
                     active -= 1
-            with patch("chain_env.execution.simulation.coordinator.tick_events", calculations):
+            with patch("ose.execution.simulation.coordinator.tick_events", calculations):
                 summary, events = await self.simulate(plan, .1, workers=workers)
             self.assertEqual(peak, min(3, workers))
             self.assertEqual(summary["waves"], 1)
@@ -343,11 +343,11 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
         environment = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"))
         for args in (("--mode", "simulated"), ("--workers", "2"), ("--mode", "simulated", "--duration", "1", "--port", "0"),
                      ("--duration", "nan")):
-            result = await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "chain_env.cli", "run", *args],
+            result = await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "ose.cli", "run", *args],
                                              env=environment, capture_output=True, timeout=10)
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertNotIn(b"Traceback", result.stderr)
-        result = await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "chain_env.cli", "run", "--plan", str(self.plan_path),
+        result = await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "ose.cli", "run", "--plan", str(self.plan_path),
             "--mode", "simulated", "--duration", ".1", "--workers", "2"], env=environment, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         summary = json.loads(result.stdout)
@@ -416,7 +416,7 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
         original = Path(__file__).resolve().parents[2]
         shutil.copytree(original, project, ignore=shutil.ignore_patterns("build", "__pycache__", "target", "*.egg-info"))
         environment = dict(os.environ, PYTHONPATH=str(project / "src"))
-        result = await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "chain_env.cli", "build",
+        result = await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "ose.cli", "build",
             "--model", "examples/simulated/model.json", "--deployment", "examples/simulated/deployment.json", "--sdl-root", SDL_ROOT],
             cwd=project, env=environment, capture_output=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
@@ -425,7 +425,7 @@ class SimulationTests(unittest.IsolatedAsyncioTestCase):
             cwd=project, env=environment, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         for workers in (1, 4):
-            result = await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "chain_env.cli", "run", "--mode", "simulated",
+            result = await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "ose.cli", "run", "--mode", "simulated",
                 "--duration", ".5", "--workers", str(workers), "--scenario", "build/simulated-scenario/scenario.json", "--trace", f"build/w{workers}.jsonl"],
                 cwd=project, env=environment, capture_output=True, timeout=15)
             self.assertEqual(result.returncode, 0, result.stderr.decode())

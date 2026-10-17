@@ -1,6 +1,6 @@
 import copy
 import unittest
-from chain_env.modeling.kubernetes import resources
+from ose.modeling.kubernetes import resources
 
 
 class KubernetesTests(unittest.TestCase):

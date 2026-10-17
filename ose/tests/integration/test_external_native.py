@@ -6,7 +6,7 @@ import subprocess
 import threading
 import unittest
 import test_external_client as external
-from chain_env.client import Latest
+from ose.client import Latest
 
 ROOT = Path(__file__).resolve().parents[2]
 

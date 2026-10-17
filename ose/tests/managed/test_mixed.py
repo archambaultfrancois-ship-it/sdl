@@ -6,10 +6,10 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from chain_env.modeling.compiler import build
-from chain_env.execution.simulation import Simulation
-from chain_env.execution.supervisor import run
-from chain_env.transport.tcp import Client
+from ose.modeling.compiler import build
+from ose.execution.simulation import Simulation
+from ose.execution.supervisor import run
+from ose.transport.tcp import Client
 
 ROOT = Path(__file__).resolve().parents[2]
 SDL = Path(os.environ.get('SDL_ROOT', ROOT.parent / 'sdl'))

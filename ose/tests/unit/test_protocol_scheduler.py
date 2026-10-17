@@ -1,12 +1,12 @@
 import io
 import unittest
-from chain_env.delivery.buffers import Buffer
-from chain_env.delivery.policies import SubscriptionPolicy as Policy
-from chain_env.delivery.stores import MemoryStore
-from chain_env.execution.scheduler import Scheduler
-from chain_env.execution.component import ComponentSession
-from chain_env.execution.ipc import frame, port_data, unpack_port
-from chain_env.transport.protocol import encode, decode
+from ose.delivery.buffers import Buffer
+from ose.delivery.policies import SubscriptionPolicy as Policy
+from ose.delivery.stores import MemoryStore
+from ose.execution.scheduler import Scheduler
+from ose.execution.component import ComponentSession
+from ose.execution.ipc import frame, port_data, unpack_port
+from ose.transport.protocol import encode, decode
 
 
 class ProtocolTests(unittest.TestCase):

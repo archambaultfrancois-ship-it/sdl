@@ -12,12 +12,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from chain_env.codec.sdl2 import SDL2
-from chain_env.delivery.policies import SubscriptionPolicy as Policy
-from chain_env.execution.adapter import Adapter
-from chain_env.execution.broker import Broker
-from chain_env.transport.protocol import encode
-from chain_env.transport.tcp import Client, TCP
+from ose.codec.sdl2 import SDL2
+from ose.delivery.policies import SubscriptionPolicy as Policy
+from ose.execution.adapter import Adapter
+from ose.execution.broker import Broker
+from ose.transport.protocol import encode
+from ose.transport.tcp import Client, TCP
 
 SDL_ROOT = os.environ.get("SDL_ROOT")
 CATALOGUE = "SDL2|Measurement{1:uint64:sequence;2:fl64:value;}"
@@ -42,7 +42,7 @@ class DeliveryLimitTests(unittest.IsolatedAsyncioTestCase):
             "max_datagram": 1200, "components": {
                 "source": {"inputs": {}, "outputs": {"output": port}, "env": {}, "cwd": self.directory.name,
                     "trigger": {"mode": "periodic", "period_ms": 10},
-                    "command": [sys.executable, "-c", "import struct\nfrom chain_env.execution.component import ComponentSession\n"
+                    "command": [sys.executable, "-c", "import struct\nfrom ose.execution.component import ComponentSession\n"
                         "s=ComponentSession()\nfor inputs in s.ticks(): s.publish('output',b'\\x01'+struct.pack('>Qd',1,1.0))\n"]},
                 "sink": {"inputs": {"input": copy.deepcopy(port)}, "outputs": {}}},
             "subscriptions": [{"id": "link", "from": "source.output", "to": "sink.input", "policy": Policy().to_dict()}]}
@@ -178,7 +178,7 @@ class DeliveryLimitTests(unittest.IsolatedAsyncioTestCase):
     async def test_large_status_body_and_small_startup_state(self):
         source = self.plan["components"]["source"]
         source["outputs"] = {f"output_{number:04d}": copy.deepcopy(source["outputs"]["output"]) for number in range(1000)}
-        source["command"] = [sys.executable, "-c", "from chain_env.execution.component import ComponentSession\n"
+        source["command"] = [sys.executable, "-c", "from ose.execution.component import ComponentSession\n"
                             "s=ComponentSession()\nfor inputs in s.ticks(): pass\n"]
         self.plan["components"] = {"source": source}
         self.plan["subscriptions"] = []

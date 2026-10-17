@@ -1,5 +1,5 @@
 import unittest
-from chain_env.recording.taps import TapHub
+from ose.recording.taps import TapHub
 
 
 class TapTests(unittest.IsolatedAsyncioTestCase):

@@ -1,6 +1,6 @@
 # Interactive live recording
 
-`sdl-chain record` is a generic external console included in OSE. It discovers
+`ose-ctl record` is a generic external console included in OSE. It discovers
 the outputs of a running application and records selected publications through
 SDL's recording service. It needs no model, generated application classes or
 recorder component in the graph. Start and stop files repeatedly in one session.
@@ -20,7 +20,7 @@ MCAP is an explicit alternative; both formats include the original catalogue
 and encoded payloads. Both require the optional MCAP Python package. The OSE
 broker and workers themselves need neither that dependency nor filter libraries.
 
-For an installed OSE package, install `sdl-chain[recording]` and make the SDL
+For an installed OSE package, install `ose[recording]` and make the SDL
 Python modules importable. For a source checkout, from the OSE root:
 
 ```sh
@@ -45,9 +45,9 @@ an installed/importable SDL runtime also works without a checkout.
 Start the application first. In another terminal, connect to its endpoint:
 
 ```sh
-python3 -m chain_env.cli record --endpoint /path/to/application/build/endpoint.json
+python3 -m ose.cli record --endpoint /path/to/application/build/endpoint.json
 # Or specify the broker directly:
-python3 -m chain_env.cli record --host 127.0.0.1 --port 7000
+python3 -m ose.cli record --host 127.0.0.1 --port 7000
 ```
 
 With no connection options, the console uses `build/endpoint.json` when present,
@@ -106,7 +106,7 @@ Connect to the coordinator using a client certificate signed by the application
 CA. A separate certificate identity such as `recorder` is suitable:
 
 ```sh
-sdl-chain record --distributed --host coordinator.example --port 7000 \
+ose-ctl record --distributed --host coordinator.example --port 7000 \
   --tls-ca ca.crt --tls-cert recorder.crt --tls-key recorder.key
 ```
 
@@ -169,7 +169,7 @@ Cross-producer file order is recorder write order, not a global causal ordering.
 Repeat `--command` to execute the same console language without prompting:
 
 ```sh
-sdl-chain record --endpoint /path/to/build/endpoint.json \
+ose-ctl record --endpoint /path/to/build/endpoint.json \
   --command 'select *.result alarm.event' \
   --command 'filter alarm.event state == 1' \
   --command 'start capture.pcapng' --command 'wait 10' --command stop

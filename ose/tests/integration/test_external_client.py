@@ -7,11 +7,11 @@ import tempfile
 import sys
 import threading
 import unittest
-from chain_env.codec.sdl2 import SDL2
-from chain_env.execution.broker import Broker
-from chain_env.client import Client, Fifo, Latest, Retry, UnknownTopic, QoSError, PublicationRefused, CallbackFailed, SchemaError
-from chain_env.delivery.policies import SubscriptionPolicy
-from chain_env.modeling.compiler import build
+from ose.codec.sdl2 import SDL2
+from ose.execution.broker import Broker
+from ose.client import Client, Fifo, Latest, Retry, UnknownTopic, QoSError, PublicationRefused, CallbackFailed, SchemaError
+from ose.delivery.policies import SubscriptionPolicy
+from ose.modeling.compiler import build
 
 SDL_ROOT = os.environ.get('SDL_ROOT')
 CAT = 'SDL2|Measurement{1:uint64:sequence;2:fl64:value;}'
@@ -115,7 +115,7 @@ class ExternalTests(unittest.IsolatedAsyncioTestCase):
             deployment=dict(version=1,components={'transform':{'container':{'language':'python','handler':'handler.py'}}})
             (root/'model.json').write_text(json.dumps(model));(root/'deployment.json').write_text(json.dumps(deployment))
             plan=await asyncio.to_thread(build,root/'model.json',root/'deployment.json',SDL_ROOT,root/'build')
-            process=await asyncio.create_subprocess_exec(sys.executable,'-m','chain_env.cli','run','--plan',str(plan),'--duration','4',
+            process=await asyncio.create_subprocess_exec(sys.executable,'-m','ose.cli','run','--plan',str(plan),'--duration','4',
                 stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
             try:
                 line=await asyncio.wait_for(process.stdout.readline(),5)
@@ -203,8 +203,8 @@ class ExternalTests(unittest.IsolatedAsyncioTestCase):
         c=await self.client('concurrent');p=await asyncio.to_thread(c.publisher,'topic',self.Message)
         # Keep a bounded wait pending without attaching a data channel.
         policy=SubscriptionPolicy(capacity=1,overflow='wait',wait_timeout_ms=100)
-        from chain_env.delivery.engine import DeliveryEngine
-        from chain_env.delivery.stores import MemoryStore
+        from ose.delivery.engine import DeliveryEngine
+        from ose.delivery.stores import MemoryStore
         self.broker.subscriptions['unattached']={'id':'unattached','from':'topic','to':'absent.input','policy':policy.to_dict()}
         self.broker.engines['unattached']=DeliveryEngine(policy,MemoryStore(1))
         first=await asyncio.to_thread(p.publish,self.Message(sequence=1,value=1.))
@@ -216,8 +216,8 @@ class ExternalTests(unittest.IsolatedAsyncioTestCase):
         port={'root':'Measurement','catalogue':CAT,'catalogue_id':self.codec.identity(CAT)}
         self.broker.plan['components']['offline']={'inputs':{'input':port},'outputs':{}}
         policy=SubscriptionPolicy(capacity=1,overflow='wait',wait_timeout_ms=20000)
-        from chain_env.delivery.engine import DeliveryEngine
-        from chain_env.delivery.stores import MemoryStore
+        from ose.delivery.engine import DeliveryEngine
+        from ose.delivery.stores import MemoryStore
         self.broker.subscriptions['long']={'id':'long','from':'topic','to':'offline.input','policy':policy.to_dict()}
         self.broker.engines['long']=DeliveryEngine(policy,MemoryStore(1))
         c=await self.client('long-wait');p=await asyncio.to_thread(c.publisher,'topic',self.Message)

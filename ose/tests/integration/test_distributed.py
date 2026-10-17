@@ -9,9 +9,9 @@ import tempfile
 import time
 import unittest
 
-from chain_env.execution.distributed import Coordinator, Worker, fingerprint
-from chain_env.modeling.compiler import build
-from chain_env.transport.secure import connect, contexts
+from ose.execution.distributed import Coordinator, Worker, fingerprint
+from ose.modeling.compiler import build
+from ose.transport.secure import connect, contexts
 
 SDL_ROOT = os.environ.get("SDL_ROOT", str(Path(__file__).resolve().parents[3] / "sdl"))
 
@@ -230,7 +230,7 @@ class DistributedTests(unittest.IsolatedAsyncioTestCase):
         children = []
         try:
             for name in self.plan["components"]:
-                children.append(subprocess.Popen([os.sys.executable, "-m", "chain_env.cli", "worker", "--plan", str(plan_path),
+                children.append(subprocess.Popen([os.sys.executable, "-m", "ose.cli", "worker", "--plan", str(plan_path),
                     "--node", name, "--port", str(self.coordinator.port), "--insecure"],
                     env=dict(os.environ, PYTHONPATH=str(source_root)), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
             await self.until(lambda: len(self.values()) >= 5)
@@ -261,7 +261,7 @@ class TLSIdentityTests(unittest.IsolatedAsyncioTestCase):
         return tls(self.root, name)
 
     async def test_mutual_tls_checks_application_identity(self):
-        from chain_env.transport.secure import RPCServer, identity
+        from ose.transport.secure import RPCServer, identity
         async def handler(peer, header, body):
             if identity(peer.writer) != header["node"]:
                 raise ValueError("wrong component identity")

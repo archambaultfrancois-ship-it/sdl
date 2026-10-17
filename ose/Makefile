@@ -7,12 +7,12 @@ DEPLOYMENT := examples/acquisition/deployment.json
 
 .PHONY: validate build demo check test test-unit test-integration test-sdk test-simulated test-distributed
 validate:
-	$(PYTHON) -m chain_env.cli validate --model $(MODEL) --deployment $(DEPLOYMENT) --sdl-root "$(SDL_ROOT)"
+	$(PYTHON) -m ose.cli validate --model $(MODEL) --deployment $(DEPLOYMENT) --sdl-root "$(SDL_ROOT)"
 build:
-	$(PYTHON) -m chain_env.cli build --model $(MODEL) --deployment $(DEPLOYMENT) --sdl-root "$(SDL_ROOT)"
+	$(PYTHON) -m ose.cli build --model $(MODEL) --deployment $(DEPLOYMENT) --sdl-root "$(SDL_ROOT)"
 demo: build
-	$(PYTHON) -m chain_env.cli run --duration 2
-	$(PYTHON) -m chain_env.cli inspect --last
+	$(PYTHON) -m ose.cli run --duration 2
+	$(PYTHON) -m ose.cli inspect --last
 check:
 	@$(PYTHON) tests/run_check.py "$(MAKE)"
 test: test-unit test-sdk test-integration test-simulated $(if $(findstring java,$(TEST_LANGUAGES)),test-java) $(if $(findstring ada,$(TEST_LANGUAGES)),test-ada) $(if $(and $(findstring java,$(TEST_LANGUAGES)),$(findstring ada,$(TEST_LANGUAGES))),test-mixed)
@@ -51,9 +51,9 @@ test-java:
 test-ada:
 	SDL_ROOT="$(SDL_ROOT)" $(PYTHON) -m unittest discover -s tests/managed -p 'test_ada*.py' -v
 client-java:
-	$(PYTHON) -m chain_env.modeling.client_build "$(SDL_ROOT)" "$(CURDIR)/build/client-java"
+	$(PYTHON) -m ose.modeling.client_build "$(SDL_ROOT)" "$(CURDIR)/build/client-java"
 client-ada:
-	$(PYTHON) -m chain_env.modeling.ada_client_build "$(SDL_ROOT)" "$(CURDIR)/build/client-ada"
+	$(PYTHON) -m ose.modeling.ada_client_build "$(SDL_ROOT)" "$(CURDIR)/build/client-ada"
 
 .PHONY: test-mixed
 test-mixed:

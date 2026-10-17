@@ -10,11 +10,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from chain_env.codec.sdl2 import SDL2
-from chain_env.delivery.policies import SubscriptionPolicy as Policy
-from chain_env.execution.adapter import Adapter
-from chain_env.execution.broker import Broker
-from chain_env.transport.tcp import Client
+from ose.codec.sdl2 import SDL2
+from ose.delivery.policies import SubscriptionPolicy as Policy
+from ose.execution.adapter import Adapter
+from ose.execution.broker import Broker
+from ose.transport.tcp import Client
 
 SDL_ROOT = os.environ.get("SDL_ROOT")
 CATALOGUE = "SDL2|Measurement{1:uint64:sequence;2:fl64:value;}"
@@ -61,7 +61,7 @@ class BackpressureTests(unittest.IsolatedAsyncioTestCase):
                     "sink": {"inputs": copy.deepcopy(ports), "outputs": {},
                              "trigger": {"mode": "on_change"}, "env": {},
                              "cwd": self.directory.name, "command": [sys.executable, "-c",
-                                 "from chain_env.execution.component import ComponentSession\n"
+                                 "from ose.execution.component import ComponentSession\n"
                                  "s=ComponentSession()\nfor inputs in s.ticks(): pass\n"]}},
                 "subscriptions": [{"id": port, "from": f"source.{port}", "to": f"sink.{port}",
                                    "policy": policy.to_dict()} for port, policy in policies.items()]}
@@ -159,7 +159,7 @@ class BackpressureTests(unittest.IsolatedAsyncioTestCase):
         adapter, broker = self.adapter(plan), await self.broker(plan)
         blocked = asyncio.Event()
         async def fill_pipe():
-            from chain_env.execution import ipc
+            from ose.execution import ipc
             blocked.set()
             await ipc.send(adapter.process.stdin, "D", b"x" * 900000)
         adapter._work = fill_pipe
@@ -193,7 +193,7 @@ class BackpressureTests(unittest.IsolatedAsyncioTestCase):
             if op == "D":
                 entered.set()
                 await release.wait()
-        with patch("chain_env.execution.adapter.ipc.send", blocked_send):
+        with patch("ose.execution.adapter.ipc.send", blocked_send):
             working = self.spawn(adapter._work())
             await asyncio.wait_for(entered.wait(), 1)
             right = adapter.buffers["right"]

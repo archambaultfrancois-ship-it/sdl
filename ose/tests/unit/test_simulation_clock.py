@@ -2,12 +2,12 @@
 import io
 import struct
 import unittest
-from chain_env.delivery.buffers import Buffer
-from chain_env.delivery.policies import SubscriptionPolicy
-from chain_env.delivery.stores import MemoryStore
-from chain_env.execution.component import ComponentSession
-from chain_env.execution.ipc import frame, tick_context, TICK_CONTEXT
-from chain_env.execution.simulation.clock import seconds_ns, VirtualClock, Schedule
+from ose.delivery.buffers import Buffer
+from ose.delivery.policies import SubscriptionPolicy
+from ose.delivery.stores import MemoryStore
+from ose.execution.component import ComponentSession
+from ose.execution.ipc import frame, tick_context, TICK_CONTEXT
+from ose.execution.simulation.clock import seconds_ns, VirtualClock, Schedule
 
 
 class SimulationClockTests(unittest.TestCase):

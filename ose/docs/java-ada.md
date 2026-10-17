@@ -134,8 +134,8 @@ join. Build and compare traces with:
 
 ```sh
 make build MODEL=examples/multilingual/model.json DEPLOYMENT=examples/multilingual/deployment.json
-python3 -m chain_env.cli run --mode simulated --duration .31 --workers 1 --trace build/w1.jsonl
-python3 -m chain_env.cli run --mode simulated --duration .31 --workers 4 --trace build/w4.jsonl
+python3 -m ose.cli run --mode simulated --duration .31 --workers 1 --trace build/w1.jsonl
+python3 -m ose.cli run --mode simulated --duration .31 --workers 4 --trace build/w4.jsonl
 cmp build/w1.jsonl build/w4.jsonl
 ```
 
@@ -213,7 +213,7 @@ existing real-time broker. Simulated external input continues to use scenarios.
 toolchains fail these targets. `make check TEST_LANGUAGES=python,c,rust` runs an
 explicit local subset and reports Java/Ada as not verified.
 
-The SDK sources are installed with the Python package under `share/sdl-chain/sdk`.
+The SDK sources are installed with the Python package under `share/ose/sdk`.
 Both checkout and installed-package builds use that distribution layout. The
 root CI validates the SDL monorepo, and the nested workflow supports extraction
 of `ose` with its pinned public SDL dependency. A separate CI job executes
@@ -230,7 +230,7 @@ run `ClientExample <port> tcp` with the JNI library directory configured.
 For an Ada application, the build helper accepts the main and generated units:
 
 ```python
-from chain_env.modeling.ada_client_build import build_ada
+from ose.modeling.ada_client_build import build_ada
 binary = build_ada(SDL_ROOT, "build/ada-example",
                    "examples/external/ada/client_example.adb",
                    ["build/generated/shared/ada"])

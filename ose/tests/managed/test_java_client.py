@@ -3,10 +3,10 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from chain_env.codec.sdl2 import SDL2
-from chain_env.execution.broker import Broker
-from chain_env.modeling.client_build import build_java
-from chain_env.modeling.managed_containers import tool
+from ose.codec.sdl2 import SDL2
+from ose.execution.broker import Broker
+from ose.modeling.client_build import build_java
+from ose.modeling.managed_containers import tool
 
 ROOT = Path(__file__).resolve().parents[2]
 SDL = Path(os.environ.get('SDL_ROOT', ROOT.parent / 'sdl'))

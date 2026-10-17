@@ -22,7 +22,7 @@ class ChainTests(unittest.TestCase):
         shutil.copytree(original, cls.project, ignore=shutil.ignore_patterns("build", "__pycache__", "target", "*.egg-info"))
         cls.env = dict(os.environ, SDL_ROOT=str(Path(SDL_ROOT).resolve()), PYTHONPATH=str(cls.project / "src"))
         cls.build = cls.project / "build"
-        cls.cli = [sys.executable, "-m", "chain_env.cli"]
+        cls.cli = [sys.executable, "-m", "ose.cli"]
         args = ["--model", "examples/acquisition/model.json", "--deployment", "examples/acquisition/deployment.json"]
         subprocess.run(cls.cli + ["build", *args], cwd=cls.project, env=cls.env, check=True, capture_output=True, timeout=120)
 
@@ -57,7 +57,7 @@ class ChainTests(unittest.TestCase):
         self.assertIn(b"startup", result.stderr)
 
     def test_reject_incompatible_schema_and_accept_nested(self):
-        from chain_env.modeling.compiler import validate
+        from ose.modeling.compiler import validate
         temporary = self.build / "validation"
         temporary.mkdir(exist_ok=True)
         (temporary / "publisher.sdl").write_text("message Measurement {1: uint64 sequence; 2: fl64 value;}")

@@ -1,9 +1,9 @@
 import unittest
 from unittest.mock import patch
-from chain_env.delivery.policies import SubscriptionPolicy as Policy
-from chain_env.delivery.buffers import Buffer
-from chain_env.delivery.engine import DeliveryEngine
-from chain_env.delivery.stores import MemoryStore
+from ose.delivery.policies import SubscriptionPolicy as Policy
+from ose.delivery.buffers import Buffer
+from ose.delivery.engine import DeliveryEngine
+from ose.delivery.stores import MemoryStore
 
 
 def record(n, epoch="session"):

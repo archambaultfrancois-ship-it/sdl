@@ -362,12 +362,12 @@ tick-selection rules.
 
 ## Implementation references
 
-- [Scheduler](../src/chain_env/execution/scheduler.py): input selection, change
+- [Scheduler](../src/ose/execution/scheduler.py): input selection, change
   detection and periodic deadlines.
-- [Adapter](../src/chain_env/execution/adapter.py): network admission, snapshot
+- [Adapter](../src/ose/execution/adapter.py): network admission, snapshot
   reservation, INPUT/TICK exchange, publications and completion.
-- [Broker](../src/chain_env/execution/broker.py): routing, per-subscription queues
+- [Broker](../src/ose/execution/broker.py): routing, per-subscription queues
   and independent send loops.
-- [Delivery engine](../src/chain_env/delivery/engine.py): ACKs, retry deadlines
+- [Delivery engine](../src/ose/delivery/engine.py): ACKs, retry deadlines
   and exhaustion.
 - [Component protocol](../sdk/protocol.md): binary frame layout and lifecycle.

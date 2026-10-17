@@ -12,13 +12,13 @@ workers through a separate read-only protocol.
 
 ## Python
 
-Install `sdl-chain` and make `sdl_runtime` and the generated SDL modules importable.
+Install `ose` and make `sdl_runtime` and the generated SDL modules importable.
 To try the SDK from source, generate the types with `make external-types`, then
 add `src`, `$SDL_ROOT/runtime/python` and `build/generated/shared/python` to
 `PYTHONPATH`.
 
 ```python
-from chain_env.client import Client, Fifo, Latest, Retry
+from ose.client import Client, Fifo, Latest, Retry
 from measurement import Measurement
 
 def receive(message, info):

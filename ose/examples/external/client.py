@@ -1,7 +1,7 @@
 """Run alongside either native example and the application's broker."""
 import argparse
 import threading
-from chain_env.client import Client, Latest
+from ose.client import Client, Latest
 from measurement import Measurement
 
 parser = argparse.ArgumentParser()

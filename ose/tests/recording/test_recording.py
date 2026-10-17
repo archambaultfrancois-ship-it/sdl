@@ -10,11 +10,11 @@ import tempfile
 import time
 import unittest
 
-from chain_env.codec.sdl2 import SDL2
-from chain_env.execution.broker import Broker
-from chain_env.recording.recorder import Recorder
-from chain_env.recording.console import Console
-from chain_env.transport.secure import connect
+from ose.codec.sdl2 import SDL2
+from ose.execution.broker import Broker
+from ose.recording.recorder import Recorder
+from ose.recording.console import Console
+from ose.transport.secure import connect
 from sdl_recording import RecordingReader
 
 SDL_ROOT = os.environ["SDL_ROOT"]
@@ -214,7 +214,7 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cli_script_and_sigterm_close_the_file(self):
         path = self.root / "cli.pcapng"
-        process = await asyncio.create_subprocess_exec(sys.executable, "-m", "chain_env.cli", "record",
+        process = await asyncio.create_subprocess_exec(sys.executable, "-m", "ose.cli", "record",
             "--host", "127.0.0.1", "--port", str(self.broker.port), "--sdl-root", SDL_ROOT,
             "--command", "select *", "--command", f"start {path}", "--command", "wait 30",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -242,7 +242,7 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
     async def test_interactive_stdin_and_eof_or_signal_while_waiting_for_commands(self):
         for ending in ("eof", "sigterm"):
             path = self.root / (ending + ".pcapng")
-            process = await asyncio.create_subprocess_exec(sys.executable, "-m", "chain_env.cli", "record",
+            process = await asyncio.create_subprocess_exec(sys.executable, "-m", "ose.cli", "record",
                 "--host", "127.0.0.1", "--port", str(self.broker.port), "--sdl-root", SDL_ROOT,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             try:
@@ -273,7 +273,7 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
 
 
 from tests.integration import test_distributed as distributed_fixture
-from chain_env.execution.distributed import Coordinator, Worker
+from ose.execution.distributed import Coordinator, Worker
 
 
 class DistributedRecordingTests(unittest.IsolatedAsyncioTestCase):
