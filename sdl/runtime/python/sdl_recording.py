@@ -444,14 +444,25 @@ class RecordingReader:
          'channels': list(channels.values()), 'metadata': metadata}
 
    def validate(self):
-      count = 0
-      for record in self.iter_records():
+      """Validate the entire recording and return its total message count."""
+      return self.validate_summary()['message_count']
+
+   def validate_summary(self):
+      """Validate in one scan, counting messages by topic across channel versions."""
+      counts = {}
+      for record in self._scan():
+         if isinstance(record, RecordingChannel):
+            counts.setdefault(record.topic, 0)
+            continue
+         if not isinstance(record, RecordingRecord):
+            continue
          try:
             record.decode()
          except CodecError as error:
             raise RecordingError('invalid SDL2 payload on channel %d: %s' % (record.channel.id, error)) from error
-         count += 1
-      return count
+         counts[record.channel.topic] += 1
+      return {'message_count': sum(counts.values()),
+         'message_count_by_topic': dict(sorted(counts.items()))}
 
 
 def replay(records, consumer, *, speed=1.0, clock=time.monotonic_ns, sleep=time.sleep):

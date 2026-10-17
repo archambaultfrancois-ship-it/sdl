@@ -196,6 +196,13 @@ rejects conflicting declarations and invalid roots, and dynamically decodes ever
 payload. It fails on malformed or truncated files. It does not certify the semantic
 correctness of every index entry. Sequential scanning ignores indexes.
 
+On success, the CLI prints `valid`, the total `message_count`, and
+`message_count_by_topic`, a map from each topic (recording point) to its message
+count. Counts combine channels with the same topic, including schema versions;
+declared topics with no messages appear with zero. Validation and counting use
+one complete scan. `RecordingReader.validate()` still returns the total count;
+`RecordingReader.validate_summary()` returns both count fields.
+
 The reader limits each MCAP record or PCAPNG block to 64 MiB by default, isolates
 inner field lengths to that record, and rejects oversized or compressed chunks. The API allows
 `max_record_size` to be changed for recordings with larger payloads. It retains

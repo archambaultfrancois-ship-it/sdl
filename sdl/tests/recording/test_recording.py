@@ -128,6 +128,8 @@ class RecordingTests(unittest.TestCase):
       self.assertEqual(info['message_count'], 0)
       self.assertEqual(len(info['channels']), 1)
       self.assertEqual(RecordingReader(self.path).validate(), 0)
+      self.assertEqual(RecordingReader(self.path).validate_summary(),
+         {'message_count': 0, 'message_count_by_topic': {'empty': 0}})
       with self.assertRaises(FileExistsError):
          RecordingWriter(self.path)
       writer.close()
@@ -310,6 +312,47 @@ class RecordingTests(unittest.TestCase):
    def cli(self, *args, env=None):
       return subprocess.run([sys.executable, str(ROOT / 'tools/recording/sdl-recording'), *args],
          capture_output=True, text=True, env=env)
+
+   def test_cli_validate_counts_topics_across_versions_and_unused_channels(self):
+      expected = {'message_count': 3,
+         'message_count_by_topic': {'alarm.event': 2, 'empty': 0, 'sensor.signal': 1}}
+      for format in ('mcap', 'pcapng'):
+         with self.subTest(format=format):
+            with RecordingWriter(self.path, format=format, overwrite=True) as writer:
+               first = writer.register_channel(topic='alarm.event', catalogue=description(V1), root_type='Sample')
+               evolved = writer.register_channel(topic='alarm.event', catalogue=description(V2), root_type='Sample')
+               sensor = writer.register_channel(topic='sensor.signal', catalogue=description(V1), root_type='Sample')
+               writer.register_channel(topic='empty', catalogue=description(V1), root_type='Sample')
+               writer.write(first, V1(value=1), log_time_ns=1)
+               writer.write(sensor, V1(value=2), log_time_ns=2)
+               writer.write(evolved, V2(value=3), log_time_ns=3)
+            reader = RecordingReader(self.path)
+            self.assertEqual(reader.validate_summary(), expected)
+            self.assertEqual(reader.validate(), 3)
+            result = self.cli('validate', str(self.path))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), {'valid': True, **expected})
+            with RecordingWriter(self.path, format=format, overwrite=True):
+               pass
+            result = self.cli('validate', str(self.path))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout),
+               {'valid': True, 'message_count': 0, 'message_count_by_topic': {}})
+
+   def test_cli_validate_emits_no_counts_for_bad_payloads_or_truncated_files(self):
+      for format in ('mcap', 'pcapng'):
+         for malformed in (False, True):
+            with self.subTest(format=format, malformed=malformed):
+               with RecordingWriter(self.path, format=format, overwrite=True, validate_payload=False) as writer:
+                  channel = writer.register_channel(topic='alarm.event', catalogue=description(V1), root_type='Sample')
+                  writer.write(channel, V1(value=1), log_time_ns=1)
+                  if malformed:
+                     writer.write_encoded(channel, b'\x01', log_time_ns=2)
+               if not malformed:
+                  self.path.write_bytes(self.path.read_bytes()[:-1])
+               result = self.cli('validate', str(self.path))
+               self.assertEqual(result.returncode, 1, result.stderr)
+               self.assertEqual(result.stdout, '')
 
    def test_cli_info_inspect_offsets_validate_and_replay(self):
       self.record()

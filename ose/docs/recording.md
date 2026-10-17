@@ -194,6 +194,11 @@ python3 "$SDL_ROOT/tools/recording/sdl-recording" validate capture.pcapng
 python3 "$SDL_ROOT/tools/recording/sdl-recording" inspect capture.pcapng --topic alarm.event --limit 3
 ```
 
+`validate` (also available as `record-check` after sourcing the framework's
+`setenv.sh`) reports the total `message_count` and `message_count_by_topic`, with
+one count per recording point. Declared points with no recorded messages have a
+zero count.
+
 From the OSE root, `make test-recording` checks both formats, unchanged payload
 bytes, filters, bounded overflow, failure cleanup, scripted CLI shutdown and
 authenticated distributed capture. Install/build the optional SDL services first.
