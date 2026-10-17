@@ -11,6 +11,7 @@ import stat
 import sys
 
 from ose.recording.recorder import Recorder
+from ose.recording.rotation import parse_size
 from ose.transport.secure import contexts
 
 
@@ -20,10 +21,12 @@ select POINT_OR_PATTERN ...  select points (names, list numbers, or glob pattern
 unselect POINT_OR_PATTERN ...
 selected                      show the selection and its filters
 label [NAME]                  show/set the session label (default: recorder)
+max-size [SIZE|off]            rotate at SIZE bytes (B/KiB/MiB/GiB; default: off)
+cycle [N|off]                 keep N files with increasing indices (default: off)
 show POINT                    show its SDL catalogue and applicable field types
 filter POINT EXPRESSION        prepare an SDL filter for a selected point
 filter POINT off               remove its filter
-start [PATH] [pcapng|mcap]      create a new local recording (never overwrite)
+start [PATH] [pcapng|mcap]      start a new capture with the current file settings
 status                        show counts, losses and errors
 stop                          stop capture, drain queues and finalize the file
 wait SECONDS                  keep recording (also useful in scripts)
@@ -32,6 +35,8 @@ quit                          stop cleanly and exit
 
 Examples: select sensor_*.signal alarm.event
           filter alarm.event state == 1 && rms > 1.0
+          max-size 100MiB
+          cycle 3
           start capture.pcapng
 Only matching messages are written. Indeterminate results are counted and skipped.
 Filters run on original encoded values at the source, before capture queueing and transfer.
@@ -102,6 +107,17 @@ class Console:
             if values:
                 self.recorder.set_label(values[0])
             self.print(json.dumps({"label": self.recorder.label}, ensure_ascii=False))
+        elif command in ("max-size", "cycle"):
+            values = shlex.split(rest)
+            if len(values) > 1:
+                raise ValueError(f"{command} expects one value or off")
+            if values:
+                if command == "max-size":
+                    self.recorder.set_max_size(parse_size(values[0]))
+                else:
+                    self.recorder.set_cycle(None if values[0].lower() == "off" else int(values[0]))
+            value = self.recorder.max_size if command == "max-size" else self.recorder.cycle
+            self.print(json.dumps({command: value if value is not None else "off"}))
         elif command == "show":
             names = self.names([rest.strip()])
             for name in names:

@@ -110,8 +110,62 @@ are preferable in scripts. Selection and filters are frozen while recording.
 `start` without a path generates a UTC timestamped `.pcapng` filename in the
 current directory. Paths are local to the recorder process, even for a remote
 application. Quote paths containing spaces. Files are created exclusively;
-existing files are never overwritten. The parent directory must already exist.
+existing files are never overwritten at startup. The parent directory must already exist.
 The filename extension does not select the format: pass `mcap` explicitly.
+
+## File rotation and cyclic retention
+
+Configure rotation before `start`; both settings default to `off`:
+
+```text
+record> max-size 100MiB
+record> cycle 3
+record> start moteur.pcapng
+record> status
+record> stop
+record> cycle off
+record> max-size off
+```
+
+`max-size SIZE` accepts bytes (`1000000` or `1000000B`) and `KiB`, `MiB`, `GiB`
+suffixes, including fractions resolving to whole bytes (`1.5MiB`). A bare
+`max-size` shows the current setting; `max-size off` disables rotation.
+`cycle N` retains at most N files, including the current file. A bare `cycle`
+shows the setting; `cycle off` keeps every numbered file. N must be positive.
+Cyclic retention requires an active size limit when starting a capture.
+Queries remain available during recording, but settings can only be changed
+while stopped. The console's scripted `--command` mode accepts these commands.
+
+With rotation enabled, `start moteur.pcapng` opens `moteur_001.pcapng`. Subsequent
+files use continuously increasing indices, padded to at least three digits:
+`002`, `003`, ..., `999`, `1000`, etc. With `cycle 3`, the fourth file reuses the
+oldest output under the new name `moteur_004.pcapng`, leaving `002`, `003`, `004`;
+the next rotation leaves `003`, `004`, `005`. Each new capture starts at `001`.
+With rotation disabled the requested filename is used unchanged.
+
+Every segment contains its own catalogues, channels, label and final container
+records and can be inspected or validated independently. Messages are never
+split. The size is a rotation threshold: rotation occurs before the next message
+after reaching it, and indivisible messages, indexes and closing metadata can
+make the final file larger. MCAP buffers are flushed near the threshold to
+account for messages still in chunks. An oversized first message stays in the
+current file; an empty capture produces one valid file without rotating.
+
+The parent directory must exist. Startup refuses an existing base filename or
+any existing numbered file in the requested series. Subsequent name collisions
+or externally replaced cyclic files end the capture explicitly, preserving
+unrelated files. Only files created by this capture are eligible for reuse;
+cyclic retention deliberately replaces their old contents. On filesystems
+without hard links, reuse creates the next file exclusively and removes the
+owned oldest file before writing the replacement.
+
+`status` reports `max_size` in bytes (`null` when off), `cycle`, `base_file`,
+current `file`, `file_index`, `file_count` and `rotations`. `file_message_count`
+and `file_topics` describe the current file; session `counts` and `topics` are
+cumulative, including messages in cyclic files already replaced. Each segment's
+`ose.session` metadata includes this snapshot and a `final` flag indicating
+whether it was closed at capture termination rather than for rotation. Rotation
+does not reopen source sessions or change their filters and counters.
 
 ## Content filters
 
