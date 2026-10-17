@@ -39,18 +39,38 @@ must_fail(@() sdl_packed_mex('encode_c32',double(1)));
 assert(~isempty(fast.native)&&fast.native_id~=0);
 bytes=uint8(unicode2native(BenchPayload('description'),'UTF-8'));
 bytectx=sdl_matlab_runtime('prepare',bytes,{'BenchPayload'});assert(bytectx.native_id~=0);delete(bytectx.native);clear bytectx;
-% Full-message UTF-16/UTF-8 conversion, including embedded NUL and surrogate pairs.
-for header={char([]),'ascii','été',char([97,0,98]),char([hex2dec('d83d'),hex2dec('de00')]),char([1,127,128,2047,2048,65535])}
- m=BenchPayload('new');m.header=header{1};m.samples=complex(single([1;-2]),single([-3;4]));
- wire=BenchPayload('encode',baseline,m);assert(isequal(wire,BenchPayload('encode',fast,m)));
+% The same UTF-8 wire oracle works with MATLAB UTF-16 and Octave UTF-8 chars.
+% Cover empty/ASCII/accented strings, NUL, supplementary characters, scalar
+% boundaries and a multibyte counter (128 UTF-8 bytes).
+headers={[],[97,115,99,105,105],[195,169,116,195,169],[97,0,98], ...
+ [240,159,152,128],[1,127,194,128,223,191,224,160,128,239,191,191], ...
+ [244,143,191,191],repmat([195,169],1,64)};
+for k=1:numel(headers)
+ bytes=uint8(headers{k});
+ m=BenchPayload('new');
+ if isempty(bytes),m.header='';else,m.header=native2unicode(bytes,'UTF-8');end
+ m.samples=complex(single([1;-2]),single([-3;4]));
+ if numel(bytes)<128,counter=uint8(numel(bytes));else,counter=uint8([128;1]);end
+ expected=[uint8(1);counter;bytes(:);uint8(2);sdl_packed_mex('encode_c32',m.samples)];
+ wire=BenchPayload('encode',baseline,m);assert(isequal(wire,expected));
+ assert(isequal(wire,BenchPayload('encode',fast,m)));
  p=BenchPayload('decode',fast,wire);q=BenchPayload('decode',baseline,wire);assert(isequal(p,q));
+ assert(isequal(p.header,m.header));
  [p,name]=sdl_matlab_runtime('decode',fast,wire);assert(strcmp(name,'BenchPayload')&&isequal(p,q));
 end
 m=BenchPayload('new');m.header='double';m.samples=complex([1.25;-3.5],[4;-2]);
 assert(isequal(BenchPayload('encode',baseline,m),BenchPayload('encode',fast,m)));
 m.samples={complex(1,-2),complex(3,4)};
 assert(isequal(BenchPayload('encode',baseline,m),BenchPayload('encode',fast,m)));
-for header={char(hex2dec('d800')),char(hex2dec('dc00')),char([hex2dec('d800'),97])}
+if exist('OCTAVE_VERSION','builtin')
+ % Octave char arrays can contain invalid UTF-8; MATLAB can contain unpaired
+ % UTF-16 surrogates. Both must be rejected by the native encoder.
+ invalid_headers={char(128),char([194]),char([192,128]), ...
+  char([237,160,128]),char([237,176,128]),char([244,144,128,128]),char([255])};
+else
+ invalid_headers={char(hex2dec('d800')),char(hex2dec('dc00')),char([hex2dec('d800'),97])};
+end
+for header=invalid_headers
  m=BenchPayload('new');m.header=header{1};must_fail(@() BenchPayload('encode',fast,m));
 end
 for wire={uint8([]),uint8([0,0,0]),uint8([129,0,0,0]),uint8([1,128,0,0]),uint8([1,0,128,0]),uint8([1,0,255,255,255,255,16]),uint8([1,0,255,255,255,255,15]),uint8([1,1,255,0]),uint8([1,2,192,128,0]),uint8([1,3,237,160,128,0]),uint8([1,4,244,144,128,128,0])}

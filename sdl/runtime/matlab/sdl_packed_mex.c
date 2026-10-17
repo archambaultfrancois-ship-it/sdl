@@ -173,6 +173,30 @@ static uint32_t take_count(const uint8_t *bytes, size_t length, size_t *pos) {
    }
    mexErrMsgIdAndTxt("SDL:Malformed", "Invalid counter."); return 0;
 }
+#ifdef HAVE_OCTAVE
+/* Octave mxChar arrays contain UTF-8 bytes, rather than MATLAB UTF-16 units. */
+static size_t utf8_size(const mxArray *header) {
+   size_t length = mxGetNumberOfElements(header);
+   if (length > UINT32_MAX)
+      mexErrMsgIdAndTxt("SDL:InvalidValue", "String length overflow.");
+   if (!sdl_wire_valid_utf8((const uint8_t *)mxGetChars(header), length))
+      mexErrMsgIdAndTxt("SDL:InvalidValue", "Invalid UTF-8 string.");
+   return length;
+}
+static void encode_utf8(uint8_t *out, const mxArray *header) {
+   size_t length = mxGetNumberOfElements(header);
+   if (length) memcpy(out, mxGetChars(header), length);
+}
+static mxArray *decode_utf8(const uint8_t *bytes, size_t length) {
+   mwSize dims[2];
+   mxArray *out;
+   /* The C runtime has already validated the complete UTF-8 string. */
+   dims[0] = length ? 1 : 0; dims[1] = (mwSize)length;
+   out = mxCreateCharArray(2, dims);
+   if (length) memcpy(mxGetChars(out), bytes, length);
+   return out;
+}
+#else
 static uint32_t next_utf16(const mxChar *text, size_t length, size_t *pos) {
    uint32_t c = text[(*pos)++];
    if (c >= 0xd800 && c <= 0xdbff) {
@@ -239,6 +263,7 @@ static mxArray *decode_utf8(const uint8_t *bytes, size_t length) {
    }
    return out;
 }
+#endif
 
 /* Four contiguous SoA leaves; wire records contain ten big-endian words. */
 static const mxArray *struct_field(const mxArray *obj, const char *name) {
