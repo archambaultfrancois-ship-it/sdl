@@ -78,6 +78,10 @@ python3 -m ose.cli inspect
 
 Ctrl+C stops the chain and its component processes. `run --duration 2` provides
 a finite execution; `inspect --last` reads the final saved counters after shutdown.
+Supervised adapters and components run in separate process sessions so terminal
+Ctrl+C is handled by the supervisor. Components receive the normal IPC stop
+request, allowing `on_stop` callbacks to run without `KeyboardInterrupt`
+tracebacks. Component errors continue to use stderr normally.
 Counters include queue depths, age, replacement, refusal, duplicate, retry and
 failure counts, as well as observed average publication and processing rates.
 

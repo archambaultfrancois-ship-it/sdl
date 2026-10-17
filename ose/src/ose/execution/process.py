@@ -10,7 +10,10 @@ from ose.execution import ipc
 async def start_component(node):
     env = dict(os.environ, **node.get("env", {}))
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2]) + os.pathsep + env.get("PYTHONPATH", "")
+    # Terminal Ctrl+C belongs to the supervisor. Components stop through IPC so
+    # callbacks can finish and on_stop runs instead of a concurrent SIGINT.
     process = await asyncio.create_subprocess_exec(*node["command"], cwd=node["cwd"], env=env,
+        start_new_session=True,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
     try:
         async def initialize():

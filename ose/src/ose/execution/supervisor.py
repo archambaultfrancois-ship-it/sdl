@@ -26,8 +26,11 @@ async def run(plan_path, duration=None, port=0):
         source_root = str(Path(__file__).resolve().parents[2])
         env["PYTHONPATH"] = source_root + os.pathsep + env.get("PYTHONPATH", "")
         for name in plan["components"]:
+            # Keep terminal interrupts at this supervisor, including while an
+            # adapter is importing modules before installing its own handlers.
             child = await asyncio.create_subprocess_exec(sys.executable, "-m", "ose.cli", "adapter",
-                "--plan", str(plan_path), "--node", name, "--port", str(broker.port), env=env)
+                "--plan", str(plan_path), "--node", name, "--port", str(broker.port), env=env,
+                start_new_session=True)
             children.append(child)
         deadline = time.monotonic() + 20
         while broker.ready != set(plan["components"]):
