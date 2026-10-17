@@ -186,7 +186,8 @@ def main(argv=None):
          command.add_argument('--from', dest='start', type=_duration, help='offset from the earliest file log time')
          command.add_argument('--to', dest='end', type=_duration, help='exclusive end offset from the earliest file log time')
       if name == 'inspect':
-         command.add_argument('--limit', type=_positive, default=5)
+         command.add_argument('--limit', type=_positive,
+            help='maximum number of messages to display (default: no limit)')
          command.add_argument('--full', action='store_true', help='print entire arrays and strings')
          command.add_argument('--format', choices=('json', 'text', 'table'), default='json',
             help='json: objects (default); text: SDL display; table: field/type/value columns')

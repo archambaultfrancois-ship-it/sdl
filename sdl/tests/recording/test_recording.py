@@ -375,6 +375,32 @@ class RecordingTests(unittest.TestCase):
       self.assertEqual(result.returncode, 1)
       self.assertEqual(result.stdout, '')  # Preflight before invoking the consumer.
 
+   def test_cli_inspect_is_unlimited_by_default_and_honors_explicit_limit(self):
+      for format in ('mcap', 'pcapng'):
+         with RecordingWriter(self.path, format=format, overwrite=True) as writer:
+            channel = writer.register_channel(topic='radio/iq', catalogue=description(V1), root_type='Sample')
+            for number in range(8):
+               writer.write(channel, V1(value=number), log_time_ns=number, sequence=number)
+         for display_format in ('json', 'text', 'table'):
+            for limit, count in ((None, 8), (3, 3)):
+               with self.subTest(format=format, display_format=display_format, limit=limit):
+                  options = [] if limit is None else ['--limit', str(limit)]
+                  result = self.cli('inspect', str(self.path), '--format', display_format, *options)
+                  self.assertEqual(result.returncode, 0, result.stderr)
+                  if display_format == 'json':
+                     rows = [json.loads(line) for line in result.stdout.splitlines()]
+                     self.assertEqual([row['sequence'] for row in rows], list(range(count)))
+                  elif display_format == 'text':
+                     self.assertEqual(result.stdout.count('RecordingRecord {'), count)
+                  else:
+                     self.assertEqual(sum(line.startswith('Record ') for line in result.stdout.splitlines()), count)
+         result = self.cli('inspect', str(self.path), '--from', '2ns', '--to', '8ns', '--topic', 'radio/iq')
+         self.assertEqual(result.returncode, 0, result.stderr)
+         self.assertEqual([json.loads(line)['sequence'] for line in result.stdout.splitlines()], list(range(2, 8)))
+         for limit in ('0', '-1'):
+            with self.subTest(format=format, limit=limit):
+               self.assertEqual(self.cli('inspect', str(self.path), '--limit=' + limit).returncode, 2)
+
    def test_cli_bounded_preview_full_output_and_invalid_duration(self):
       Array = bindings('message Sample {\n packed fl64 value;\n}\n')
       with RecordingWriter(self.path) as writer:

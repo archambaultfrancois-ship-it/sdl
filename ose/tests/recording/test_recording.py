@@ -86,6 +86,21 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([r.decode().fields["value"] for r in records], [3., 4.])
         self.assertEqual(self.recorder.status()["counts"]["filtered"], 5)
 
+    async def test_inspect_live_recording_has_no_default_message_limit(self):
+        path = self.root / "eight-messages.pcapng"
+        await self.recorder.start(path)
+        for sequence in range(8):
+            await self.publish(sequence)
+        await self.recorder.stop()
+        tool = Path(SDL_ROOT) / "tools/recording/sdl-recording"
+        for options, count in (([], 8), (["--limit", "3"], 3)):
+            process = await asyncio.create_subprocess_exec(sys.executable, str(tool), "inspect", str(path),
+                *options, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await process.communicate()
+            self.assertEqual(process.returncode, 0, stderr.decode())
+            self.assertEqual([json.loads(line)["message"]["fields"]["sequence"]
+                              for line in stdout.splitlines()], list(range(count)))
+
     async def test_indeterminate_filter_is_counted_and_not_written(self):
         await self.recorder.set_filter("source.value", "value >= 0")
         path = self.root / "nan.pcapng"

@@ -76,6 +76,7 @@ then `start` on separate lines. `start` generates a fresh timestamped filename.
 Finish with `stop` and `quit`; use `record-info FILE`, `record-inspect FILE --limit 5`,
 or `record-check FILE` afterwards. Recording paths are relative to the application
 directory. Each invocation of `record` opens an independent recorder.
+`record-inspect` displays every selected message unless `--limit N` is supplied.
 
 `app-build`, `app-validate`, `app-simulate`, `app-distributed`, and `app-make`
 forward to the application's Makefile targets; its targets must exist.

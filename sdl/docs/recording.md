@@ -162,7 +162,8 @@ PYTHONPATH="examples/record_replay:$PYTHONPATH" \
 
 `info` prints JSON containing catalogues, channels, metadata, counts and the minimum
 and maximum log time. It checks container framing and roots without decoding
-bodies. `inspect` prints one JSON object per selected message. Arrays show their
+bodies. `inspect` displays all selected messages by default; use `--limit N` to
+stop after N messages. In JSON mode it prints one object per message. Arrays show their
 length and at most eight preview elements by default; `--full` prints all elements.
 Enums include their type, name and integer; complex values have `real` and `imag`.
 Nonfinite floats are strings (`nan`, `inf`, `-inf`). JSON integers retain their

@@ -133,7 +133,7 @@ app-distributed ...     run its local distributed demo; default 300 seconds
 record [OPTIONS...]     prepare missing services and open an external recorder
 record-deps             manually rebuild/install recording and filter services
 record-info FILE        show recording metadata
-record-inspect FILE ... display messages as text; accepts --limit, --topic, etc.
+record-inspect FILE ... display all messages as text; --limit N bounds the count
 record-check FILE       validate a recording
 ose-env                 show these paths and shortcuts
 

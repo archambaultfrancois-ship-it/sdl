@@ -199,6 +199,10 @@ python3 "$SDL_ROOT/tools/recording/sdl-recording" inspect capture.pcapng --topic
 one count per recording point. Declared points with no recorded messages have a
 zero count.
 
+`inspect` and the `record-inspect` shortcut display all selected messages by
+default. Add `--limit N` for a bounded preview. `--full` controls the detail of
+arrays and strings within each message, independently of the message count.
+
 From the OSE root, `make test-recording` checks both formats, unchanged payload
 bytes, filters, bounded overflow, failure cleanup, scripted CLI shutdown and
 authenticated distributed capture. Install/build the optional SDL services first.
