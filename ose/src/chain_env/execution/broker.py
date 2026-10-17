@@ -12,6 +12,7 @@ from chain_env.delivery.stores import MemoryStore
 from chain_env.transport.tcp import TCP
 from chain_env.transport.udp import UDP
 from chain_env.transport.protocol import encode
+from chain_env.recording.taps import TapHub, OPERATIONS as RECORDING_OPERATIONS
 
 
 class Broker(Sessions):
@@ -35,6 +36,7 @@ class Broker(Sessions):
                         self.topics[f"{name}.{port_name}"] = port
         self.subscriptions = {sub["id"]: sub for sub in plan["subscriptions"]}
         self.init_sessions()
+        self.recording = TapHub(self.recording_points, plan["max_frame"])
         for identity, sub in self.subscriptions.items():
             policy = SubscriptionPolicy.from_dict(sub["policy"])
             store = MemoryStore(policy.capacity)
@@ -49,6 +51,12 @@ class Broker(Sessions):
         self._enabled = value
         for engine in self.engines.values():
             engine.store.notify()
+
+    def recording_points(self):
+        return {topic: dict(topic=topic, root=port["root"], catalogue=port["catalogue"],
+                    generation=self.publisher_owners.get(topic, self.epoch),
+                    available=self.enabled and (topic in self.publisher_owners or topic.split(".")[0] in self.peers), endpoint=None)
+                for topic, port in self.topics.items()}
 
     def _notify_node(self, node):
         for identity, sub in self.subscriptions.items():
@@ -85,6 +93,15 @@ class Broker(Sessions):
             while not self.closing:
                 header, body = await peer.receive()
                 op = header["op"]
+                if op in RECORDING_OPERATIONS:
+                    try:
+                        if not self.limits["enabled"]:
+                            raise ValueError("external recording is disabled")
+                        result, binary = await self.recording.request(peer, header)
+                        await self._reply(peer, header["request"], result, binary=binary)
+                    except (ValueError, KeyError, TypeError) as error:
+                        await self._reply(peer, header.get("request"), error=str(error))
+                    continue
                 if op == "ack":
                     self._ack(node, header, session)
                     continue
@@ -206,6 +223,7 @@ class Broker(Sessions):
         except (asyncio.IncompleteReadError, ConnectionError, ValueError):
             pass
         finally:
+            self.recording.disconnected(peer)
             pending = list(publications)
             for publication in pending:
                 publication.cancel()
@@ -229,7 +247,7 @@ class Broker(Sessions):
         if error is not None:
             await peer.send({**header, "error": error, "error_code": error_code})
         elif binary is not None:
-            await peer.send(header, binary)
+            await peer.send({**(result or {}), **header}, binary)
         else:
             await peer.send({**header, "content": "json"}, json.dumps(result or {}, separators=(",", ":")).encode())
 
@@ -279,6 +297,9 @@ class Broker(Sessions):
         except ValueError as error:
             raise ClientError("schema", str(error)) from error
         self.sequence += 1
+        self.recording.observe(topic, envelope,
+            generation=self.publisher_owners.get(topic, self.epoch), sequence=self.sequence,
+            catalogue=port["catalogue"], root=port["root"])
         record = {"id": f"{self.epoch}:{self.sequence}", "epoch": self.epoch, "sequence": self.sequence,
                   "topic": topic, "body": bytes(envelope), "published_at": time.time()}
         self.retained[topic] = record

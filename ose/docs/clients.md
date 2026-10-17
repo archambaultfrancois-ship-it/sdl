@@ -5,6 +5,11 @@ CENV/1 broker without a client-side model or a second broker. Generated message
 types and the SDL runtime remain application dependencies. The existing component
 SDKs that use stdin/stdout remain independent of these network SDKs.
 
+For recording without application bindings or a client-side model, use the
+[interactive recorder](recording.md). It discovers live points, accepts SDL filters
+and writes local files through SDL's recording service; it also supports distributed
+workers through a separate read-only protocol.
+
 ## Python
 
 Install `sdl-chain` and make `sdl_runtime` and the generated SDL modules importable.

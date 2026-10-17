@@ -10,6 +10,9 @@ Add `"execution": "distributed"` to a deployment. Subscription bindings accept
 `"routing": "broker"` (default) or `"routing": "direct"`, with `"transport": "tcp"`.
 UDP and external-client topics are explicitly unsupported in distributed v1;
 the existing local broker and external client SDKs remain available in local mode.
+The read-only [interactive recorder](recording.md) can discover outputs through
+the coordinator and capture publications directly from workers, without external
+publisher topics or changes to the application model.
 
 Components may declare Kubernetes constraints in `placement`:
 

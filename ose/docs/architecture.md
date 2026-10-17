@@ -106,3 +106,8 @@ for the matching CLI version. Future transports implement byte movement;
 delivery policy stays in the common delivery engine. The
 [distributed real-time engine](distributed.md) provides remote workers, direct
 TCP routes and Kubernetes export; the ordinary supervisor remains local.
+
+The optional [interactive recorder](recording.md) discovers live publication
+points through read-only RPCs. Bounded taps observe broker or worker publications;
+the external console selects filters and writes SDL recordings on its own disk.
+It has no model component, input reservation or role in the startup barrier.

@@ -23,6 +23,7 @@ from chain_env.execution.process import start_component, stop_component, tick_ev
 from chain_env.execution.scheduler import Scheduler, reserve_snapshot
 from chain_env.transport.protocol import encode
 from chain_env.transport.secure import RPCServer, connect, finish_cleanup, identity, loopback
+from chain_env.recording.taps import TapHub, OPERATIONS as RECORDING_OPERATIONS
 
 
 def fingerprint(plan):
@@ -79,6 +80,7 @@ class Coordinator:
         self.engines = {key: engine(sub) for key, sub in self.subscriptions.items()
                         if sub.get("routing", "broker") == "broker"}
         self.activated = False
+        self.recording = TapHub(self.recording_points, plan["max_frame"])
         self.rpc = RPCServer(plan["max_frame"], self.request, context, self.disconnected)
 
     async def start(self, host="127.0.0.1", port=0):
@@ -133,6 +135,15 @@ class Coordinator:
         return {"epoch": self.epoch, "enabled": self.activated, "nodes": nodes,
                 "lease_seconds": self.lease_seconds}
 
+    def recording_points(self):
+        nodes = self.directory()["nodes"]
+        return {f"{name}.{port}": dict(topic=f"{name}.{port}", root=desc["root"], catalogue=desc["catalogue"],
+                    available=self.activated and name in nodes,
+                    generation=nodes.get(name, {}).get("token"),
+                    endpoint={"host": nodes[name]["host"], "port": nodes[name]["port"], "identity": name}
+                             if name in nodes else None)
+                for name, node in self.plan["components"].items() for port, desc in node["outputs"].items()}
+
     def authorize(self, sub, source_token, target_token):
         if not self.activated:
             raise ValueError("graph is not activated")
@@ -143,6 +154,8 @@ class Coordinator:
         self.authority()
         op = header["op"]
         caller = identity(peer.writer)
+        if op in ("recording_points", "recording_describe"):
+            return await self.recording.request(peer, header)
         if op == "status":
             return self.snapshot(), None
         name = header["node"]
@@ -173,6 +186,11 @@ class Coordinator:
         session = self.current(name, header["token"])
         if session["peer"] is not peer:
             raise ValueError("generation belongs to another control connection")
+        if op == "recording_authorize":
+            self.current(name, header["token"], ready=True)
+            if not self.activated:
+                raise ValueError("graph is not activated")
+            return {}, None
         if op == "heartbeat":
             session["seen"] = lease_clock()
             return self.directory(), None
@@ -307,13 +325,19 @@ class Worker:
             self.locks[key] = asyncio.Lock()
         self.engines = {key: engine(sub) for key, sub in self.outgoing.items()}
         self.scheduler = Scheduler(self.node, self.buffers)
-        self.rpc = RPCServer(plan["max_frame"], self.receive, server_context)
+        self.recording = TapHub(self.recording_points, plan["max_frame"])
+        self.rpc = RPCServer(plan["max_frame"], self.receive, server_context, self.recording.disconnected)
         self.metrics = Counter()
         self.directory = {"nodes": {}, "enabled": False}
         self.started = asyncio.Event()
         self.started_at = 0
         self.sequence = 0
         self.direct_clients = {}
+
+    def recording_points(self):
+        return {f"{self.name}.{port}": dict(topic=f"{self.name}.{port}", root=desc["root"], catalogue=desc["catalogue"],
+                    generation=getattr(self, "token", None), available=self.started.is_set(), endpoint=None)
+                for port, desc in self.node["outputs"].items()}
 
     async def control(self, op, body=b"", **kwargs):
         return await self.client.request(op, body, node=self.name, token=self.token, **kwargs)
@@ -408,6 +432,9 @@ class Worker:
     async def receive(self, peer, header, body):
         if not hasattr(self, "token"):
             raise ValueError("recipient is not registered")
+        if header["op"] in RECORDING_OPERATIONS:
+            await self.control("recording_authorize")
+            return await self.recording.request(peer, header)
         key = header["subscription"]
         sub = self.incoming[key]
         source = sub["from"].split(".")[0]
@@ -488,6 +515,10 @@ class Worker:
 
     async def publish(self, topic, body):
         self.sequence += 1
+        if self.recording.sessions:
+            desc = self.node["outputs"][topic.split(".")[1]]
+            self.recording.observe(topic, body, generation=self.token, sequence=self.sequence,
+                                   catalogue=desc["catalogue"], root=desc["root"])
         record = dict(id=f"{self.token}:{self.sequence}", epoch=self.epoch, sequence=self.sequence,
                       source_token=self.token, source=self.name, body=body, topic=topic)
         broker = any(s["from"] == topic and s.get("routing", "broker") == "broker"

@@ -32,6 +32,12 @@ jobs:
         run: echo "SDL_ROOT=$PWD/build/sdl-dependency/${{ steps.sdl.outputs.subdirectory }}" >> "$GITHUB_ENV"
       - name: Test
         run: make test
+      - name: Prepare optional recording and filtering services
+        run: |
+          make -C "$SDL_ROOT" recording-deps
+          make -C "$SDL_ROOT" filter-python
+      - name: Verify interactive recording
+        run: make test-recording
       - name: Installed SDK smoke test
         run: python tests/installed_sdk.py
 

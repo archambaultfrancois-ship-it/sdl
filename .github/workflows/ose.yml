@@ -27,6 +27,12 @@ jobs:
         run: python -m pip install ./ose
       - name: Verify all languages and execution modes
         run: make -C ose check
+      - name: Prepare optional recording and filtering services
+        run: |
+          make -C sdl recording-deps
+          make -C sdl filter-python
+      - name: Verify interactive recording
+        run: make -C ose test-recording
       - name: Installed SDK smoke test
         run: python ose/tests/installed_sdk.py
   java7:

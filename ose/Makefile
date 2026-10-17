@@ -28,6 +28,12 @@ test-distributed:
 test-simulated:
 	SDL_ROOT="$(SDL_ROOT)" $(PYTHON) -m unittest discover -s tests/simulation -v
 
+# Recording and content filters are optional; install/build SDL services first.
+.PHONY: test-recording
+test-recording:
+	PYTHONPATH="$(CURDIR)/src:$(SDL_ROOT)/runtime/python:$(SDL_ROOT)/runtime/filter/python:$(SDL_ROOT)/build/filter/release:$(SDL_ROOT)/build/recording-deps" $(PYTHON) -c 'import mcap, sdl_filter'
+	SDL_ROOT="$(SDL_ROOT)" PYTHONPATH="$(CURDIR)/src:$(SDL_ROOT)/runtime/python:$(SDL_ROOT)/runtime/filter/python:$(SDL_ROOT)/build/filter/release:$(SDL_ROOT)/build/recording-deps" $(PYTHON) -m unittest discover -s tests/recording -v
+
 .PHONY: client-native external-types external-native
 client-native:
 	CARGO_TARGET_DIR=$(CURDIR)/build/client-rust cargo build --offline --manifest-path sdk/client/rust/Cargo.toml

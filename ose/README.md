@@ -33,6 +33,10 @@ For multi-machine real-time execution, see [distributed deployment](docs/distrib
 OSE provides authenticated `serve`/`worker` processes, direct or broker routes,
 cold component replacement and Kubernetes manifest export.
 
+The optional [interactive recorder](docs/recording.md), `sdl-chain record`, discovers
+live outputs without a model, selects points and SDL filters, and starts/stops
+local PCAPNG or MCAP files. It supports the local broker and distributed workers.
+
 `SDL_ROOT` defaults to the sibling SDL project (`../sdl`). To use another checkout,
 set `SDL_ROOT=/absolute/path/to/sdl` in the environment or on the `make` command
 line. The CLI also accepts `--sdl-root`, which takes precedence over `SDL_ROOT`.

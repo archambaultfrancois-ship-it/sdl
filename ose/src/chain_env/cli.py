@@ -60,6 +60,20 @@ def main():
     command = commands.add_parser("inspect")
     command.add_argument("--endpoint", default="build/endpoint.json")
     command.add_argument("--last", action="store_true")
+    command = commands.add_parser("record", help="discover and interactively record live application outputs")
+    command.add_argument("--endpoint", help="local broker endpoint JSON (default: build/endpoint.json when present)")
+    command.add_argument("--host")
+    command.add_argument("--port", type=int)
+    command.add_argument("--distributed", action="store_true", help="discover remote workers through the coordinator")
+    command.add_argument("--tls-ca")
+    command.add_argument("--tls-cert")
+    command.add_argument("--tls-key")
+    command.add_argument("--insecure", action="store_true", help="distributed loopback-only development mode")
+    command.add_argument("--sdl-root", default=os.environ.get("SDL_ROOT"))
+    command.add_argument("--capacity", type=int, default=256, help="capture queue messages per endpoint")
+    command.add_argument("--byte-budget", type=int, default=8 * 1024 * 1024, help="capture queue bytes per endpoint")
+    command.add_argument("--max-frame", type=int, default=1024 * 1024)
+    command.add_argument("--command", action="append", help="execute a console command; repeat to script a session")
     command = commands.add_parser("adapter", help=argparse.SUPPRESS)
     command.add_argument("--plan", required=True)
     command.add_argument("--node", required=True)
@@ -123,6 +137,18 @@ def main():
                 if any(value is not None for value in (args.workers, args.scenario, args.trace, args.max_tick_output_bytes)):
                     raise ValueError("--workers, --scenario, --trace and --max-tick-output-bytes require simulated mode")
                 asyncio.run(run(args.plan, args.duration, args.port or 0))
+        elif args.action == "record":
+            from chain_env.recording.console import run
+            async def recording():
+                task = asyncio.create_task(run(args))
+                loop = asyncio.get_running_loop()
+                for sig in (signal.SIGINT, signal.SIGTERM):
+                    loop.add_signal_handler(sig, task.cancel)
+                try:
+                    return await task
+                except asyncio.CancelledError:
+                    return 130
+            return asyncio.run(recording())
         elif args.action == "inspect":
             if args.last:
                 print((Path(args.endpoint).parent / "last-status.json").read_text())
