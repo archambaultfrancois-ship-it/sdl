@@ -8,7 +8,9 @@ import struct
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from ose.codec.sdl2 import SDL2
 from ose.execution.broker import Broker
@@ -85,6 +87,110 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
         records = list(RecordingReader(path).iter_records())
         self.assertEqual([r.decode().fields["value"] for r in records], [3., 4.])
         self.assertEqual(self.recorder.status()["counts"]["filtered"], 5)
+        self.assertEqual(self.recorder.status()["counts"]["received"], 2)
+        self.assertEqual(self.recorder.status()["capture_counts"]["delivered"], 2)
+        self.assertEqual(self.recorder.status()["capture_counts"]["filtered"], 5)
+
+    async def test_two_recorders_filter_before_queue_admission_and_network_delivery(self):
+        other = Recorder("127.0.0.1", self.broker.port, capacity=1, byte_budget=1024)
+        await other.connect()
+        self.addAsyncCleanup(other.close)
+        other.selected = {"source.value": None}
+        self.recorder.capacity = 1
+        await self.recorder.set_filter("source.value", "sequence == 1")
+        await other.set_filter("source.value", "sequence == 5")
+        first_path, second_path = self.root / "first.pcapng", self.root / "second.pcapng"
+        await self.recorder.start(first_path)
+        await other.start(second_path)
+        for n in range(7):
+            await self.publish(n)
+        await self.recorder.stop()
+        await other.stop()
+        for recorder, path, selected in ((self.recorder, first_path, 1), (other, second_path, 5)):
+            records = list(RecordingReader(path).iter_records())
+            self.assertEqual([record.decode().fields["sequence"] for record in records], [selected])
+            self.assertEqual(records[0].payload, self.body(selected)[self.codec.api.ENVELOPE_HEADER_SIZE:])
+            status = recorder.status()
+            self.assertEqual(status["counts"], {"received": 1, "written": 1, "filtered": 6})
+            self.assertEqual(status["capture_counts"], {"observed": 7, "filtered": 6, "delivered": 1})
+            metadata = RecordingReader(path).info()["metadata"]
+            final = json.loads(next(item["data"]["status"] for item in metadata if item["name"] == "ose.session"))
+            self.assertEqual(final["counts"]["filtered"], 6)
+        self.assertEqual(self.broker.topic_counts["source.value"], 7)
+        self.assertEqual(self.broker.recording.sessions, {})
+
+    async def test_filtered_capture_refuses_legacy_source_without_silent_fallback(self):
+        await self.recorder.set_filter("source.value", "sequence == 1")
+        request = self.broker.recording.request
+
+        async def legacy_request(peer, header):
+            result, body = await request(peer, {key: value for key, value in header.items() if key != "filters"})
+            return {key: value for key, value in result.items() if key != "filtering"}, body
+
+        with patch.object(self.broker.recording, "request", side_effect=legacy_request):
+            with self.assertRaisesRegex(ValueError, "does not support source filtering"):
+                await self.recorder.start(self.root / "legacy.pcapng")
+        self.assertEqual(self.broker.recording.sessions, {})
+
+    async def test_source_filter_error_ends_only_its_recorder_and_is_reported(self):
+        other = Recorder("127.0.0.1", self.broker.port)
+        await other.connect()
+        self.addAsyncCleanup(other.close)
+        other.selected = {"source.value": None}
+        await self.recorder.set_filter("source.value", "sequence >= 0")
+        failed = await self.recorder.start(self.root / "failed-filter.pcapng")
+        kept_path = self.root / "unaffected.pcapng"
+        await other.start(kept_path)
+        session = next(session for session in self.broker.recording.sessions.values() if session["predicates"])
+        with patch.object(session["predicates"]["source.value"], "evaluate_wire",
+                          return_value=SimpleNamespace(status=-1, diagnostic="native filter error")):
+            await self.publish(1)
+        await asyncio.wait_for(failed.task, 3)
+        self.assertIn("native filter error", failed.error)
+        self.assertEqual(self.recorder.status()["counts"]["filter_errors"], 1)
+        await self.publish(2)
+        await other.stop()
+        self.assertFalse(other.capture.error)
+        self.assertEqual([record.decode().fields["sequence"]
+                          for record in RecordingReader(kept_path).iter_records()], [1, 2])
+        self.assertEqual(self.broker.topic_counts["source.value"], 2)
+        self.assertEqual(self.broker.recording.sessions, {})
+
+    async def test_source_refuses_invalid_filter_even_without_client_prevalidation(self):
+        self.recorder.selected["source.value"] = "missing > 0"
+        with self.assertRaises(ValueError):
+            await self.recorder.start(self.root / "invalid-filter.pcapng")
+        self.assertEqual(self.broker.recording.sessions, {})
+
+    async def test_source_discovers_native_filters_from_plan_root_without_pythonpath(self):
+        program = '''import asyncio, json, struct, sys
+from ose.codec.sdl2 import SDL2
+from ose.recording.taps import TapHub
+
+async def main():
+    codec = SDL2(sys.argv[1])
+    catalogue = "SDL2|Value{1:uint64:sequence;2:fl64:value;}"
+    point = dict(topic="source.value", root="Value", catalogue=catalogue,
+                 generation="g", available=True, endpoint=None)
+    hub = TapHub(lambda: {point["topic"]: point}, 1048576, codec=codec)
+    peer = object()
+    result, _ = await hub.request(peer, dict(op="recording_open", points={"source.value": "g"},
+                                           filters={"source.value": "value > 2"}))
+    for n in (1, 3):
+        hub.observe("source.value", codec.wrap(catalogue, b"\\x01" + struct.pack(">Qd", n, n)),
+                    generation="g", sequence=n, catalogue=catalogue, root="Value")
+    record, _ = await hub.request(peer, dict(op="recording_next", session=result["session"]))
+    print(json.dumps(record["counts"]))
+    hub.close()
+
+asyncio.run(main())
+'''
+        env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"))
+        process = await asyncio.create_subprocess_exec(sys.executable, "-c", program, SDL_ROOT,
+            env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, stderr = await process.communicate()
+        self.assertEqual(process.returncode, 0, stderr.decode())
+        self.assertEqual(json.loads(stdout), {"observed": 2, "filtered": 1, "delivered": 1})
 
     async def test_inspect_live_recording_has_no_default_message_limit(self):
         path = self.root / "eight-messages.pcapng"
@@ -337,6 +443,31 @@ class DistributedRecordingTests(unittest.IsolatedAsyncioTestCase):
         await recorder.connect()
         self.addAsyncCleanup(recorder.close)
         return recorder
+
+    async def test_two_recorders_filter_direct_and_broker_routes_at_workers(self):
+        await self.start_graph()
+        rejected, accepted = await self.recorder(), await self.recorder()
+        topics = ("source.value", "middle.value")
+        for recorder, expression in ((rejected, "value < 0"), (accepted, "value >= 0")):
+            recorder.selected = dict.fromkeys(topics)
+            for topic in topics:
+                await recorder.set_filter(topic, expression)
+        empty_path = Path(self.directory.name) / "rejected.pcapng"
+        kept_path = Path(self.directory.name) / "accepted.pcapng"
+        await rejected.start(empty_path)
+        capture = await accepted.start(kept_path)
+        await self.until(lambda: all(capture.topic_counts[topic] >= 3 for topic in topics) and len(self.values()) >= 3)
+        await rejected.stop()
+        await accepted.stop()
+        self.assertFalse(rejected.capture.error)
+        self.assertFalse(accepted.capture.error)
+        self.assertEqual(list(RecordingReader(empty_path).iter_records()), [])
+        self.assertEqual(rejected.status()["counts"].get("received", 0), 0)
+        self.assertEqual(rejected.status()["capture_counts"].get("delivered", 0), 0)
+        self.assertGreater(rejected.status()["capture_counts"]["filtered"], 0)
+        self.assertEqual({record.channel.topic for record in RecordingReader(kept_path).iter_records()}, set(topics))
+        for worker in self.workers.values():
+            self.assertEqual(worker.recording.sessions, {})
 
     async def test_direct_and_broker_outputs_are_discovered_and_recorded_without_model_changes(self):
         await self.start_graph()

@@ -325,7 +325,7 @@ class Worker:
             self.locks[key] = asyncio.Lock()
         self.engines = {key: engine(sub) for key, sub in self.outgoing.items()}
         self.scheduler = Scheduler(self.node, self.buffers)
-        self.recording = TapHub(self.recording_points, plan["max_frame"])
+        self.recording = TapHub(self.recording_points, plan["max_frame"], codec=self.codec)
         self.rpc = RPCServer(plan["max_frame"], self.receive, server_context, self.recording.disconnected)
         self.metrics = Counter()
         self.directory = {"nodes": {}, "enabled": False}
@@ -382,6 +382,7 @@ class Worker:
             await finish_cleanup(self.close(tasks))
 
     async def close(self, tasks):
+        self.recording.close()
         reader = getattr(getattr(self, "client", None), "task", None)
         for task in tasks:
             if task is not reader:

@@ -18,7 +18,8 @@ deployments need updated worker images.
 Recording uses SDL's `sdl_recording.RecordingWriter`, defaulting to PCAPNG.
 MCAP is an explicit alternative; both formats include the original catalogue
 and encoded payloads. Both require the optional MCAP Python package. The OSE
-broker and workers themselves need neither that dependency nor filter libraries.
+broker and workers do not need MCAP. Sources serving filtered captures need the
+SDL native filter service; unfiltered capture does not load it.
 
 For an installed OSE package, install `ose[recording]` and make the SDL
 Python modules importable. For a source checkout, from the OSE root:
@@ -30,7 +31,8 @@ export PYTHONPATH="$PWD/src:$SDL_ROOT/runtime/python:$SDL_ROOT/build/recording-d
 ```
 
 Content filters additionally use SDL's optional native filter service. Build it
-with the same Python interpreter used to run the console:
+with the Python interpreter used by each recording source (the local broker or
+distributed producer workers), and by the console for expression validation:
 
 ```sh
 make -C "$SDL_ROOT" filter-python
@@ -44,6 +46,12 @@ it also discovers `build/recording-deps`, `runtime/filter/python` and
 building optional services. An installed/importable SDL runtime also works
 without a checkout; in that case, make the optional modules importable through
 installation or `PYTHONPATH`.
+Broker/workers automatically discover `runtime/filter/python` and
+`build/filter/release` under their plan's SDL root when needed. Container images
+must build/copy these services for the container's Python version and platform.
+The Vibration Watch Dockerfile builds them in its image builder. An upgraded
+console refuses filtered capture against a source that does not advertise source
+filtering support; it never falls back to transferring an unfiltered stream.
 
 ## Connect and discover
 
@@ -103,10 +111,19 @@ Use SDL's operators, field paths, array indices, `any`/`all`, enum constants and
 functions such as `len`, `abs` and `isfinite`; see the selected SDL checkout's
 `docs/filtering.md` for the expression language. No Python `eval` is used.
 
-Filters run at the recorder on the original wire payload before writing. Match
-keeps a message; NoMatch and Indeterminate skip it and increment separate counters.
-An evaluation Error ends the recording with a diagnostic. The unfiltered stream
-still crosses the network: filters do not reduce application-to-recorder traffic.
+Filters are prepared per source session at `recording_open` and evaluated on
+the original wire payload at the local broker or distributed producer worker,
+before capture queue admission, reply serialization and network transfer.
+Match keeps a message; NoMatch and Indeterminate skip it and increment separate
+source counters. Only matching messages consume capture queue capacity or cross
+the network to the recorder. Two recorders have independent predicates, counters
+and queues, including when they select the same topic. Closing, stopping or
+disconnecting one session releases its predicates without affecting the other.
+An evaluation Error stops only the affected capture session with a diagnostic;
+other capture sessions and application delivery continue. Filters do not modify
+application subscriptions or their payloads. In local execution the broker still
+receives application publications; in distributed execution the recording data
+already flows directly from each worker to the recorder.
 Wire quantization therefore affects predicate results exactly as in SDL.
 
 ## Distributed applications
@@ -146,12 +163,22 @@ budgets of at most 64 MiB, at most 4096 records and 128 points per session.
 The console accepts up to 32 producer endpoints per recording. Frame limits still
 apply; oversized capture replies are counted separately rather than interrupting
 business delivery. In-flight network frames and one writer operation per feed
-are additional to these queue budgets. Capture adds CPU and network work.
+are additional to these queue budgets. Source predicate evaluation runs
+synchronously on the publication loop and adds CPU work. It performs no disk IO
+and never waits for the recorder. Filtering reduces capture serialization,
+queueing and network work, but does not guarantee a reduction in source CPU for
+every predicate or workload.
 
-The recorder serializes disk IO and filter evaluation on a dedicated thread.
+The recorder serializes disk IO on a dedicated thread. It does not re-evaluate
+source filters. Source filter plans are released on stop, close, disconnect,
+generation changes, evaluation errors and source shutdown.
 `status` and the final summary report written, filtered, indeterminate, dropped
 and oversized counts. The final `ose.session` recording metadata retains these
 counts and any failure. Inspect them before treating a recording as complete.
+`counts.received` counts matching messages received over the network;
+`counts.filtered` and `counts.indeterminate` aggregate the source counters,
+also present in `capture_counts`. `capture_counts.delivered` counts records
+sent by the sources, excluding those rejected by a content filter.
 
 `stop`, `quit`, stdin EOF, Ctrl+C and SIGTERM stop new capture, drain admitted
 queues and finalize the file. Stop waits for pending disk writes. SIGKILL, process

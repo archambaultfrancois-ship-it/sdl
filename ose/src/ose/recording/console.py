@@ -33,7 +33,7 @@ Examples: select sensor_*.signal alarm.event
           filter alarm.event state == 1 && rms > 1.0
           start capture.pcapng
 Only matching messages are written. Indeterminate results are counted and skipped.
-Filters run on the original encoded values at the recorder, not in the application.
+Filters run on original encoded values at the source, before capture queueing and transfer.
 """
 
 

@@ -1,4 +1,4 @@
-"""Read-only publication taps. No disk IO or filter execution in the application.
+"""Read-only publication taps with per-session filters before queue admission.
 
 All methods run on the application's event loop. Observing a publication never
 awaits a recorder: queue overflow drops the oldest capture and increments counters.
@@ -8,6 +8,8 @@ from collections import Counter, deque
 import uuid
 
 from ose.transport.protocol import encode
+from ose.codec.runtime import Runtime
+from ose.recording.filters import prepare_filter
 
 
 OPERATIONS = {"recording_points", "recording_describe", "recording_open",
@@ -18,8 +20,9 @@ class TapHub:
     MAX_BYTES = 64 * 1024 * 1024
     MAX_SESSIONS = 16
 
-    def __init__(self, points, max_frame):
+    def __init__(self, points, max_frame, *, codec=None):
         self.points, self.max_frame = points, max_frame
+        self.codec = codec
         self.sessions = {}
 
     async def request(self, peer, header):
@@ -38,9 +41,13 @@ class TapHub:
             return {k: v for k, v in point.items() if k != "catalogue"}, point["catalogue"].encode()
         if op == "recording_open":
             selections = header.get("points")
+            filters = header.get("filters", {})
             capacity, budget = header.get("capacity", 256), header.get("byte_budget", 8 * 1024 * 1024)
             if not isinstance(selections, dict) or not 1 <= len(selections) <= 128:
                 raise ValueError("select 1..128 recording points per connection")
+            if not isinstance(filters, dict) or any(topic not in selections or
+                    not isinstance(expression, str) or not expression for topic, expression in filters.items()):
+                raise ValueError("recording filters must map selected topics to nonempty expressions")
             if type(capacity) is not int or not 1 <= capacity <= 4096:
                 raise ValueError("recording capacity must be in 1..4096")
             if type(budget) is not int or not 1024 <= budget <= self.MAX_BYTES:
@@ -52,22 +59,33 @@ class TapHub:
                 point = points[topic]
                 if not point["available"] or expected != point["generation"]:
                     raise ValueError("recording point unavailable or changed; refresh discovery")
+            predicates, identities = {}, {}
+            try:
+                if filters and self.codec is None:
+                    self.codec = Runtime()
+                for topic, expression in filters.items():
+                    predicates[topic] = prepare_filter(points[topic], expression,
+                        sdl_root=getattr(self.codec, "root", None))
+                    identities[topic] = self.codec.identity(points[topic]["catalogue"])
+            except Exception:
+                for predicate in predicates.values():
+                    predicate.close()
+                raise
             token = uuid.uuid4().hex
             self.sessions[token] = dict(peer=peer, points={t: points[t] for t in selections},
                 capacity=capacity, budget=budget, queue=deque(), bytes=0, active=True,
+                predicates=predicates, identities=identities,
                 changed=asyncio.Event(), polling=False, error=None, counts=Counter())
-            return {"session": token}, None
+            return {"session": token, "filtering": "source"}, None
         session = self.sessions[header["session"]]
         if session["peer"] is not peer:
             raise ValueError("recording session belongs to another connection")
         if op == "recording_close":
             self.sessions.pop(header["session"])
-            session["active"] = False
-            session["changed"].set()
+            self.deactivate(session)
             return self.stats(session), None
         if op == "recording_stop":
-            session["active"] = False
-            session["changed"].set()
+            self.deactivate(session)
             return self.stats(session), None
         if op != "recording_next":
             raise ValueError("unknown recording operation")
@@ -96,6 +114,14 @@ class TapHub:
         return {"counts": dict(session["counts"]), "queued": len(session["queue"]),
                 "queued_bytes": session["bytes"], "stopped": not session["active"], "capture_error": session["error"]}
 
+    @staticmethod
+    def deactivate(session):
+        session["active"] = False
+        for predicate in session["predicates"].values():
+            predicate.close()
+        session["predicates"].clear()
+        session["changed"].set()
+
     def observe(self, topic, body, *, generation, sequence, catalogue, root):
         # Keep the hot path constant when nobody is recording.
         if not self.sessions:
@@ -108,9 +134,25 @@ class TapHub:
             session["counts"]["observed"] += 1
             if (catalogue, root, generation) != (expected["catalogue"], expected["root"], expected["generation"]):
                 session["error"] = "recording point changed; stop and refresh discovery"
-                session["active"] = False
-                session["changed"].set()
+                self.deactivate(session)
                 continue
+            predicate = session["predicates"].get(topic)
+            if predicate is not None:
+                try:
+                    identity, payload = self.codec.api.unpack_envelope(body)
+                    if identity != session["identities"][topic]:
+                        raise ValueError("recording catalogue identity mismatch")
+                    result = predicate.evaluate_wire(payload)
+                    if result.status == -1:
+                        raise ValueError(result.diagnostic)
+                    if not result.matched:
+                        session["counts"]["indeterminate" if result.status == 2 else "filtered"] += 1
+                        continue
+                except Exception as error:
+                    session["counts"]["filter_errors"] += 1
+                    session["error"] = f"SDL source filter evaluation failed on {topic}: {error}"
+                    self.deactivate(session)
+                    continue
             try:
                 # Replies add control fields; reserve room for them before admission.
                 encode({"op": "result", "request": 2**63, "record": metadata,
@@ -133,5 +175,9 @@ class TapHub:
         for token, session in list(self.sessions.items()):
             if session["peer"] is peer:
                 self.sessions.pop(token)
-                session["active"] = False
-                session["changed"].set()
+                self.deactivate(session)
+
+    def close(self):
+        for session in self.sessions.values():
+            self.deactivate(session)
+        self.sessions.clear()

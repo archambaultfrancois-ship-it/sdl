@@ -1,4 +1,6 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from ose.recording.taps import TapHub
 
 
@@ -64,3 +66,59 @@ class TapTests(unittest.IsolatedAsyncioTestCase):
         self.offer(b"a" * 1000)
         self.assertEqual(self.hub.sessions[token]["counts"]["oversize"], 1)
         self.assertEqual(self.hub.sessions[token]["bytes"], 0)
+
+    async def test_filter_configuration_is_atomic_and_validates_topics(self):
+        for filters in ([], {"other": "x == 1"}, {"source.value": 1}, {"source.value": ""}):
+            with self.subTest(filters=filters), self.assertRaisesRegex(ValueError, "filters"):
+                await self.open(filters=filters)
+        other = {**self.point, "topic": "other"}
+        self.hub.points = lambda: {self.point["topic"]: self.point, "other": other}
+        self.hub.codec = Mock()
+        first = Mock()
+        with patch("ose.recording.taps.prepare_filter", side_effect=[first, ValueError("invalid expression")]):
+            with self.assertRaisesRegex(ValueError, "invalid expression"):
+                await self.hub.request(self.peer, dict(op="recording_open",
+                    points={"source.value": "first", "other": "first"},
+                    filters={"source.value": "x == 1", "other": "missing == 2"}))
+        first.close.assert_called_once()
+        self.assertEqual(self.hub.sessions, {})
+
+    async def test_filter_error_is_isolated_and_filtered_records_never_enter_queue(self):
+        self.hub.codec = SimpleNamespace(identity=lambda text: 42,
+            api=SimpleNamespace(unpack_envelope=lambda body: (42, body)))
+        predicate = Mock()
+        predicate.evaluate_wire.side_effect = [SimpleNamespace(status=0, matched=False),
+            SimpleNamespace(status=2, matched=False), SimpleNamespace(status=-1, diagnostic="evaluation failed")]
+        with patch("ose.recording.taps.prepare_filter", return_value=predicate):
+            filtered = await self.open(filters={"source.value": "x == 1"}, capacity=1)
+        other = await self.open(capacity=3)
+        for sequence in range(3):
+            self.offer(sequence=sequence)
+        rejected, unfiltered = self.hub.sessions[filtered], self.hub.sessions[other]
+        self.assertEqual(rejected["bytes"], 0)
+        self.assertEqual(list(rejected["queue"]), [])
+        self.assertEqual(rejected["counts"], {"observed": 3, "filtered": 1, "indeterminate": 1, "filter_errors": 1})
+        self.assertIn("evaluation failed", rejected["error"])
+        self.assertFalse(rejected["active"])
+        self.assertTrue(unfiltered["active"])
+        self.assertEqual(len(unfiltered["queue"]), 3)
+        predicate.close.assert_called_once()
+        self.hub.close()
+        predicate.close.assert_called_once()
+
+    async def test_source_predicates_are_released_on_stop_close_disconnect_and_shutdown(self):
+        self.hub.codec = Mock()
+        for operation in ("recording_stop", "recording_close", "disconnect", "shutdown"):
+            with self.subTest(operation=operation):
+                predicate = Mock()
+                with patch("ose.recording.taps.prepare_filter", return_value=predicate):
+                    token = await self.open(filters={"source.value": "x == 1"})
+                if operation == "disconnect":
+                    self.hub.disconnected(self.peer)
+                elif operation == "shutdown":
+                    self.hub.close()
+                else:
+                    await self.hub.request(self.peer, dict(op=operation, session=token))
+                predicate.close.assert_called_once()
+                self.hub.close()
+                predicate.close.assert_called_once()

@@ -7,6 +7,7 @@ from pathlib import Path
 import time
 
 from ose.codec.runtime import Runtime
+from ose.recording.filters import prepare_filter
 from ose.transport.secure import connect, loopback, finish_cleanup
 
 
@@ -90,17 +91,6 @@ class Recorder:
                 await self.client.close()
 
 
-def prepare_filter(desc, expression):
-    try:
-        from sdl_filter import Filter
-    except ImportError as error:
-        raise ValueError("SDL filters are optional: build `make -C <SDL_ROOT> filter-python` "
-                         "with the recorder's Python interpreter, then restart with --sdl-root <SDL_ROOT> "
-                         "or add <SDL_ROOT>/runtime/filter/python and <SDL_ROOT>/build/filter/release to PYTHONPATH. "
-                         f"Import failed: {error}") from error
-    return Filter(desc["catalogue"], desc["root"], expression)
-
-
 class Capture:
     def __init__(self, recorder, descriptions, path, format, finished):
         self.recorder, self.descriptions = recorder, descriptions
@@ -112,8 +102,8 @@ class Capture:
         self.topic_counts = Counter()
         self.state, self.error = "starting", None
         self.writer = None
-        self.predicates, self.channels = {}, {}
-        # All disk writes and predicate evaluation are serialized off the IO loop.
+        self.channels = {}
+        # Disk writes are serialized off the IO loop; filters run at the source.
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ose-recording")
 
     async def disk(self, function, *args):
@@ -125,19 +115,17 @@ class Capture:
         except ImportError as error:
             raise ValueError("install the optional recording dependency: pip install 'ose[recording]'; "
                              "make the SDL Python runtime (including sdl_recording) available") from error
-        for topic, expression in self.filters.items():
-            if expression:
-                self.predicates[topic] = prepare_filter(self.descriptions[topic], expression)
         self.runtime = Runtime()
         self.writer = RecordingWriter(self.path, format=self.format, metadata={
             "producer": "ose-recorder", "started_at_ns": str(time.time_ns()),
-            "filters": json.dumps(self.filters, sort_keys=True),
+            "filters": json.dumps(self.filters, sort_keys=True), "filtering": "source",
             "timestamps": "recorder Unix arrival time; production time unavailable",
             "sequence": "source publication sequence modulo 2^32; generation in channel metadata"})
         for topic, desc in self.descriptions.items():
             self.channels[topic] = self.writer.register_channel(topic=topic, catalogue=desc["catalogue"],
                 root_type=desc["root"], metadata={"ose.generation": desc["generation"],
-                    "ose.filter": self.filters[topic] or "", "ose.payload": "original SDL2 bytes"})
+                    "ose.filter": self.filters[topic] or "", "ose.filter_location": "source",
+                    "ose.payload": "original SDL2 bytes"})
 
     async def open(self):
         try:
@@ -161,9 +149,13 @@ class Capture:
                 client = await connect(host, port, self.recorder.max_frame, self.recorder.context, expected)
                 feed = {"client": client, "session": None, "stats": {}, "endpoint": f"{host}:{port}"}
                 self.feeds.append(feed)
+                filters = {topic: self.filters[topic] for topic in points if self.filters[topic]}
                 result, _ = await client.request("recording_open", points=points,
+                    filters=filters,
                     capacity=self.recorder.capacity, byte_budget=self.recorder.byte_budget)
                 feed["session"] = result["session"]
+                if filters and result.get("filtering") != "source":
+                    raise ValueError("recording source does not support source filtering; upgrade the broker/worker")
             self.state = "recording"
         except BaseException:
             self.error = "recording startup failed"
@@ -179,14 +171,6 @@ class Capture:
         if identity != self.runtime.identity(desc["catalogue"]):
             raise ValueError("recording catalogue changed")
         self.counts["received"] += 1
-        predicate = self.predicates.get(topic)
-        if predicate:
-            result = predicate.evaluate_wire(payload)
-            if result.status == -1:
-                raise ValueError("SDL filter evaluation failed: " + result.diagnostic)
-            if not result.matched:
-                self.counts["indeterminate" if result.status == 2 else "filtered"] += 1
-                return
         now = time.time_ns()
         self.writer.write_encoded(self.channels[topic], payload, log_time_ns=now,
                                   publish_time_ns=now, sequence=record["sequence"] % (2**32))
@@ -223,15 +207,11 @@ class Capture:
                 self.finished(self.status())
 
     def finish(self):
-        try:
-            if self.writer:
-                try:
-                    self.writer.write_metadata("ose.session", {"error": self.error or "", "status": json.dumps(self.status())})
-                finally:
-                    self.writer.close()
-        finally:
-            for predicate in self.predicates.values():
-                predicate.close()
+        if self.writer:
+            try:
+                self.writer.write_metadata("ose.session", {"error": self.error or "", "status": json.dumps(self.status())})
+            finally:
+                self.writer.close()
 
     async def cleanup(self):
         for feed in self.feeds:
@@ -271,7 +251,11 @@ class Capture:
         remote = Counter()
         for feed in self.feeds:
             remote.update(feed["stats"].get("counts", {}))
+        counts = self.counts.copy()
+        for key in ("filtered", "indeterminate", "filter_errors"):
+            if key in remote:
+                counts[key] += remote[key]
         return {"state": self.state, "file": self.path, "format": self.format,
-                "counts": dict(self.counts), "topics": dict(self.topic_counts),
+                "counts": dict(counts), "topics": dict(self.topic_counts),
                 "capture_counts": dict(remote), "error": self.error,
                 "selected": dict(self.filters)}

@@ -36,7 +36,7 @@ class Broker(Sessions):
                         self.topics[f"{name}.{port_name}"] = port
         self.subscriptions = {sub["id"]: sub for sub in plan["subscriptions"]}
         self.init_sessions()
-        self.recording = TapHub(self.recording_points, plan["max_frame"])
+        self.recording = TapHub(self.recording_points, plan["max_frame"], codec=self.codec)
         for identity, sub in self.subscriptions.items():
             policy = SubscriptionPolicy.from_dict(sub["policy"])
             store = MemoryStore(policy.capacity)
@@ -390,6 +390,7 @@ class Broker(Sessions):
 
     async def close(self):
         self.closing = True
+        self.recording.close()
         self.enabled = False
         for task in self.send_tasks:
             task.cancel()
