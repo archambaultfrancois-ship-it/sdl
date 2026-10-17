@@ -70,9 +70,18 @@ Sequence is an unsigned 32-bit application counter; omitted sequence defaults to
 
 Records are returned in file order, retaining timestamp ties. Time filters select
 log times in `[start, end)`. The Python API takes absolute nanosecond timestamps;
-CLI `--from` and `--to` take offsets from the earliest log time in the whole file,
-before topic filtering. CLI durations accept `ns`, `us`, `ms` and `s` with decimal
+CLI `--from` and `--to` take absolute timestamps (`1700000000s`) or, with a `+`
+prefix, offsets from the earliest log time in the whole file (`+1.5s`), before
+topic filtering. Each bound is interpreted independently, so absolute and
+relative bounds can be mixed. This applies to both `inspect` and `replay`.
+CLI time values accept `ns`, `us`, `ms` and `s` with decimal
 fractions that resolve to an integral number of nanoseconds.
+
+Use `--duration 4s` instead of `--to` to set the exclusive end to the resolved
+`--from` plus four seconds. Without `--from`, duration starts at the earliest
+log time of the entire recording, before topic filtering. A zero duration
+selects no messages. `--to` and `--duration` are mutually exclusive; negative
+durations and resolved timestamps outside uint64 nanoseconds are rejected.
 
 Paced replay delivers the first selected record immediately and schedules later
 ones against absolute deadlines on a monotonic clock. `speed=1` uses recorded log
@@ -152,12 +161,15 @@ From the repository root, with the dependency on `PYTHONPATH`:
 
 ```sh
 python3 tools/recording/sdl-recording info capture.pcapng
-python3 tools/recording/sdl-recording inspect capture.pcapng --topic radio/iq --from 300ms --limit 5
+python3 tools/recording/sdl-recording inspect capture.pcapng --topic radio/iq --from +300ms --limit 5
 python3 tools/recording/sdl-recording inspect capture.pcapng --format text --topic radio/iq --limit 1
+python3 tools/recording/sdl-recording inspect capture.pcapng --summary --from +300ms --to +800ms --format table
+python3 tools/recording/sdl-recording inspect capture.pcapng --check --from +300ms --duration 500ms --format text
+python3 tools/recording/sdl-recording inspect capture.pcapng --check --summary --topic radio/iq --format json
 python3 tools/recording/sdl-recording validate capture.pcapng
 PYTHONPATH="examples/record_replay:$PYTHONPATH" \
   python3 tools/recording/sdl-recording replay capture.pcapng \
-  --topic radio/iq --from 300ms --to 800ms --speed 0.5 --consumer pipeline:on_record
+  --topic radio/iq --from +300ms --duration 500ms --speed 0.5 --consumer pipeline:on_record
 ```
 
 `info` prints JSON containing catalogues, channels, metadata, counts and the minimum
@@ -192,6 +204,59 @@ control characters escaped so tabs and newlines do not disrupt the table.
 Long cells wrap within their columns. Topic/time filters and `--limit` work
 identically for both formats; the default remains JSON.
 
+`inspect --summary` replaces individual messages with a report containing
+`message_count`, `message_count_by_topic`, `start_time_ns`, `end_time_ns` and
+`duration_seconds`.
+Counts combine channels with the same topic, including schema versions. Selected
+declared topics with no messages in the range retain a zero count. Time bounds
+are the minimum and maximum selected log times, or null for an empty selection.
+Duration is `(end_time_ns - start_time_ns) / 1e9`, in seconds, or zero for an
+empty selection or a single message. It spans the selected messages rather
+than the requested filter bounds, and appears in JSON, text and table reports.
+Summary mode does not decode message bodies.
+
+`inspect --check` produces the same report, dynamically decodes every selected
+message body, and adds `valid: true` only after successful completion. It can be
+combined with `--summary`. Both modes apply `--topic`, `--from` and `--to` before
+counting or decoding bodies. A bound with a `+` prefix is an offset from the
+earliest log time of the entire file before topic filtering; a bound without
+the prefix is an absolute timestamp. The start is inclusive and the end exclusive.
+`--duration` sets the end relative to the resolved start instead of `--to`. Time
+values use `ns`, `us`, `ms` or `s` units. Reported time bounds remain absolute.
+Both modes scan the entire container and check its
+integrity, even outside the selection. A malformed container still fails with
+an empty selection. Errors return a nonzero status and emit no success report.
+
+`--format json` emits one report object, `text` prints a `RecordingSummary`
+block, and `table` prints aligned field/type/value rows, including a count per
+topic. `--indent-width` also applies to text reports. `--limit`, `--full` and
+array previews only affect individual-message display, never the report or
+validation scope. The framework's `record-inspect` shortcut defaults to text;
+`record-check` remains a compatibility shortcut for `inspect --check` in JSON.
+
+Long options with values accept both `--option value` and `--option=value`,
+for example `--from=+1s --duration=4s --format=table`. Inspection also provides
+these short options:
+
+| Short | Long |
+| --- | --- |
+| `-b` | `--from` (begin) |
+| `-e` | `--to` (end) |
+| `-d` | `--duration` |
+| `-t` | `--topic` (repeatable) |
+| `-c` | `--check` |
+| `-s` | `--summary` |
+| `-f` | `--format` |
+| `-n` | `--limit` |
+| `-a` | `--full` (all elements) |
+| `-i` | `--indent-width` |
+| `-h` | `--help` |
+
+For example, `record-inspect capture.pcapng -cs -b +1s -d 4s -f table` checks
+and summarizes the same interval. Boolean short options can be grouped (`-cs`);
+options taking values also allow attached values (`-d4s`). Flags such as
+`--summary` and `--check` take no value. Replay shares `-b`, `-e`, `-d` and `-t`.
+
 `validate` scans to the final MCAP magic or PCAPNG END record, checks container CRCs,
 rejects conflicting declarations and invalid roots, and dynamically decodes every
 payload. It fails on malformed or truncated files. It does not certify the semantic
@@ -202,7 +267,11 @@ On success, the CLI prints `valid`, the total `message_count`, and
 count. Counts combine channels with the same topic, including schema versions;
 declared topics with no messages appear with zero. Validation and counting use
 one complete scan. `RecordingReader.validate()` still returns the total count;
-`RecordingReader.validate_summary()` returns both count fields.
+`RecordingReader.validate_summary()` returns both count fields and accepts
+`topics`, `start_time_ns` and `end_time_ns` to validate selected bodies.
+`RecordingReader.summary()` accepts the same absolute nanosecond filters,
+includes log-time bounds and `duration_seconds`,
+and decodes selected bodies only when `check=True`.
 
 The reader limits each MCAP record or PCAPNG block to 64 MiB by default, isolates
 inner field lengths to that record, and rejects oversized or compressed chunks. The API allows
@@ -210,7 +279,8 @@ inner field lengths to that record, and rejects oversized or compressed chunks. 
 prepared catalogues and channels and at most one MCAP chunk or PCAPNG block per scan;
 decoded objects can use more memory than their encoded bytes.
 
-`inspect --limit` stops early; it does not validate the rest of the file. CLI replay
+Without `--check` or `--summary`, `inspect --limit` stops early; it does not
+validate the rest of the file. CLI replay
 performs complete validation before calling application code. It then imports the
 explicit `module:function` and calls it once per selected `RecordingRecord`.
 Consumers receive topic, catalogue/context, unchanged payload, both timestamps and

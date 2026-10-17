@@ -190,18 +190,55 @@ to inspect, validate or replay the resulting file, without a running application
 
 ```sh
 python3 "$SDL_ROOT/tools/recording/sdl-recording" info capture.pcapng
-python3 "$SDL_ROOT/tools/recording/sdl-recording" validate capture.pcapng
+python3 "$SDL_ROOT/tools/recording/sdl-recording" inspect capture.pcapng --check
 python3 "$SDL_ROOT/tools/recording/sdl-recording" inspect capture.pcapng --topic alarm.event --limit 3
+record-inspect capture.pcapng --summary --from +1s --to +5s --format table
+record-inspect capture.pcapng --check --from +1s --duration 4s --format table
+record-inspect capture.pcapng --check --summary --topic alarm.event --format json
 ```
 
-`validate` (also available as `record-check` after sourcing the framework's
-`setenv.sh`) reports the total `message_count` and `message_count_by_topic`, with
-one count per recording point. Declared points with no recorded messages have a
-zero count.
+After sourcing the framework's `setenv.sh`, `record-inspect --summary` reports
+`message_count`, `message_count_by_topic`, `start_time_ns`, `end_time_ns` and
+`duration_seconds` for the selection. Duration is the difference between the
+last and first selected log times, in seconds, and is zero for fewer than two
+messages. Declared selected points with no messages in the range have a
+zero count; an empty selection has null time bounds. `--check` also validates
+selected message bodies and adds `valid: true` on success. The flags can be
+combined. Neither mode prints individual messages.
+
+Both modes accept repeated `--topic` selections, `--from` (inclusive), `--to`
+(exclusive), and `--format text|json|table`. Time bounds use `ns`, `us`, `ms` or
+`s` units. Each bound is independently interpreted as an absolute timestamp
+(`1700000000s`) or, with a `+` prefix, an offset from the earliest log time in
+the entire file before topic filtering (`+1.5s`). Absolute and relative bounds
+can be mixed. `--duration 4s` replaces `--to` and sets the exclusive end to
+`--from + 4s`; with no `--from`, the interval starts at the earliest file log
+time. Duration may be zero. `--to` and `--duration` cannot be combined. The
+reported duration spans the selected messages, which can be shorter than the
+requested interval. Reported time bounds remain absolute. Text is the shortcut's
+default format. `--limit` does not restrict checking or summary counts. Container
+integrity is always checked through the end of the file, including outside the
+selection; only selected message bodies are decoded by `--check`. Errors return
+a nonzero status without emitting a success report.
+
+`record-check` remains a compatibility shortcut for `inspect --check` with JSON
+output by default, and accepts the same options. The underlying `validate`
+command remains available for complete-file validation and its original JSON
+count report.
 
 `inspect` and the `record-inspect` shortcut display all selected messages by
 default. Add `--limit N` for a bounded preview. `--full` controls the detail of
 arrays and strings within each message, independently of the message count.
+
+Options taking values also accept `=`, for example
+`record-inspect capture.pcapng --summary --from=+1s --duration=4s --format=table`.
+Short options are `-b`/`--from`, `-e`/`--to`, `-d`/`--duration`, `-t`/`--topic`,
+`-c`/`--check`, `-s`/`--summary`, `-f`/`--format`, `-n`/`--limit`,
+`-a`/`--full`, `-i`/`--indent-width`, and `-h`/`--help`. For example:
+
+```sh
+record-inspect capture.pcapng -cs -b +1s -d 4s -f table
+```
 
 From the OSE root, `make test-recording` checks both formats, unchanged payload
 bytes, filters, bounded overflow, failure cleanup, scripted CLI shutdown and

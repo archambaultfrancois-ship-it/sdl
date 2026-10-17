@@ -50,7 +50,9 @@ make -C examples/record_replay demo
 ```
 
 CLI replay also accepts PCAPNG, with the existing `--consumer module:function`,
-`--topic`, `--from`, `--to` and `--speed` options. Inspection's `--format` chooses
+`--topic`, `--from`, `--to`, `--duration` and `--speed` options. Prefix a time
+bound with `+` for an offset from recording start; otherwise it is absolute.
+Inspection's `--format` chooses
 the display style; conversion's `--format` chooses the output container
 (default: `pcapng`).
 

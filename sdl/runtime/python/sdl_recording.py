@@ -401,14 +401,19 @@ class RecordingReader:
             raise RecordingError('invalid recording: ' + str(error)) from error
          raise
 
-   def iter_records(self, *, topics=None, start_time_ns=None, end_time_ns=None):
-      """Filter log times in [start,end); yielding a prefix does not validate EOF."""
+   def _selected_scan(self, *, topics=None, start_time_ns=None, end_time_ns=None):
       topics = {topics} if isinstance(topics, str) else set(topics) if topics is not None else None
       if start_time_ns is not None:
          start_time_ns = _uint(start_time_ns, 64, 'start_time_ns')
       if end_time_ns is not None:
          end_time_ns = _uint(end_time_ns, 64, 'end_time_ns')
+      if start_time_ns is not None and end_time_ns is not None and end_time_ns < start_time_ns:
+         raise RecordingError('end_time_ns must be at or after start_time_ns')
       for record in self._scan():
+         if isinstance(record, RecordingChannel):
+            if topics is None or record.topic in topics:
+               yield record
+            continue
          if not isinstance(record, RecordingRecord):
             continue
          if topics is not None and record.channel.topic not in topics:
@@ -418,6 +423,13 @@ class RecordingReader:
          if end_time_ns is not None and record.log_time_ns >= end_time_ns:
             continue
          yield record
+
+   def iter_records(self, *, topics=None, start_time_ns=None, end_time_ns=None):
+      """Filter log times in [start,end); yielding a prefix does not validate EOF."""
+      for record in self._selected_scan(topics=topics, start_time_ns=start_time_ns,
+            end_time_ns=end_time_ns):
+         if isinstance(record, RecordingRecord):
+            yield record
 
    def info(self):
       """Scan metadata and message headers without decoding message bodies."""
@@ -447,22 +459,41 @@ class RecordingReader:
       """Validate the entire recording and return its total message count."""
       return self.validate_summary()['message_count']
 
-   def validate_summary(self):
-      """Validate in one scan, counting messages by topic across channel versions."""
+   def summary(self, *, topics=None, start_time_ns=None, end_time_ns=None, check=False):
+      """Report selected counts, log-time bounds and duration in seconds.
+
+      Always scan the entire container, including its integrity checks. Selected
+      declared topics with no messages in the time range retain a zero count.
+      Duration spans selected messages and is zero for fewer than two messages.
+      With check=True, decode selected message bodies as well.
+      """
       counts = {}
-      for record in self._scan():
+      first, last = None, None
+      for record in self._selected_scan(topics=topics, start_time_ns=start_time_ns,
+            end_time_ns=end_time_ns):
          if isinstance(record, RecordingChannel):
             counts.setdefault(record.topic, 0)
             continue
          if not isinstance(record, RecordingRecord):
             continue
-         try:
-            record.decode()
-         except CodecError as error:
-            raise RecordingError('invalid SDL2 payload on channel %d: %s' % (record.channel.id, error)) from error
+         if check:
+            try:
+               record.decode()
+            except CodecError as error:
+               raise RecordingError('invalid SDL2 payload on channel %d: %s' % (record.channel.id, error)) from error
          counts[record.channel.topic] += 1
+         first = record.log_time_ns if first is None else min(first, record.log_time_ns)
+         last = record.log_time_ns if last is None else max(last, record.log_time_ns)
       return {'message_count': sum(counts.values()),
-         'message_count_by_topic': dict(sorted(counts.items()))}
+         'message_count_by_topic': dict(sorted(counts.items())),
+         'start_time_ns': first, 'end_time_ns': last,
+         'duration_seconds': 0.0 if first is None else (last - first) / 1000000000}
+
+   def validate_summary(self, *, topics=None, start_time_ns=None, end_time_ns=None):
+      """Validate selected bodies, counting messages by topic across channel versions."""
+      result = self.summary(topics=topics, start_time_ns=start_time_ns,
+         end_time_ns=end_time_ns, check=True)
+      return {key: result[key] for key in ('message_count', 'message_count_by_topic')}
 
 
 def replay(records, consumer, *, speed=1.0, clock=time.monotonic_ns, sleep=time.sleep):

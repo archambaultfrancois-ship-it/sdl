@@ -62,6 +62,30 @@ def _duration(value):
    raise argparse.ArgumentTypeError('use a nonnegative duration with ns, us, ms or s (e.g. 1.5s)')
 
 
+def _time_bound(value):
+   relative = value.startswith('+')
+   amount = value[1:] if relative else value
+   if amount.startswith(('+', '-')):
+      raise argparse.ArgumentTypeError('use an absolute timestamp (1s) or a nonnegative offset (+1s)')
+   return _duration(amount), relative
+
+
+def _time_selection(reader, start, end, duration):
+   needs_origin = any(bound is not None and bound[1] for bound in (start, end))
+   needs_origin = needs_origin or (duration is not None and start is None)
+   origin = (reader.info()['start_time_ns'] or 0) if needs_origin else 0
+   start = None if start is None else start[0] + (origin if start[1] else 0)
+   end = None if end is None else end[0] + (origin if end[1] else 0)
+   if duration is not None:
+      start = origin if start is None else start
+      end = start + duration
+   if any(bound is not None and bound >= 1 << 64 for bound in (start, end)):
+      raise RecordingError('resolved time bound is outside uint64 nanoseconds')
+   if start is not None and end is not None and end < start:
+      raise RecordingError('--to must be at or after --from')
+   return start, end
+
+
 def _positive(value):
    result = int(value)
    if result < 1:
@@ -146,10 +170,14 @@ def _text_rows(record, full):
 
 
 def _inspect_table(record, number, full):
-   rows = [('FIELD', 'TYPE', 'VALUE')] + list(_text_rows(record, full))
+   _print_table(list(_text_rows(record, full)), 'Record %d' % number)
+
+
+def _print_table(rows, title):
+   rows = [('FIELD', 'TYPE', 'VALUE')] + rows
    widths = [min(cap, max(len(row[i]) for row in rows))
       for i, cap in enumerate((48, 32, 80))]
-   print('Record %d' % number)
+   print(title)
    for row_index, row in enumerate(rows):
       cells = [textwrap.wrap(cell, width=width, replace_whitespace=False,
          drop_whitespace=False, break_on_hyphens=False) or ['']
@@ -159,6 +187,29 @@ def _inspect_table(record, number, full):
       if row_index == 0:
          print('-+-'.join('-' * width for width in widths))
    print()
+
+
+def _inspect_summary(summary, format, indent_width):
+   if format == 'json':
+      _emit(summary)
+   elif format == 'text':
+      fields = dict(summary)
+      fields['message_count_by_topic'] = SdlDynamicMessage('TopicCounts',
+         summary['message_count_by_topic'])
+      print(display(SdlDynamicMessage('RecordingSummary', fields), indent_width), end='')
+   else:
+      rows = []
+      for name, value in summary.items():
+         if name == 'message_count_by_topic':
+            if not value:
+               rows.append((name, 'map<string, uint64>', '{}'))
+            for topic, count in value.items():
+               rows.append((name + '[' + _text_value(topic, None) + ']', 'uint64', str(count)))
+         else:
+            type_name = 'fl64' if name == 'duration_seconds' else 'bool' if isinstance(value, bool) else 'uint64'
+            rows.append((name, type_name,
+               _text_value(value, None)))
+      _print_table(rows, 'Recording summary')
 
 
 def _inspect_text(record, full, indent_width):
@@ -182,16 +233,25 @@ def main(argv=None):
       command = sub.add_parser(name)
       command.add_argument('file')
       if name in ('inspect', 'replay'):
-         command.add_argument('--topic', action='append', help='repeat to select multiple topics')
-         command.add_argument('--from', dest='start', type=_duration, help='offset from the earliest file log time')
-         command.add_argument('--to', dest='end', type=_duration, help='exclusive end offset from the earliest file log time')
+         command.add_argument('-t', '--topic', action='append', help='repeat to select multiple topics')
+         command.add_argument('-b', '--from', dest='start', type=_time_bound, metavar='TIME',
+            help='inclusive log-time bound: absolute timestamp or +offset from recording start (ns/us/ms/s)')
+         stop = command.add_mutually_exclusive_group()
+         stop.add_argument('-e', '--to', dest='end', type=_time_bound, metavar='TIME',
+            help='exclusive log-time bound: absolute timestamp or +offset from recording start (ns/us/ms/s)')
+         stop.add_argument('-d', '--duration', type=_duration, metavar='DURATION',
+            help='set exclusive end to start + duration (ns/us/ms/s); without --from, start at recording beginning')
       if name == 'inspect':
-         command.add_argument('--limit', type=_positive,
-            help='maximum number of messages to display (default: no limit)')
-         command.add_argument('--full', action='store_true', help='print entire arrays and strings')
-         command.add_argument('--format', choices=('json', 'text', 'table'), default='json',
+         command.add_argument('-c', '--check', action='store_true',
+            help='validate selected message bodies and report a summary instead of messages')
+         command.add_argument('-s', '--summary', action='store_true',
+            help='report counts by topic, log-time bounds and duration in seconds instead of messages; combine with --check to validate bodies')
+         command.add_argument('-n', '--limit', type=_positive,
+            help='maximum number of messages to display (default: no limit; ignored with --check/--summary)')
+         command.add_argument('-a', '--full', action='store_true', help='print entire arrays and strings')
+         command.add_argument('-f', '--format', choices=('json', 'text', 'table'), default='json',
             help='json: objects (default); text: SDL display; table: field/type/value columns')
-         command.add_argument('--indent-width', type=_nonnegative, default=3,
+         command.add_argument('-i', '--indent-width', type=_nonnegative, default=3,
             help='spaces per level for --format text (default: 3)')
       if name == 'replay':
          command.add_argument('--speed', type=float, default=1.0, help='0: no wait; 1: recorded pace')
@@ -213,14 +273,15 @@ def main(argv=None):
       elif args.command == 'validate':
          _emit({'valid': True, **reader.validate_summary()})
       else:
-         origin = reader.info()['start_time_ns'] if args.start is not None or args.end is not None else 0
-         origin = origin or 0
-         start = None if args.start is None else origin + args.start
-         end = None if args.end is None else origin + args.end
-         if start is not None and end is not None and end < start:
-            raise RecordingError('--to must be at or after --from')
+         start, end = _time_selection(reader, args.start, args.end, args.duration)
          selection = dict(topics=args.topic, start_time_ns=start, end_time_ns=end)
          if args.command == 'inspect':
+            if args.check or args.summary:
+               summary = reader.summary(**selection, check=args.check)
+               if args.check:
+                  summary = {'valid': True, **summary}
+               _inspect_summary(summary, args.format, args.indent_width)
+               return 0
             records = reader.iter_records(**selection)
             try:
                for number, record in enumerate(itertools.islice(records, args.limit), 1):

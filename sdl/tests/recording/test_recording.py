@@ -359,7 +359,7 @@ class RecordingTests(unittest.TestCase):
       result = self.cli('info', str(self.path))
       self.assertEqual(result.returncode, 0, result.stderr)
       self.assertEqual(json.loads(result.stdout)['message_count'], 3)
-      result = self.cli('inspect', str(self.path), '--from', '100ms', '--to', '101ms', '--limit', '1')
+      result = self.cli('inspect', str(self.path), '--from', '+100ms', '--to', '+101ms', '--limit', '1')
       self.assertEqual(result.returncode, 0, result.stderr)
       self.assertEqual(json.loads(result.stdout)['sequence'], 1)
       result = self.cli('validate', str(self.path))
@@ -374,6 +374,223 @@ class RecordingTests(unittest.TestCase):
       result = self.cli('replay', str(self.path), '--speed', '0', '--consumer', 'consumer:on_record', env=env)
       self.assertEqual(result.returncode, 1)
       self.assertEqual(result.stdout, '')  # Preflight before invoking the consumer.
+
+   def test_cli_inspect_summary_check_filters_formats_and_channel_versions(self):
+      expected = {'message_count': 3,
+         'message_count_by_topic': {'alarm.event': 2, 'empty': 0, 'sensor.signal': 1},
+         'start_time_ns': 1000000001, 'end_time_ns': 1000000002, 'duration_seconds': 1e-9}
+      for container in ('mcap', 'pcapng'):
+         with RecordingWriter(self.path, format=container, overwrite=True) as writer:
+            alarm = writer.register_channel(topic='alarm.event', catalogue=description(V1), root_type='Sample')
+            evolved = writer.register_channel(topic='alarm.event', catalogue=description(V2), root_type='Sample')
+            sensor = writer.register_channel(topic='sensor.signal', catalogue=description(V1), root_type='Sample')
+            writer.register_channel(topic='empty', catalogue=description(V1), root_type='Sample')
+            writer.write(evolved, V2(value=3), log_time_ns=1000000002)
+            writer.write(sensor, V1(value=0), log_time_ns=1000000000)
+            writer.write(alarm, V1(value=1), log_time_ns=1000000001)
+            writer.write(sensor, V1(value=2), log_time_ns=1000000002)
+            writer.write(alarm, V1(value=4), log_time_ns=1000000003)
+         selection = ['--from', '+1ns', '--to', '+3ns', '--limit', '1']
+         self.assertEqual(RecordingReader(self.path).summary(start_time_ns=1000000001,
+            end_time_ns=1000000003), expected)
+         for mode in (['--summary'], ['--check'], ['--check', '--summary']):
+            for format in ('json', 'text', 'table'):
+               with self.subTest(container=container, mode=mode, format=format):
+                  result = self.cli('inspect', str(self.path), *mode, *selection,
+                     '--format', format, '--indent-width', '2')
+                  self.assertEqual(result.returncode, 0, result.stderr)
+                  if format == 'json':
+                     self.assertEqual(json.loads(result.stdout),
+                        {'valid': True, **expected} if '--check' in mode else expected)
+                  elif format == 'text':
+                     self.assertIn('RecordingSummary {\n', result.stdout)
+                     self.assertIn('\n  message_count: 3\n', result.stdout)
+                     self.assertIn('\n    alarm.event: 2\n', result.stdout)
+                     self.assertIn('\n    empty: 0\n', result.stdout)
+                     self.assertIn('\n  start_time_ns: 1000000001\n', result.stdout)
+                     self.assertIn('\n  duration_seconds: 1e-09\n', result.stdout)
+                     self.assertEqual('valid: true' in result.stdout, '--check' in mode)
+                  else:
+                     self.assertRegex(result.stdout, r'message_count\s*\| uint64\s*\| 3\b')
+                     self.assertIn('message_count_by_topic["alarm.event"]', result.stdout)
+                     self.assertRegex(result.stdout, r'end_time_ns\s*\| uint64\s*\| 1000000002\b')
+                     self.assertRegex(result.stdout, r'duration_seconds\s*\| fl64\s*\| 1e-09\b')
+                     self.assertEqual('valid' in result.stdout, '--check' in mode)
+                  self.assertNotIn('RecordingRecord {', result.stdout)
+         for topics, counts in ((['alarm.event', 'empty'], {'alarm.event': 2, 'empty': 0}),
+               (['missing'], {})):
+            options = [value for topic in topics for value in ('--topic', topic)]
+            result = self.cli('inspect', str(self.path), '--check', *selection, *options)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(result.stdout)
+            self.assertEqual(summary['message_count_by_topic'], counts)
+            self.assertEqual(summary['message_count'], sum(counts.values()))
+            if not counts:
+               self.assertIsNone(summary['start_time_ns'])
+               self.assertIsNone(summary['end_time_ns'])
+               self.assertEqual(summary['duration_seconds'], 0.0)
+         result = self.cli('inspect', str(self.path), '--summary', '--from', '3ns', '--to', '1ns')
+         self.assertEqual(result.returncode, 1)
+         self.assertEqual(result.stdout, '')
+
+   def test_cli_inspect_check_decodes_only_selection_and_never_limits_validation(self):
+      for container in ('mcap', 'pcapng'):
+         with RecordingWriter(self.path, format=container, overwrite=True, validate_payload=False) as writer:
+            good = writer.register_channel(topic='good', catalogue=description(V1), root_type='Sample')
+            bad = writer.register_channel(topic='bad', catalogue=description(V1), root_type='Sample')
+            writer.write(good, V1(value=1), log_time_ns=10)
+            writer.write_encoded(good, b'\x01', log_time_ns=20)
+            writer.write_encoded(bad, b'\x01', log_time_ns=30)
+         result = self.cli('inspect', str(self.path), '--summary')
+         self.assertEqual(result.returncode, 0, result.stderr)
+         self.assertEqual(json.loads(result.stdout)['message_count'], 3)
+         for mode in (['--check'], ['--check', '--summary']):
+            result = self.cli('inspect', str(self.path), *mode, '--topic', 'good', '--to', '+10ns')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)['message_count_by_topic'], {'good': 1})
+            self.assertEqual(RecordingReader(self.path).validate_summary(topics='good', end_time_ns=20),
+               {'message_count': 1, 'message_count_by_topic': {'good': 1}})
+            for format in ('json', 'text', 'table'):
+               for selection in (['--limit', '1'], ['--from', '+10ns', '--to', '+20ns', '--topic', 'good']):
+                  with self.subTest(container=container, mode=mode, format=format, selection=selection):
+                     result = self.cli('inspect', str(self.path), *mode, '--format', format, *selection)
+                     self.assertEqual(result.returncode, 1, result.stderr)
+                     self.assertIn('invalid SDL2 payload', result.stderr)
+                     self.assertEqual(result.stdout, '')
+         self.path.write_bytes(self.path.read_bytes()[:-1])
+         for mode in ('--summary', '--check'):
+            result = self.cli('inspect', str(self.path), mode, '--topic', 'missing')
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertEqual(result.stdout, '')
+
+   def test_cli_absolute_and_relative_bounds_duration_and_replay(self):
+      origin = 1700000000000000001
+      expected = {'message_count': 2, 'message_count_by_topic': {'target': 2},
+         'start_time_ns': origin + 1000000000, 'end_time_ns': origin + 2500000000,
+         'duration_seconds': 1.5}
+      absolute = ['--from', str(origin + 1000000000) + 'ns',
+         '--to', str(origin + 3000000000) + 'ns']
+      relative = ['--from', '+1s', '--to', '+3s']
+      (Path(self.tmp.name) / 'consumer.py').write_text('def on_record(record):\n print(record.sequence)\n')
+      env = dict(os.environ, PYTHONPATH=self.tmp.name + os.pathsep + os.environ.get('PYTHONPATH', ''))
+      for container in ('mcap', 'pcapng'):
+         with RecordingWriter(self.path, format=container, overwrite=True) as writer:
+            early = writer.register_channel(topic='early', catalogue=description(V1), root_type='Sample')
+            target = writer.register_channel(topic='target', catalogue=description(V1), root_type='Sample')
+            # File order and the selected topic's first time differ from the global origin.
+            writer.write(target, V1(value=3), log_time_ns=origin + 3000000000, sequence=3)
+            writer.write(early, V1(value=0), log_time_ns=origin, sequence=0)
+            writer.write(target, V1(value=1), log_time_ns=origin + 1000000000, sequence=1)
+            writer.write(target, V1(value=2), log_time_ns=origin + 2500000000, sequence=2)
+         for bounds in (absolute, relative,
+               ['--from', absolute[1], '--to', '+3s'],
+               ['--from', '+1s', '--to', absolute[3]],
+               ['--from', '+1s', '--duration', '2s'],
+               ['--from', absolute[1], '--duration', '2s']):
+            with self.subTest(container=container, bounds=bounds):
+               for mode in ('--summary', '--check'):
+                  result = self.cli('inspect', str(self.path), mode, '--topic', 'target', *bounds)
+                  self.assertEqual(result.returncode, 0, result.stderr)
+                  self.assertEqual(json.loads(result.stdout),
+                     {'valid': True, **expected} if mode == '--check' else expected)
+               result = self.cli('inspect', str(self.path), '--topic', 'target', *bounds)
+               self.assertEqual(result.returncode, 0, result.stderr)
+               self.assertEqual([json.loads(line)['sequence'] for line in result.stdout.splitlines()], [1, 2])
+               result = self.cli('replay', str(self.path), '--topic', 'target', *bounds,
+                  '--speed', '0', '--consumer', 'consumer:on_record', env=env)
+               self.assertEqual(result.returncode, 0, result.stderr)
+               self.assertEqual(result.stdout.splitlines(), ['1', '2'])
+         for format in ('text', 'table'):
+            result = self.cli('inspect', str(self.path), '--summary', '--topic', 'target',
+               *relative, '--format', format)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('duration_seconds: 1.5' if format == 'text' else '1.5', result.stdout)
+         result = self.cli('inspect', str(self.path), '--summary', '--from', '1s', '--to', '3s')
+         self.assertEqual(result.returncode, 0, result.stderr)
+         self.assertEqual(json.loads(result.stdout)['message_count'], 0)
+         self.assertEqual(json.loads(result.stdout)['duration_seconds'], 0.0)
+         result = self.cli('inspect', str(self.path), '--summary', '--from', '+3s')
+         self.assertEqual(result.returncode, 0, result.stderr)
+         self.assertEqual(json.loads(result.stdout)['message_count'], 1)
+         self.assertEqual(json.loads(result.stdout)['duration_seconds'], 0.0)
+         result = self.cli('inspect', str(self.path), '--summary', '--duration', '2.5s')
+         self.assertEqual(result.returncode, 0, result.stderr)
+         self.assertEqual(json.loads(result.stdout), {'message_count': 2,
+            'message_count_by_topic': {'early': 1, 'target': 1}, 'start_time_ns': origin,
+            'end_time_ns': origin + 1000000000, 'duration_seconds': 1.0})
+         result = self.cli('inspect', str(self.path), '--check', '--from', '+1s', '--duration', '0s')
+         self.assertEqual(result.returncode, 0, result.stderr)
+         self.assertEqual(json.loads(result.stdout)['message_count'], 0)
+         self.assertIsNone(json.loads(result.stdout)['start_time_ns'])
+         for bounds in (['--from', '+3s', '--to', str(origin + 2000000000) + 'ns'],
+               ['--from', '+18446744073709551615ns'],
+               ['--duration', '18446744073709551615ns']):
+            result = self.cli('inspect', str(self.path), '--summary', *bounds)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertEqual(result.stdout, '')
+
+   def test_cli_rejects_duration_with_to_and_invalid_time_syntax(self):
+      self.record()
+      for command in ('inspect', 'replay'):
+         required = [] if command == 'inspect' else ['--consumer', 'unused:on_record']
+         for options in (['--to', '+1s', '--duration', '1s'],
+               ['--relative'], ['--from', '++1s'], ['--to', '+-1s'],
+               ['--duration=-1s'], ['--duration', '0.1ns']):
+            with self.subTest(command=command, options=options):
+               result = self.cli(command, str(self.path), *required, *options)
+               self.assertEqual(result.returncode, 2, result.stderr)
+               self.assertEqual(result.stdout, '')
+
+   def test_cli_short_options_and_equals_syntax(self):
+      self.record()
+      report_styles = (
+         ['--check', '--summary', '--from', '+100ms', '--duration', '1ms',
+            '--topic', 'radio/iq', '--format', 'json'],
+         ['--check', '--summary', '--from=+100ms', '--duration=1ms',
+            '--topic=radio/iq', '--format=json'],
+         ['-cs', '-b', '+100ms', '-d', '1ms', '-t', 'radio/iq', '-f', 'json'],
+         ['-cs', '-b+100ms', '-d1ms', '-tradio/iq', '-fjson'])
+      for options in report_styles:
+         with self.subTest(options=options):
+            # The framework shortcut supplies --format text before user options.
+            result = self.cli('inspect', str(self.path), '--format', 'text', *options)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertTrue(report['valid'])
+            self.assertEqual(report['message_count'], 2)
+            self.assertEqual(report['message_count_by_topic'], {'radio/iq': 2})
+      message_styles = (
+         ['--from', '+100ms', '--to', '+101ms', '--limit', '1', '--full',
+            '--indent-width', '2', '--format', 'text'],
+         ['--from=+100ms', '--to=+101ms', '--limit=1', '--full',
+            '--indent-width=2', '--format=text'],
+         ['-b', '+100ms', '-e', '+101ms', '-n', '1', '-a', '-i', '2', '-f', 'text'])
+      outputs = []
+      for options in message_styles:
+         result = self.cli('inspect', str(self.path), *options)
+         self.assertEqual(result.returncode, 0, result.stderr)
+         self.assertEqual(result.stdout.count('RecordingRecord {'), 1)
+         self.assertIn('\n  sequence: 1\n', result.stdout)
+         outputs.append(result.stdout)
+      self.assertEqual(outputs, [outputs[0]] * len(outputs))
+      result = self.cli('inspect', str(self.path), '-s', '-e+1s', '-d1s')
+      self.assertEqual(result.returncode, 2)
+      self.assertEqual(result.stdout, '')
+
+   def test_cli_inspect_summary_empty_recording_and_empty_time_range(self):
+      for container in ('mcap', 'pcapng'):
+         with RecordingWriter(self.path, format=container, overwrite=True) as writer:
+            writer.register_channel(topic='empty', catalogue=description(V1), root_type='Sample')
+         for mode in ('--summary', '--check'):
+            for selection in ([], ['--from', '1s', '--to', '1s'], ['--from', '+1s', '--to', '+1s'],
+                  ['--duration', '1s']):
+               result = self.cli('inspect', str(self.path), mode, *selection)
+               self.assertEqual(result.returncode, 0, result.stderr)
+               expected = {'message_count': 0, 'message_count_by_topic': {'empty': 0},
+                  'start_time_ns': None, 'end_time_ns': None, 'duration_seconds': 0.0}
+               if mode == '--check':
+                  expected['valid'] = True
+               self.assertEqual(json.loads(result.stdout), expected)
 
    def test_cli_inspect_is_unlimited_by_default_and_honors_explicit_limit(self):
       for format in ('mcap', 'pcapng'):
@@ -435,7 +652,7 @@ class RecordingTests(unittest.TestCase):
             writer.write(c, message, log_time_ns=1000000000, sequence=1)
             writer.write(c, message, log_time_ns=2000000000, sequence=2)
       result = self.cli('inspect', str(self.path), '--format', 'table', '--topic', 'radio/iq',
-         '--from', '1s', '--limit', '1')
+         '--from', '+1s', '--limit', '1')
       self.assertEqual(result.returncode, 0, result.stderr)
       output = result.stdout
       self.assertEqual(output.count('Record '), 1)
@@ -458,7 +675,7 @@ class RecordingTests(unittest.TestCase):
       self.assertIn('samples[11]', result.stdout)
       self.assertIn('(11.0, -11.0)', result.stdout)
       self.assertNotIn('more elements', result.stdout)
-      result = self.cli('inspect', str(self.path), '--format', 'text', '--from', '1s', '--limit', '1')
+      result = self.cli('inspect', str(self.path), '--format', 'text', '--from', '+1s', '--limit', '1')
       self.assertEqual(result.returncode, 0, result.stderr)
       output = result.stdout
       self.assertEqual(output.count('RecordingRecord {'), 1)

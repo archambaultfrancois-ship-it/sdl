@@ -133,8 +133,8 @@ app-distributed ...     run its local distributed demo; default 300 seconds
 record [OPTIONS...]     prepare missing services and open an external recorder
 record-deps             manually rebuild/install recording and filter services
 record-info FILE        show recording metadata
-record-inspect FILE ... display all messages as text; --limit N bounds the count
-record-check FILE       validate a recording
+record-inspect FILE ... display messages; --check validates, --summary counts
+record-check FILE ...   compatibility shortcut for inspect --check (JSON)
 ose-env                 show these paths and shortcuts
 
 Application shortcuts use its Makefile targets. Recorder commands run from the
@@ -162,7 +162,7 @@ alias record-deps='_ose_env_record_deps'
 alias record='_ose_env_record'
 alias record-info='_ose_env_recording_tool info'
 alias record-inspect='_ose_env_recording_tool inspect --format text'
-alias record-check='_ose_env_recording_tool validate'
+alias record-check='_ose_env_recording_tool inspect --check'
 alias ose-env='_ose_env_help'
 
 if [[ $- == *i* ]]; then

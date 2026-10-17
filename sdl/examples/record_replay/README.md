@@ -60,7 +60,7 @@ For a structured display of one recorded capture:
 ```sh
 PYTHONPATH=build/recording-deps \
   python3 tools/recording/sdl-recording inspect examples/record_replay/build/radio.pcapng \
-  --format text --topic radio/iq --from 300ms --limit 1
+  --format text --topic radio/iq --from +300ms --limit 1
 ```
 
 This command runs from the repository root. It shows recording timestamps,

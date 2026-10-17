@@ -21,7 +21,7 @@ record: generate recording-deps filter-python
 
 demo: record
 	$(PYTHON_ENV) $(PYTHON) $(CLI) info $(CAPTURE)
-	$(PYTHON_ENV) $(PYTHON) $(CLI) inspect $(CAPTURE) --format text --from 300ms --to 400ms --limit 1
+	$(PYTHON_ENV) $(PYTHON) $(CLI) inspect $(CAPTURE) --format text --from +300ms --duration 100ms --limit 1
 	$(PYTHON_ENV) $(PYTHON) $(CLI) validate $(CAPTURE)
 	$(PYTHON_ENV) $(PYTHON) $(CLI) replay $(CAPTURE) --speed 0 --consumer pipeline:on_record > build/replayed.log
 	cmp build/live.log build/replayed.log

@@ -74,9 +74,21 @@ record CLI options, including `--host`, `--port`, TLS settings, and `--command`.
 In the recorder, enter `select alarm.event`, `filter alarm.event machine_id == 2`,
 then `start` on separate lines. `start` generates a fresh timestamped filename.
 Finish with `stop` and `quit`; use `record-info FILE`, `record-inspect FILE --limit 5`,
-or `record-check FILE` afterwards. Recording paths are relative to the application
+or `record-inspect FILE --check` afterwards. Recording paths are relative to the application
 directory. Each invocation of `record` opens an independent recorder.
 `record-inspect` displays every selected message unless `--limit N` is supplied.
+Use `--summary` for counts by topic, log-time bounds and `duration_seconds`, or `--check` to also
+validate selected message bodies. Both modes accept `--topic`, `--from`, `--to`
+and `--format text|json|table`; `--limit` only limits message display.
+Time bounds are absolute timestamps (`1700000000s`) or offsets from the earliest
+recording log time when prefixed with `+` (`+1s`). Use `--duration 4s` instead of
+`--to` to select four seconds from `--from`, or from the recording beginning
+when `--from` is omitted. Reported `duration_seconds` spans the selected messages
+and is zero for an empty selection or a single message.
+Options with values also accept `=`, such as `--from=+1s --duration=4s`.
+Short example: `record-inspect FILE -cs -b +1s -d 4s -f table`.
+`record-check` remains a compatibility shortcut for `inspect --check`, with JSON
+output by default.
 
 `app-build`, `app-validate`, `app-simulate`, `app-distributed`, and `app-make`
 forward to the application's Makefile targets; its targets must exist.
