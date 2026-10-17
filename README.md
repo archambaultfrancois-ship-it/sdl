@@ -31,6 +31,62 @@ ose/                    OSE project root
 .github/workflows/      Repository CI
 ```
 
+## Local application environment
+
+For local application development in Bash, source the framework environment in
+each terminal from the application repository root. The current directory is
+the default application:
+
+```sh
+cd /path/to/application
+source /path/to/framework/setenv.sh
+# Or select another application before sourcing:
+export OSE_APP_ROOT=/path/to/application
+source /path/to/framework/setenv.sh
+ose-env
+```
+
+This exports `FRAMEWORK_ROOT`, `SDL_ROOT`, `OSE_ROOT`, `OSE_APP_ROOT`, and
+`OSE_PYTHON`, and adds the source runtimes and optional recording/filter modules
+to `PYTHONPATH`. `OSE_PYTHON` defaults to `python3`; set it to an interpreter path
+before sourcing to use a virtual environment. Sourcing again does not duplicate
+the added paths. No dependencies are built or installed when sourcing.
+To switch applications in the same terminal, run `unset OSE_APP_ROOT`, enter the
+other repository, and source the script again.
+
+With Vibration Watch, run the application and recorder in separate terminals:
+
+```sh
+app-run
+# In another Bash terminal, source setenv.sh again, then:
+record
+```
+
+At launch, `record` checks the recording and filter modules with `OSE_PYTHON`.
+It automatically installs/builds only missing services, then opens the console.
+Later launches reuse them; `--help` skips preparation. The first preparation
+uses the existing Makefile targets and may require pip/network access for MCAP,
+plus Cargo and a C compiler for the native filter extension. `record-deps`
+remains available to manually rebuild/reinstall both services.
+
+`record` uses the application's `build/endpoint.json` when present and accepts all
+record CLI options, including `--host`, `--port`, TLS settings, and `--command`.
+In the recorder, enter `select alarm.event`, `filter alarm.event machine_id == 2`,
+then `start` on separate lines. `start` generates a fresh timestamped filename.
+Finish with `stop` and `quit`; use `record-info FILE`, `record-inspect FILE --limit 5`,
+or `record-check FILE` afterwards. Recording paths are relative to the application
+directory. Each invocation of `record` opens an independent recorder.
+
+`app-build`, `app-validate`, `app-simulate`, `app-distributed`, and `app-make`
+forward to the application's Makefile targets; its targets must exist.
+`app-run` builds the application with `make build`, then runs its `build/plan.json`
+through the framework CLI with no time limit. Stop with Ctrl+C, or use
+`app-run DURATION=60` for a bounded run. Other Makefile assignments, such as
+`SCENARIO=normal`, are forwarded to the build. This avoids time limits imposed by
+an application's `make run` target. `app-distributed` defaults to `DURATION=300`,
+with command-line assignments overriding that value. `app-cd` enters the application directory;
+`ose-ctl` runs this checkout's CLI with the selected Python interpreter.
+
 ## Build and test
 
 From the repository root:

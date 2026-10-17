@@ -239,6 +239,38 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
                 process.kill()
                 await process.communicate()
 
+    async def test_cli_sdl_root_discovers_optional_services_without_pythonpath(self):
+        path = self.root / "cli-filtered.pcapng"
+        # A fresh interpreter must find both the filter extension and recording
+        # dependencies from --sdl-root, without inheriting the test's SDL paths.
+        env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"))
+        process = await asyncio.create_subprocess_exec(sys.executable, "-m", "ose.cli", "record",
+            "--host", "127.0.0.1", "--port", str(self.broker.port), "--sdl-root", SDL_ROOT,
+            "--command", "select source.value", "--command", "filter 1 value >= 3 && sequence < 5",
+            "--command", f"start {path}", "--command", "wait 30", env=env,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            async def started():
+                while True:
+                    line = await process.stdout.readline()
+                    if b"Recording to" in line:
+                        return
+                    if not line:
+                        self.fail((await process.stderr.read()).decode())
+            await asyncio.wait_for(started(), 5)
+            for n in range(7):
+                await self.publish(n)
+            process.terminate()
+            stdout, stderr = await asyncio.wait_for(process.communicate(), 5)
+            self.assertEqual(process.returncode, 130, stderr.decode() + stdout.decode())
+            reader = RecordingReader(path)
+            reader.validate()
+            self.assertEqual([r.decode().fields["value"] for r in reader.iter_records()], [3., 4.])
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.communicate()
+
     async def test_interactive_stdin_and_eof_or_signal_while_waiting_for_commands(self):
         for ending in ("eof", "sigterm"):
             path = self.root / (ending + ".pcapng")

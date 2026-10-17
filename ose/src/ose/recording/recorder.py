@@ -95,7 +95,9 @@ def prepare_filter(desc, expression):
         from sdl_filter import Filter
     except ImportError as error:
         raise ValueError("SDL filters are optional: build `make -C <SDL_ROOT> filter-python` "
-                         "and add <SDL_ROOT>/runtime/filter/python and <SDL_ROOT>/build/filter/release to PYTHONPATH") from error
+                         "with the recorder's Python interpreter, then restart with --sdl-root <SDL_ROOT> "
+                         "or add <SDL_ROOT>/runtime/filter/python and <SDL_ROOT>/build/filter/release to PYTHONPATH. "
+                         f"Import failed: {error}") from error
     return Filter(desc["catalogue"], desc["root"], expression)
 
 

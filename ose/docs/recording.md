@@ -29,16 +29,21 @@ make -C "$SDL_ROOT" recording-deps
 export PYTHONPATH="$PWD/src:$SDL_ROOT/runtime/python:$SDL_ROOT/build/recording-deps"
 ```
 
-Content filters additionally use SDL's optional native filter service:
+Content filters additionally use SDL's optional native filter service. Build it
+with the same Python interpreter used to run the console:
 
 ```sh
 make -C "$SDL_ROOT" filter-python
-export PYTHONPATH="$SDL_ROOT/runtime/filter/python:$SDL_ROOT/build/filter/release:$PYTHONPATH"
+python3 -m ose.cli record --sdl-root "$SDL_ROOT" --endpoint /path/to/application/build/endpoint.json
 ```
 
 No filter dependency is loaded when recording without filters. Missing optional
 services produce installation guidance. `--sdl-root` selects a source runtime;
-an installed/importable SDL runtime also works without a checkout.
+it also discovers `build/recording-deps`, `runtime/filter/python` and
+`build/filter/release` in that checkout when present. Restart the console after
+building optional services. An installed/importable SDL runtime also works
+without a checkout; in that case, make the optional modules importable through
+installation or `PYTHONPATH`.
 
 ## Connect and discover
 
@@ -90,6 +95,10 @@ The filename extension does not select the format: pass `mcap` explicitly.
 `filter POINT EXPRESSION` prepares an SDL predicate against that point's current
 catalogue and root. Invalid field names and expressions are refused immediately.
 The console preserves quotes inside expressions, for example `label == 'motor 1'`.
+In the interactive console, do not quote the entire expression. Field paths are
+relative to the root message: if `show 3` reports root `Alarm` with field
+`machine_id`, use `filter 3 machine_id == 2`. The point must be selected first,
+and recording must be stopped before changing its filter.
 Use SDL's operators, field paths, array indices, `any`/`all`, enum constants and
 functions such as `len`, `abs` and `isfinite`; see the selected SDL checkout's
 `docs/filtering.md` for the expression language. No Python `eval` is used.

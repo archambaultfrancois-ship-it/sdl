@@ -159,16 +159,22 @@ class CommandInput:
 async def run(args):
     from ose.codec.sdl2 import SDL2
     from ose.codec.runtime import Runtime
-    if args.sdl_root:
-        SDL2(args.sdl_root)
-    else:
+    sdl_root = args.sdl_root
+    if not sdl_root:
         try:
             Runtime()
         except ImportError:
-            default = Path(__file__).resolve().parents[4] / "sdl"
-            if not default.is_dir():
+            sdl_root = Path(__file__).resolve().parents[4] / "sdl"
+            if not sdl_root.is_dir():
                 raise ValueError("make the SDL Python runtime importable or pass --sdl-root")
-            SDL2(default)
+    if sdl_root:
+        root = SDL2(sdl_root).root
+        # Discover optional services built in this checkout without importing them.
+        # Recording without filters still works when the filter library is absent.
+        for relative in ("build/recording-deps", "runtime/filter/python", "build/filter/release"):
+            directory = root / relative
+            if directory.is_dir():
+                sys.path.insert(0, str(directory))
     if not 1 <= args.capacity <= 4096 or not 1024 <= args.byte_budget <= 64 * 1024 * 1024:
         raise ValueError("capacity must be 1..4096 and byte budget 1024..67108864")
     if args.endpoint and (args.host or args.port):
