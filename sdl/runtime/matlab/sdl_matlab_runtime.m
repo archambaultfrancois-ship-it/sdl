@@ -246,7 +246,11 @@ if ~isempty(dims)
  if numel(x)~=prod(dims),error('SDL:InvalidValue','fixed array dimensions');end;parts=cell(numel(x),1);for k=1:numel(x),parts{k}=write_value(ctx,type,x(k),[]);end;b=vertcat(parts{:});return
 end
 if isKey(ctx.messages,type),b=write_message(ctx,type,x);return;end
-if strcmp(type,'string'),bytes=unicode2native(char(x),'UTF-8');valid_utf8(bytes);b=[count_bytes(numel(bytes));uint8(bytes(:))];return;end
+if strcmp(type,'string')
+ % Octave 6 rejects empty character arrays in unicode2native.
+ text=char(x);if isempty(text),bytes=uint8([]);else,bytes=unicode2native(text,'UTF-8');end
+ valid_utf8(bytes);b=[count_bytes(numel(bytes));uint8(bytes(:))];return
+end
 if isKey(ctx.enums,type),e=ctx.enums(type);if ~isscalar(x)||~ismember(x,e.values),error('SDL:InvalidEnum','invalid enum');end;type='int32';end
 if ~isscalar(x),error('SDL:InvalidValue','scalar required');end;b=pack_packed(type,x,false);
 end
