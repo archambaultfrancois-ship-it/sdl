@@ -8,8 +8,9 @@ use the existing local APIs. Simulation remains local.
 
 Add `"execution": "distributed"` to a deployment. Subscription bindings accept
 `"routing": "broker"` (default) or `"routing": "direct"`, with `"transport": "tcp"`.
-UDP and external-client topics are explicitly unsupported in distributed v1;
-the existing local broker and external client SDKs remain available in local mode.
+UDP and the general external client SDKs remain local-only. Declared external
+topics support [live recording replay](replay.md#live-replay-and-speed-control)
+through broker routes, with a dedicated `replay` certificate identity.
 The read-only [interactive recorder](recording.md) can discover outputs through
 the coordinator and capture publications directly from workers, without external
 publisher topics or changes to the application model.
@@ -25,6 +26,33 @@ Components may declare Kubernetes constraints in `placement`:
 plan, supporting separate component images. Registration checks a fingerprint of
 contracts, parameters, environment, triggers and routes. Build images with fixed
 internal paths such as `/app`, since commands in resolved plans are absolute.
+
+## External recording publishers
+
+The coordinator accepts publisher-only RPCs used by `ose-ctl replay`. They use
+the same authenticated CENV/1 control connection as worker RPCs, with a separate
+certificate common name `replay`. Loopback development can use explicit
+`--insecure`. The application must already be activated.
+
+| Operation | Request | Result |
+| --- | --- | --- |
+| `external_open` | `topics`: declared external topic names; `plan_id`: application fingerprint | Session `token` and coordinator `epoch` |
+| `external_publish` | Session `token`, owned `topic`, S2PS/2 binary body | Per-subscription `delivery` admission results |
+| `external_close` | Session `token` | Releases topic ownership |
+
+One connection owns one session and reserves its selected topics exclusively.
+The coordinator validates envelopes against the declared contracts and assigns
+publication sequence numbers. Broker records identify an external source by its
+full topic name; the session token is the source generation. Workers authorize
+admissions through the coordinator, including after publisher disconnect while
+accepted records drain. Reopening a topic creates a new generation and clears
+its remaining broker records. Disconnect or close releases ownership. No external
+publisher can impersonate a worker or publish to internal component outputs.
+
+These RPCs do not provide external subscriptions or dynamic topic declarations.
+`broker.external.enabled` controls access; `max_clients` bounds simultaneous
+publisher sessions. Recordings and live replay do not join the READY barrier.
+See [replay](replay.md) for timing, speed and interactive controls.
 
 ## Processes and authentication
 
@@ -118,8 +146,8 @@ The coordinator needs OSE and the SDL Python runtime; workers also need their bi
 
 Create Secrets `ose-coordinator-tls` and `ose-<component DNS name>-tls`, each with
 `ca.crt`, `tls.crt`, `tls.key`. Underscores become hyphens in Kubernetes names;
-certificate identities retain model names. Collisions and the reserved coordinator
-name are refused. Pass `--image-pull-secret NAME` to the export when using a private
+certificate identities retain model names. Collisions and the reserved
+`coordinator` and `replay` names are refused. Pass `--image-pull-secret NAME` to the export when using a private
 registry; the Secret must exist in the namespace. TCP readiness
 probes indicate a listening process; OSE READY/status separately indicate application
 readiness. The export neither installs K3s nor publishes images.

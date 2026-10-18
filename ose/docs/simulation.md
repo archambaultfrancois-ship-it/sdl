@@ -105,6 +105,9 @@ and decode ticks with `sdl_chain_component::tick()`. The historical Rust
 
 ## External scenarios
 
+To use a PCAPNG or MCAP capture instead of separate envelope files, see
+[recording replay](replay.md) through `ose-ctl replay`.
+
 A scenario is a version-1 JSON document:
 
 ```json

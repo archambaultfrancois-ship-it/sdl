@@ -47,7 +47,7 @@ class PendingTick:
 
 
 class Simulation:
-    def __init__(self, plan, duration, *, workers=1, scenario=None, trace=None,
+    def __init__(self, plan, duration, *, workers=1, scenario=None, events=None, trace=None,
                  max_tick_output_bytes=DEFAULT_OUTPUT_LIMIT):
         if type(workers) is not int or workers <= 0:
             raise ValueError("workers must be a positive integer")
@@ -57,8 +57,17 @@ class Simulation:
         self.horizon, self.clock = seconds_ns(duration, positive=True), VirtualClock()
         self.order, self.ancestors = topology(plan)
         self.codec = SDL2(plan["sdl_root"])
-        self.events = read_scenario(scenario, plan.get("external_topics", {}), self.codec)
-        protected = {event.path for event in self.events}
+        if scenario is not None and events is not None:
+            raise ValueError("scenario and prevalidated replay events are mutually exclusive")
+        # Replay supplies preflighted disk-backed events with exact nanosecond
+        # timestamps, using the same injection and fingerprint checks as scenarios.
+        self.events = (read_scenario(scenario, plan.get("external_topics", {}), self.codec)
+                       if events is None else events)
+        self.event_count = self.events.event_count if hasattr(self.events, "event_count") else len(self.events)
+        if self.event_count is None:
+            raise ValueError("simulation events must be bounded by the execution horizon")
+        protected = (self.events.input_paths if hasattr(self.events, "input_paths")
+                     else {event.path for event in self.events})
         if scenario is not None:
             protected.add(Path(scenario).resolve())
         status_path = (Path(plan["build_dir"]) / "last-status.json").resolve()
@@ -165,7 +174,7 @@ class Simulation:
         return changed
 
     async def _inject(self):
-        while self.cursor < len(self.events) and self.events[self.cursor].at == self.clock.time_ns:
+        while self.cursor < self.event_count and self.events[self.cursor].at == self.clock.time_ns:
             event = self.events[self.cursor]
             publication = self.router.publish(event.topic, event.read(), f"scenario:{event.index}")
             self.router.advance(publication)
@@ -180,7 +189,7 @@ class Simulation:
 
     def _next_event(self):
         times = []
-        if self.cursor < len(self.events):
+        if self.cursor < self.event_count:
             times.append(self.events[self.cursor].at)
         for name, schedule in self.schedules.items():
             if name not in self.busy and (timestamp := schedule.next_event()) is not None:
@@ -197,7 +206,7 @@ class Simulation:
         return dict(mode="simulated", functional=True, transport_simulation=False, running=False,
                     time_ns=self.clock.time_ns, ticks=self.ticks, waves=self.waves, publications=self.router.sequence,
                     stop_reason=self.reason, waiting_inputs=waiting, pending_ticks=len(self.busy),
-                    pending_external=len(self.external),
+                    pending_external=len(self.external), external_events=self.cursor,
                     inputs={name: {port: buffer.snapshot() for port, buffer in buffers.items()}
                             for name, buffers in self.router.buffers.items()}, trace_sha256=self.trace.digest.hexdigest())
 

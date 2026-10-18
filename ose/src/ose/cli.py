@@ -58,6 +58,30 @@ def main():
     command.add_argument("--scenario")
     command.add_argument("--trace")
     command.add_argument("--max-tick-output-bytes", type=int)
+    command = commands.add_parser("replay", help="replay a recording into simulated or live external inputs")
+    command.add_argument("recording", help="SDL PCAPNG or MCAP capture")
+    command.add_argument("--plan", default="build/plan.json")
+    command.add_argument("--map", dest="mappings", action="append", required=True,
+                         metavar="RECORDED_TOPIC=EXTERNAL_TOPIC", help="select and map a topic; repeat for each input")
+    command.add_argument("--mode", choices=("simulated", "realtime"), default="simulated")
+    command.add_argument("--loops", type=int, default=1, help="total playback passes (default: 1; 0: infinite)")
+    command.add_argument("--duration", type=float, help="recorded-time horizon in seconds; required for simulation")
+    command.add_argument("--workers", type=int)
+    command.add_argument("--start-ns", type=int, help="inclusive recorded log timestamp in nanoseconds")
+    command.add_argument("--end-ns", type=int, help="exclusive recorded log timestamp in nanoseconds")
+    command.add_argument("--trace", help="write the deterministic simulation trace")
+    command.add_argument("--speed", type=float, help="real-time playback rate (default: 1; 0: maximum speed)")
+    command.add_argument("--interactive", action="store_true", help="live speed, pause, resume and stop controls")
+    command.add_argument("--command", action="append",
+                         help="execute a live replay command in order; repeat to script a session (wait SECONDS supported)")
+    command.add_argument("--endpoint", help="live endpoint JSON; defaults to the local plan's endpoint.json")
+    command.add_argument("--host")
+    command.add_argument("--port", type=int)
+    command.add_argument("--distributed", action="store_true", help="publish through the distributed coordinator")
+    command.add_argument("--tls-ca")
+    command.add_argument("--tls-cert", help="distributed client certificate with common name replay")
+    command.add_argument("--tls-key")
+    command.add_argument("--insecure", action="store_true", help="distributed loopback-only development mode")
     command = commands.add_parser("inspect")
     command.add_argument("--endpoint", default="build/endpoint.json")
     command.add_argument("--last", action="store_true")
@@ -140,6 +164,43 @@ def main():
                 if any(value is not None for value in (args.workers, args.scenario, args.trace, args.max_tick_output_bytes)):
                     raise ValueError("--workers, --scenario, --trace and --max-tick-output-bytes require simulated mode")
                 asyncio.run(run(args.plan, args.duration, args.port or 0))
+        elif args.action == "replay":
+            if args.mode == "simulated":
+                from ose.recording.replay import run
+                if args.duration is None:
+                    raise ValueError("simulated replay requires --duration")
+                if (args.interactive or args.command is not None or args.distributed or args.insecure or any(value is not None for value in
+                        (args.speed, args.endpoint, args.host, args.port, args.tls_ca, args.tls_cert, args.tls_key))):
+                    raise ValueError("speed, replay commands, interactive controls and connection options require --mode realtime")
+                summary = asyncio.run(run(args.recording, args.plan, args.duration, mappings=args.mappings,
+                    start_ns=args.start_ns, end_ns=args.end_ns,
+                    workers=1 if args.workers is None else args.workers, trace=args.trace, loops=args.loops))
+            else:
+                from ose.recording.live_replay import run
+                if args.workers is not None or args.trace is not None:
+                    raise ValueError("--workers and --trace require simulated replay")
+                async def replay():
+                    task = asyncio.create_task(run(args.recording, args.plan, args.duration, mappings=args.mappings,
+                        start_ns=args.start_ns, end_ns=args.end_ns, speed=1 if args.speed is None else args.speed,
+                        endpoint=args.endpoint, host=args.host, port=args.port, distributed=args.distributed,
+                        tls_ca=args.tls_ca, tls_cert=args.tls_cert, tls_key=args.tls_key,
+                        insecure=args.insecure, interactive=args.interactive, commands=args.command, loops=args.loops))
+                    loop = asyncio.get_running_loop()
+                    for sig in (signal.SIGINT, signal.SIGTERM):
+                        loop.add_signal_handler(sig, task.cancel)
+                    try:
+                        return await task
+                    except asyncio.CancelledError:
+                        return None
+                    finally:
+                        for sig in (signal.SIGINT, signal.SIGTERM):
+                            loop.remove_signal_handler(sig)
+                summary = asyncio.run(replay())
+                if summary is None:
+                    return 130
+            print(json.dumps(summary), flush=True)
+            if summary.get("refused", 0):
+                return 1
         elif args.action == "record":
             from ose.recording.console import run
             async def recording():

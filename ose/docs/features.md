@@ -7,6 +7,7 @@
 - **[Contract validation](architecture.md#documents)**: check SDL publisher-to-consumer compatibility, required connections and acyclic graphs before execution.
 - **[Multilanguage components](callbacks.md)**: connect Python, C, Rust, Java and Ada implementations in one application.
 - **[Generated containers](callbacks.md)**: generate typed bindings, wrappers and compilation commands while preserving existing user handlers.
+- **[Local application environment](../../README.md#local-application-environment)**: access application and recording commands with automatic setup of optional recording services.
 
 ## Callbacks and execution
 
@@ -16,7 +17,7 @@
 - **[Input snapshots](runtime.md#building-a-ticks-input-snapshot)**: combine required and optional inputs, reserving FIFO values until tick completion.
 - **[Required-input timeouts](runtime.md#required-input-timeouts)**: continue through the existing callback with a null value when an input deadline expires.
 - **[Application clock](callbacks.md#timed-input-callbacks)**: access callback time and tick indices in real-time execution and simulation.
-- **[Process supervision](architecture.md#process-lifecycle)** *(local execution)*: start isolated component processes behind a READY barrier and clean up the graph on shutdown or failure.
+- **[Process supervision](architecture.md#process-lifecycle)** *(local execution)*: start isolated components behind a READY barrier and shut them down cleanly on interrupts or failure.
 
 ## Delivery and quality of service
 
@@ -48,9 +49,12 @@
 
 ## External integration and inspection
 
-- **[Interactive recording](recording.md)**: discover live outputs, select points and SDL filters, and start or stop local PCAPNG/MCAP files without adding a model component.
+- **[Interactive recording](recording.md)**: select live outputs by topic or message type and record labeled PCAPNG/MCAP sessions without adding a model component.
+- **[Source content filters](recording.md#content-filters)**: filter publications at the broker or producer worker before transfer to the recorder.
+- **[File rotation and retention](recording.md#file-rotation-and-cyclic-retention)**: split captures by size and optionally retain only the latest files.
+- **[Recording replay](replay.md)**: feed PCAPNG/MCAP topics into simulation or live local/distributed inputs with looping, speed and pause controls.
 - **[External client SDKs](clients.md)** *(local broker)*: publish and subscribe from Python, C, Rust, Java and Ada without a client-side model.
-- **[External input contracts](clients.md#feeding-a-model-input)** *(local broker)*: connect declared application inputs to externally published topics and check their SDL compatibility.
+- **[External input contracts](clients.md#feeding-a-model-input)**: connect declared application inputs to externally published topics and check their SDL compatibility.
 - **[Runtime inspection](../README.md#quick-start)**: inspect live local queue, retry, failure and processing counters, or read the final saved status after shutdown.
 - **[Cluster status](distributed.md#processes-and-authentication)**: query the distributed coordinator for worker and delivery status.
 - **[Custom component processes](../sdk/protocol.md)**: integrate executables through the documented CH/1 binary lifecycle protocol.

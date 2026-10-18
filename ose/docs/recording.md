@@ -5,7 +5,8 @@ the outputs of a running application and records selected publications through
 SDL's recording service. It needs no model, generated application classes or
 recorder component in the graph. Start and stop files repeatedly in one session.
 It supports the local broker and distributed workers, including direct routes.
-Simulation has no live network endpoint; use its scenario and trace interfaces.
+Simulation has no live network endpoint; use [recording replay](replay.md) to
+feed captured messages into a model's external inputs in virtual time.
 The running broker/workers must also use an OSE version providing recording taps;
 an older application runtime cannot gain them by upgrading only the console.
 Rebuild/restart the application with the updated framework. For Vibration Watch

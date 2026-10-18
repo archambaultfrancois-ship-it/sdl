@@ -9,8 +9,9 @@ import unicodedata
 
 
 class CommandInput:
-    def __init__(self):
+    def __init__(self, output=None):
         self.transport, self.reader = None, None
+        self.output = output if output is not None else sys.stdout
         self.history = []
 
     async def readline(self, prompt="record> "):
@@ -84,18 +85,18 @@ class CommandInput:
                 visible += width(char)
             tail = visible - before
             print("\r\x1b[2K" + prompt + line[start:end] + (f"\x1b[{tail}D" if tail else ""),
-                  end="", flush=True)
+                  end="", flush=True, file=self.output)
 
         try:
             termios.tcsetattr(descriptor, termios.TCSANOW, editing)
-            print(prompt, end="", flush=True)
+            print(prompt, end="", flush=True, file=self.output)
             while True:
                 key = await self._key(decoder)
                 if not key or (key == "\x04" and not line):
-                    print(flush=True)
+                    print(flush=True, file=self.output)
                     return ""
                 if key in ("\n", "\r"):
-                    print(flush=True)
+                    print(flush=True, file=self.output)
                     if line.strip() and (not self.history or self.history[-1] != line):
                         self.history.append(line)
                         del self.history[:-1000]

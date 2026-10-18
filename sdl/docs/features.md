@@ -30,10 +30,11 @@
 
 ## Recording and replay
 
-- **[Self-contained recordings](recording.md)**: store messages, schemas, metadata and timestamps in MCAP or PCAPNG.
+- **[Self-contained recordings](recording.md)**: store messages, schemas, metadata and timestamps in PCAPNG (default) or MCAP.
 - **[Multiple schema versions](recording.md#catalogues-and-evolution)**: record and read different topic versions in one file.
-- **[Recording inspection](recording.md#inspection-validation-and-replay)**: browse messages as JSON, text or tables from the CLI.
-- **[Recording validation](recording.md#inspection-validation-and-replay)**: detect truncation, invalid messages and checksum errors.
+- **[Recording inspection](recording.md#inspection-validation-and-replay)**: browse messages by topic and time range as JSON, text or tables from the CLI.
+- **[Recording summaries](recording.md#inspection-validation-and-replay)**: report per-topic counts, time bounds and duration for a selection.
+- **[Recording validation](recording.md#inspection-validation-and-replay)**: check selected message bodies and container integrity for malformed or incomplete recordings.
 - **[Selective replay](recording.md#timestamps-and-ordering)**: replay topics and time ranges at original, adjusted or maximum speed.
 - **[Recording conversion](recording_pcapng.md#recording-and-tools)**: convert MCAP ↔ PCAPNG while preserving SDL data and metadata.
 

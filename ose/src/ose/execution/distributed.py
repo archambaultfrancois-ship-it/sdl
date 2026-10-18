@@ -14,6 +14,7 @@ import time
 import uuid
 
 from ose.codec.sdl2 import SDL2
+from ose.config import EXTERNAL_LIMITS
 from ose.delivery.buffers import Buffer
 from ose.delivery.engine import DeliveryEngine
 from ose.delivery.policies import SubscriptionPolicy
@@ -29,22 +30,24 @@ from ose.recording.taps import TapHub, OPERATIONS as RECORDING_OPERATIONS
 def fingerprint(plan):
     logical = {"components": {name: {key: node.get(key) for key in
                 ("inputs", "outputs", "trigger", "parameters", "env")} for name, node in plan["components"].items()},
-               "subscriptions": plan["subscriptions"], "max_frame": plan["max_frame"]}
+               "subscriptions": plan["subscriptions"], "max_frame": plan["max_frame"],
+               "external_topics": plan.get("external_topics", {}),
+               "external_limits": plan.get("broker", {}).get("external", {})}
     return hashlib.sha256(json.dumps(logical, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def check_plan(plan):
     if plan.get("execution") != "distributed":
         raise ValueError("use a deployment with execution=distributed")
-    if plan.get("external_topics"):
-        raise ValueError("distributed v1 does not support external client topics")
-    if "coordinator" in plan["components"]:
-        raise ValueError("coordinator is a reserved distributed identity")
+    if set(plan["components"]) & {"coordinator", "replay"}:
+        raise ValueError("coordinator and replay are reserved distributed identities")
     for sub in plan["subscriptions"]:
         if sub["policy"]["transport"] != "tcp":
             raise ValueError("distributed execution currently requires TCP")
         if sub.get("routing", "broker") not in ("broker", "direct"):
             raise ValueError("routing must be broker or direct")
+        if "from_topic" in sub and sub.get("routing", "broker") != "broker":
+            raise ValueError("external inputs require broker routing")
 
 
 async def admit(buffer, record, valid=lambda: None):
@@ -76,6 +79,8 @@ class Coordinator:
         self.authority = authority
         self.epoch, self.plan_id = uuid.uuid4().hex, fingerprint(plan)
         self.sessions, self.metrics = {}, Counter()
+        self.external_peers, self.external_owners, self.external_generations = {}, {}, {}
+        self.external_limits = {**EXTERNAL_LIMITS, **plan.get("broker", {}).get("external", {})}
         self.subscriptions = {s["id"]: s for s in plan["subscriptions"]}
         self.engines = {key: engine(sub) for key, sub in self.subscriptions.items()
                         if sub.get("routing", "broker") == "broker"}
@@ -107,11 +112,12 @@ class Coordinator:
         # No input replay or sender state survives a component generation change.
         for key, delivery in self.engines.items():
             sub = self.subscriptions[key]
-            if name in (sub["from"].split(".")[0], sub["to"].split(".")[0]):
+            if name == sub["to"].split(".")[0] or ("from_topic" not in sub and name == sub["from"].split(".")[0]):
                 delivery.store.close()
                 delivery.store.notify()
 
     def disconnected(self, peer):
+        self.release_external(peer)
         for name, session in list(self.sessions.items()):
             if session["peer"] is peer:
                 self.retire(name)
@@ -147,8 +153,99 @@ class Coordinator:
     def authorize(self, sub, source_token, target_token):
         if not self.activated:
             raise ValueError("graph is not activated")
-        self.current(sub["from"].split(".")[0], source_token, ready=True)
+        if "from_topic" in sub:
+            self.authority()
+            if source_token is None or self.external_generations.get(sub["from_topic"]) != source_token:
+                raise ValueError("obsolete external publisher generation")
+        else:
+            self.current(sub["from"].split(".")[0], source_token, ready=True)
         self.current(sub["to"].split(".")[0], target_token, ready=True)
+
+    def release_external(self, peer):
+        session = self.external_peers.pop(peer, None)
+        if session:
+            for topic in session["topics"]:
+                if self.external_owners.get(topic) is peer:
+                    del self.external_owners[topic]
+        # Accepted records may drain after disconnect. A new publisher replaces
+        # the topic generation and fences any remaining old broker records.
+
+    async def external_request(self, peer, header, body, caller):
+        if caller is not None and caller != "replay":
+            raise ValueError("external publication requires a replay certificate identity")
+        if not self.external_limits["enabled"]:
+            raise ValueError("external publishers are disabled")
+        op = header["op"]
+        if op == "external_open":
+            if peer in self.external_peers or any(s["peer"] is peer for s in self.sessions.values()):
+                raise ValueError("connection already identified")
+            if header.get("plan_id") != self.plan_id:
+                raise ValueError("application plan mismatch")
+            topics = header.get("topics")
+            if (not isinstance(topics, list) or not topics or any(not isinstance(t, str) for t in topics)
+                    or len(set(topics)) != len(topics) or set(topics) - self.plan.get("external_topics", {}).keys()):
+                raise ValueError("select declared external topics")
+            if len(self.external_peers) >= self.external_limits["max_clients"]:
+                raise ValueError("too many external publishers")
+            if any(topic in self.external_owners for topic in topics):
+                raise ValueError("external topic already has an active publisher")
+            if not self.activated:
+                raise ValueError("graph is not activated")
+            token = uuid.uuid4().hex
+            self.external_peers[peer] = dict(topics=set(topics), token=token, sequence=0)
+            for topic in topics:
+                self.external_owners[topic] = peer
+                self.external_generations[topic] = token
+                for key, delivery in self.engines.items():
+                    if self.subscriptions[key].get("from_topic") == topic:
+                        delivery.store.close()
+                        delivery.store.notify()
+            return {"token": token, "epoch": self.epoch}, None
+        session = self.external_peers.get(peer)
+        if session is None or session["token"] != header.get("token"):
+            raise ValueError("unknown external publisher session")
+        if op == "external_close":
+            self.release_external(peer)
+            return {}, None
+        topic = header.get("topic")
+        if topic not in session["topics"] or self.external_owners.get(topic) is not peer:
+            raise ValueError("publication from an unowned external topic")
+        if not self.activated:
+            raise ValueError("graph is not activated")
+        desc = self.plan["external_topics"][topic]
+        self.codec.validate(desc["catalogue"], desc["root"], body)
+        session["sequence"] += 1
+        sequence, token = session["sequence"], session["token"]
+        record = dict(id=f"{token}:{sequence}", epoch=self.epoch, sequence=sequence,
+                      source_token=token, source=topic, body=body, topic=topic)
+        result = await self.publish_record(record)
+        self.metrics["external_publications"] += 1
+        return result, None
+
+    async def publish_record(self, record):
+        async def enqueue(key, delivery):
+            sub = self.subscriptions[key]
+            if sub["from"] != record["topic"]:
+                return None
+            try:
+                target = self.current(sub["to"].split(".")[0], ready=True)
+            except ValueError:
+                return key, "unavailable"
+            metadata = {k: record[k] for k in ("id", "epoch", "sequence", "source_token", "source", "topic")}
+            try:
+                encode({"op": "result", "request": 2**63 - 1, "record": metadata}, record["body"], self.plan["max_frame"])
+            except ValueError:
+                return key, "oversize"
+            valid = lambda: self.authorize(sub, record["source_token"], target["token"])
+            try:
+                return key, await admit(delivery, record, valid)
+            except ValueError:
+                return key, "unavailable"
+        results = dict(pair for pair in await asyncio.gather(*(enqueue(key, delivery)
+                       for key, delivery in self.engines.items())) if pair is not None)
+        self.metrics["broker_publications"] += 1
+        self.metrics["broker_bytes"] += len(record["body"])
+        return {"delivery": results}
 
     async def request(self, peer, header, body):
         self.authority()
@@ -158,6 +255,10 @@ class Coordinator:
             return await self.recording.request(peer, header)
         if op == "status":
             return self.snapshot(), None
+        if op in ("external_open", "external_publish", "external_close"):
+            return await self.external_request(peer, header, body, caller)
+        if peer in self.external_peers:
+            raise ValueError("external publisher cannot act as a worker")
         name = header["node"]
         if caller is not None and caller != name:
             raise ValueError("certificate does not identify this component")
@@ -229,29 +330,7 @@ class Coordinator:
                 raise ValueError("invalid publication sequence")
             record = dict(id=f"{session['token']}:{sequence}", epoch=self.epoch, sequence=sequence,
                           source_token=session["token"], source=name, body=body, topic=topic)
-            async def enqueue(key, delivery):
-                sub = self.subscriptions[key]
-                if sub["from"] != topic:
-                    return None
-                try:
-                    target = self.current(sub["to"].split(".")[0], ready=True)
-                except ValueError:
-                    return key, "unavailable"
-                metadata = {k: record[k] for k in ("id", "epoch", "sequence", "source_token", "source", "topic")}
-                try:
-                    encode({"op": "result", "request": 2**63 - 1, "record": metadata}, body, self.plan["max_frame"])
-                except ValueError:
-                    return key, "oversize"
-                valid = lambda: self.authorize(sub, record["source_token"], target["token"])
-                try:
-                    return key, await admit(delivery, record, valid)
-                except ValueError:
-                    return key, "unavailable"
-            results = dict(pair for pair in await asyncio.gather(*(enqueue(key, delivery)
-                           for key, delivery in self.engines.items())) if pair is not None)
-            self.metrics["broker_publications"] += 1
-            self.metrics["broker_bytes"] += len(body)
-            return {"delivery": results}, None
+            return await self.publish_record(record), None
         if op in ("poll", "ack"):
             key = header["subscription"]
             sub = self.subscriptions[key]
@@ -289,6 +368,7 @@ class Coordinator:
 
     def snapshot(self):
         return {"epoch": self.epoch, "enabled": self.activated, "metrics": dict(self.metrics),
+                "external_publishers": len(self.external_peers),
                 "components": {name: {"ready": session["ready"], "host": session["host"],
                     "port": session["port"], "metrics": session["metrics"]} for name, session in self.sessions.items()},
                 "subscriptions": {key: delivery.snapshot() for key, delivery in self.engines.items()}}
@@ -425,7 +505,8 @@ class Worker:
 
     async def _metrics(self):
         while True:
-            metrics = {**self.metrics, "inputs": {key: value.snapshot() for key, value in self.buffers.items()},
+            metrics = {**self.metrics, "running": bool(self.started_at),
+                       "inputs": {key: value.snapshot() for key, value in self.buffers.items()},
                        "direct": {key: value.snapshot() for key, value in self.engines.items()}}
             await self.control("metrics", json.dumps(metrics).encode())
             await asyncio.sleep(.5)
@@ -451,12 +532,16 @@ class Worker:
 
     async def _admit(self, key, record, body):
         sub = self.incoming[key]
-        if record["epoch"] != self.epoch or record["topic"] != sub["from"] or record["source"] != sub["from"].split(".")[0]:
+        source = sub["from_topic"] if "from_topic" in sub else sub["from"].split(".")[0]
+        if record["epoch"] != self.epoch or record["topic"] != sub["from"] or record["source"] != source:
             raise ValueError("wrong publication identity")
         if type(record["sequence"]) is not int or record["sequence"] < 1 or record["id"] != f"{record['source_token']}:{record['sequence']}":
             raise ValueError("invalid publication sequence")
-        source_name, source_port = sub["from"].split(".")
-        desc = self.plan["components"][source_name]["outputs"][source_port]
+        if "from_topic" in sub:
+            desc = self.plan["external_topics"][sub["from_topic"]]
+        else:
+            source_name, source_port = sub["from"].split(".")
+            desc = self.plan["components"][source_name]["outputs"][source_port]
         port = sub["to"].split(".")[1]
         self.codec.validate(desc["catalogue"], desc["root"], body)
         value = dict(record, body=body, payload=body[self.codec.api.ENVELOPE_HEADER_SIZE:], catalogue=desc["catalogue"])

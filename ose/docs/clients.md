@@ -108,6 +108,11 @@ also supports an explicit application codec.
 
 ## Feeding a model input
 
+The SDKs below use the local broker. Distributed models can also receive
+[recording replay](replay.md#live-replay-and-speed-control) on declared external
+topics through their coordinator; this publisher-only interface does not add
+distributed subscription support to the SDKs.
+
 The application model declares the external topic's input contract:
 
 ```json

@@ -119,6 +119,8 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
             raise ValueError("routing must be broker or direct")
         if routing == "direct" and deployment.get("execution") != "distributed":
             raise ValueError("direct routes require execution=distributed")
+        if "from_topic" in sub and routing != "broker":
+            raise ValueError("external inputs require broker routing")
         policy = SubscriptionPolicy.resolve(sub.get("qos"), binding.get("transport", "tcp"))
         if deployment.get("execution") == "distributed" and policy.transport != "tcp":
             raise ValueError("distributed execution currently requires TCP")
@@ -128,8 +130,6 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
         value = deployment.get(key, default)
         if type(value) is not int or value < 128 or (key == "max_datagram" and value > 65507):
             raise ValueError(f"invalid {key}")
-    if deployment.get("execution") == "distributed" and external_topics:
-        raise ValueError("distributed v1 does not support external client topics")
     return {"version": 1, "execution": deployment.get("execution", "local"), "sdl_root": str(codec.root), "components": components, "subscriptions": subscriptions,
             "external_topics": external_topics, "broker": deployment.get("broker", {}), "build_dir": str(destination), "max_frame": deployment.get("max_frame", 1024 * 1024),
             "max_datagram": deployment.get("max_datagram", 1200)}
