@@ -113,6 +113,33 @@ class DistributedTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(self.coordinator.metrics["broker_bytes"], 0)
         self.assertLessEqual(self.workers["source"].engines["signal"].store.size(), 4)
 
+    async def test_top_covers_direct_broker_and_missing_workers_without_tokens(self):
+        import io
+        from types import SimpleNamespace
+        from ose.top import Observer, run
+        await self.start_graph()
+        await self.until(lambda: all(self.coordinator.sessions[name]["metrics"].get("completed_ticks", 0) > 2
+                                     for name in self.plan["components"]))
+        output = io.StringIO()
+        args = SimpleNamespace(endpoint=None, host="127.0.0.1", port=self.coordinator.port,
+            distributed=True, insecure=True, tls_ca=None, tls_cert=None, tls_key=None,
+            interval=.5, window=5, count=3, format="jsonl", color="always")
+        self.assertEqual(await run(args, output=output), 0)
+        reports = [json.loads(line) for line in output.getvalue().splitlines()]
+        rows = {row["name"]: row for row in reports[-1]["components"]}
+        self.assertEqual(set(rows), set(self.plan["components"]))
+        self.assertGreater(rows["source"]["rates"]["out"], 0)
+        self.assertGreater(rows["middle"]["rates"]["in"], 0)
+        self.assertIsNotNone(rows["middle"]["tick_p95_ms"])
+        self.assertTrue(any(queue["name"] == "signal" for queue in rows["source"]["queues"]))
+        self.assertTrue(any(queue["name"] == "events" for queue in rows["middle"]["queues"]))
+        self.assertNotIn(self.workers["source"].token, output.getvalue())
+        self.tasks["source"].cancel()
+        await asyncio.gather(self.tasks["source"], return_exceptions=True)
+        observer = Observer()
+        report = observer.sample(self.coordinator.snapshot())
+        self.assertEqual(next(row for row in report["components"] if row["name"] == "source")["state"], "UNAVAILABLE")
+
     async def test_broker_route_uses_same_handler(self):
         await self.coordinator.close()
         self.plan["subscriptions"][0]["routing"] = "broker"
@@ -194,7 +221,7 @@ class DistributedTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_complete_mixed_graph_over_mutual_tls(self):
         root = Path(self.directory.name)
-        certificates(root, ["coordinator", *self.plan["components"]])
+        certificates(root, ["coordinator", "observer", *self.plan["components"]])
         await self.coordinator.close()
         self.coordinator = Coordinator(self.plan, tls(root, "coordinator")[0], lease_seconds=2)
         await self.coordinator.start()
@@ -208,6 +235,16 @@ class DistributedTests(unittest.IsolatedAsyncioTestCase):
         await self.until(lambda: len(self.values()) >= 5)
         self.assertTrue(all(value == sequence * 2 for sequence, value in self.values()))
         self.assertGreater(self.workers["middle"].metrics["direct_bytes_received"], 0)
+        import io
+        from types import SimpleNamespace
+        from ose.top import run
+        output = io.StringIO()
+        args = SimpleNamespace(endpoint=None, host="127.0.0.1", port=self.coordinator.port,
+            distributed=True, insecure=False, tls_ca=str(root / "ca.crt"),
+            tls_cert=str(root / "observer.crt"), tls_key=str(root / "observer.key"),
+            interval=.1, window=5, count=1, format="jsonl", color="auto")
+        self.assertEqual(await run(args, output=output), 0)
+        self.assertEqual(len(json.loads(output.getvalue())["components"]), 3)
 
     async def test_latest_accepts_sequence_reset_after_source_replacement(self):
         await self.coordinator.close()

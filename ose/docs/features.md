@@ -56,5 +56,6 @@
 - **[External client SDKs](clients.md)** *(local broker)*: publish and subscribe from Python, C, Rust, Java and Ada without a client-side model.
 - **[External input contracts](clients.md#feeding-a-model-input)**: connect declared application inputs to externally published topics and check their SDL compatibility.
 - **[Runtime inspection](../README.md#quick-start)**: inspect live local queue, retry, failure and processing counters, or read the final saved status after shutdown.
+- **[Live diagnostics](monitoring.md)**: monitor local/distributed rates, queues and tick durations with colored alerts and JSONL output.
 - **[Cluster status](distributed.md#processes-and-authentication)**: query the distributed coordinator for worker and delivery status.
 - **[Custom component processes](../sdk/protocol.md)**: integrate executables through the documented CH/1 binary lifecycle protocol.

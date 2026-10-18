@@ -22,6 +22,7 @@ from ose.delivery.stores import MemoryStore
 from ose.execution.leadership import lease_clock
 from ose.execution.process import start_component, stop_component, tick_events
 from ose.execution.scheduler import Scheduler, reserve_snapshot
+from ose.execution.observation import TickTimings, describe
 from ose.transport.protocol import encode
 from ose.transport.secure import RPCServer, connect, finish_cleanup, identity, loopback
 from ose.recording.taps import TapHub, OPERATIONS as RECORDING_OPERATIONS
@@ -79,6 +80,7 @@ class Coordinator:
         self.authority = authority
         self.epoch, self.plan_id = uuid.uuid4().hex, fingerprint(plan)
         self.sessions, self.metrics = {}, Counter()
+        self.observation = describe(plan)
         self.external_peers, self.external_owners, self.external_generations = {}, {}, {}
         self.external_limits = {**EXTERNAL_LIMITS, **plan.get("broker", {}).get("external", {})}
         self.subscriptions = {s["id"]: s for s in plan["subscriptions"]}
@@ -281,7 +283,8 @@ class Coordinator:
                 raise ValueError("insecure endpoints must be loopback")
             token = uuid.uuid4().hex
             self.sessions[name] = dict(token=token, host=host, port=port, peer=peer,
-                                       ready=False, seen=lease_clock(), metrics={})
+                                       ready=False, seen=lease_clock(), metrics={},
+                                       observation_generation=uuid.uuid4().hex, metric_time=None)
             self.metrics["registrations"] += 1
             return {"token": token, **self.directory()}, None
         session = self.current(name, header["token"])
@@ -308,6 +311,7 @@ class Coordinator:
             if not isinstance(value, dict):
                 raise ValueError("metrics must be an object")
             session["metrics"] = value
+            session["metric_time"] = time.monotonic()
             return {}, None
         if op == "authorize":
             sub = self.subscriptions[header["subscription"]]
@@ -367,7 +371,15 @@ class Coordinator:
         raise ValueError("unknown distributed operation")
 
     def snapshot(self):
-        return {"epoch": self.epoch, "enabled": self.activated, "metrics": dict(self.metrics),
+        observation = {**self.observation, "components": {name: {
+            **desc, "connected": name in self.sessions,
+            "ready": self.sessions.get(name, {}).get("ready", False),
+            "generation": self.sessions.get(name, {}).get("observation_generation"),
+            "report_age_ms": (time.monotonic() - self.sessions[name]["metric_time"]) * 1000
+                if self.sessions.get(name, {}).get("metric_time") is not None else None}
+            for name, desc in self.observation["components"].items()}}
+        return {"epoch": self.epoch, "observation": observation,
+                "enabled": self.activated, "metrics": dict(self.metrics),
                 "external_publishers": len(self.external_peers),
                 "components": {name: {"ready": session["ready"], "host": session["host"],
                     "port": session["port"], "metrics": session["metrics"]} for name, session in self.sessions.items()},
@@ -405,6 +417,7 @@ class Worker:
             self.locks[key] = asyncio.Lock()
         self.engines = {key: engine(sub) for key, sub in self.outgoing.items()}
         self.scheduler = Scheduler(self.node, self.buffers)
+        self.timings = TickTimings()
         self.recording = TapHub(self.recording_points, plan["max_frame"], codec=self.codec)
         self.rpc = RPCServer(plan["max_frame"], self.receive, server_context, self.recording.disconnected)
         self.metrics = Counter()
@@ -506,6 +519,7 @@ class Worker:
     async def _metrics(self):
         while True:
             metrics = {**self.metrics, "running": bool(self.started_at),
+                       **self.timings.snapshot(self.scheduler),
                        "inputs": {key: value.snapshot() for key, value in self.buffers.items()},
                        "direct": {key: value.snapshot() for key, value in self.engines.items()}}
             await self.control("metrics", json.dumps(metrics).encode())
@@ -593,11 +607,12 @@ class Worker:
                 continue
             reserve_snapshot(self.buffers, selected)
             self.metrics["ticks"] += 1
-            async for port, payload in tick_events(self.process, self.node, selected,
-                    time.monotonic_ns() - self.started_at, self.metrics["ticks"]):
+            async for port, payload in self.timings.events(tick_events(self.process, self.node, selected,
+                    time.monotonic_ns() - self.started_at, self.metrics["ticks"])):
                 desc = self.node["outputs"][port]
                 await self.publish(f"{self.name}.{port}", self.codec.wrap(desc["catalogue"], payload))
             self.scheduler.complete(selected)
+            self.metrics["completed_ticks"] += 1
 
     async def publish(self, topic, body):
         self.sequence += 1

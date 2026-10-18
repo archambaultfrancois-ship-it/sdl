@@ -77,7 +77,12 @@ In another terminal, with the same environment:
 
 ```sh
 python3 -m ose.cli inspect
+python3 -m ose.cli top
 ```
+
+[`ose-ctl top`](docs/monitoring.md) shows recent component rates, FIFO occupancy,
+tick p95 and colored diagnostics locally or through the distributed coordinator.
+Use arrows/Enter for details, Space to freeze, or `--format jsonl` for collection.
 
 Ctrl+C stops the chain and its component processes. `run --duration 2` provides
 a finite execution; `inspect --last` reads the final saved counters after shutdown.

@@ -85,6 +85,21 @@ def main():
     command = commands.add_parser("inspect")
     command.add_argument("--endpoint", default="build/endpoint.json")
     command.add_argument("--last", action="store_true")
+    command = commands.add_parser("top", help="live component, queue and delivery diagnostics")
+    command.add_argument("--endpoint", help="local endpoint JSON (default: build/endpoint.json)")
+    command.add_argument("--host")
+    command.add_argument("--port", type=int)
+    command.add_argument("--distributed", action="store_true")
+    command.add_argument("--tls-ca")
+    command.add_argument("--tls-cert")
+    command.add_argument("--tls-key")
+    command.add_argument("--insecure", action="store_true", help="distributed loopback-only development mode")
+    command.add_argument("--interval", type=float, default=1, help="refresh seconds (default: 1)")
+    command.add_argument("--window", type=float, default=5, help="rate window seconds (default: 5)")
+    command.add_argument("--count", type=int, help="exit after N samples")
+    command.add_argument("--format", choices=("text", "jsonl"), default="text")
+    command.add_argument("--color", choices=("auto", "always", "never"), default="auto")
+    command.add_argument("--no-color", dest="color", action="store_const", const="never")
     command = commands.add_parser("record", help="discover and interactively record live application outputs")
     command.add_argument("-l", "--label", type=session_label, default=DEFAULT_LABEL,
                          help="informational session label (default: recorder)")
@@ -201,6 +216,21 @@ def main():
             print(json.dumps(summary), flush=True)
             if summary.get("refused", 0):
                 return 1
+        elif args.action == "top":
+            from ose.top import run
+            async def top():
+                task = asyncio.create_task(run(args))
+                loop = asyncio.get_running_loop()
+                for sig in (signal.SIGINT, signal.SIGTERM):
+                    loop.add_signal_handler(sig, task.cancel)
+                try:
+                    return await task
+                except asyncio.CancelledError:
+                    return 130
+                finally:
+                    for sig in (signal.SIGINT, signal.SIGTERM):
+                        loop.remove_signal_handler(sig)
+            return asyncio.run(top())
         elif args.action == "record":
             from ose.recording.console import run
             async def recording():

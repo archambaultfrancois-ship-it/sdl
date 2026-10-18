@@ -13,6 +13,7 @@ from ose.transport.tcp import TCP
 from ose.transport.udp import UDP
 from ose.transport.protocol import encode
 from ose.recording.taps import TapHub, OPERATIONS as RECORDING_OPERATIONS
+from ose.execution.observation import describe
 
 
 class Broker(Sessions):
@@ -21,6 +22,8 @@ class Broker(Sessions):
         self.catalogues, self.topics, self.engines = {}, {}, {}
         self.epoch, self.sequence = uuid.uuid4().hex, 0
         self.retained, self.peers, self.ready, self.metrics = {}, {}, set(), Counter()
+        self.observation = describe(plan)
+        self.metric_times, self.generations = {}, {}
         self.data_peers, self.dedicated_data = {}, set()
         self._enabled = False
         self.closing = False
@@ -174,6 +177,9 @@ class Broker(Sessions):
                         if type(udp_port) is not int or not 0 < udp_port < 65536:
                             raise ValueError("invalid UDP endpoint")
                         self.peers[node] = (peer, ("127.0.0.1", udp_port))
+                        self.generations[node] = uuid.uuid4().hex
+                        self.metrics.pop(node, None)
+                        self.metric_times.pop(node, None)
                         if header.get("data_channels", False):
                             self.dedicated_data.add(node)
                         self._notify_node(node)
@@ -210,6 +216,7 @@ class Broker(Sessions):
                         if not isinstance(metrics, dict):
                             raise ValueError("metrics must be an object")
                         self.metrics[node] = metrics
+                        self.metric_times[node] = time.monotonic()
                     else:
                         raise ValueError("unknown operation")
                     await self._reply(peer, header["request"], result, binary=response_body if op == "catalogue" else None)
@@ -381,7 +388,13 @@ class Broker(Sessions):
                 pass
 
     def snapshot(self):
-        return {"enabled": self.enabled, "ready": sorted(self.ready), "subscriptions": {key: engine.snapshot() for key, engine in self.engines.items()},
+        observation = {**self.observation, "components": {name: {
+            **desc, "connected": name in self.peers, "ready": name in self.ready,
+            "generation": self.generations.get(name),
+            "report_age_ms": (time.monotonic() - self.metric_times[name]) * 1000 if name in self.metric_times else None}
+            for name, desc in self.observation["components"].items()}}
+        return {"epoch": self.epoch, "observation": observation,
+                "enabled": self.enabled, "ready": sorted(self.ready), "subscriptions": {key: engine.snapshot() for key, engine in self.engines.items()},
                 "components": dict(self.metrics), "udp_errors": self.udp.errors, "errors": self.errors,
                 "topics": {topic: {"root": port["root"], "publications": self.topic_counts[topic],
                     "frequency_hz": self.topic_counts[topic] / max(time.time() - self.started_at, .001),

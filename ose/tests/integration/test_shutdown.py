@@ -105,3 +105,43 @@ def on_stop(ctx):
 
     async def test_ctrl_c_during_initialization_runs_stop_callbacks_without_tracebacks(self):
         await self.interrupt(during_startup=True)
+
+    async def test_top_reads_local_component_and_queue_observations(self):
+        from ose.execution.adapter import Adapter
+        from ose.execution.broker import Broker
+        broker = Broker(self.plan)
+        port = await broker.start()
+        tasks = [asyncio.create_task(Adapter(self.plan, name).run("127.0.0.1", port))
+                 for name in self.plan["components"]]
+        try:
+            async def ready():
+                while len(broker.ready) != 2:
+                    for task in tasks:
+                        if task.done():
+                            task.result()
+                    await asyncio.sleep(.01)
+            await asyncio.wait_for(ready(), 10)
+            broker.enabled = True
+            async def reported():
+                while not all(broker.metrics.get(name, {}).get("ticks", 0) > 2 for name in self.plan["components"]):
+                    await asyncio.sleep(.01)
+            await asyncio.wait_for(reported(), 10)
+            process = await asyncio.create_subprocess_exec(os.sys.executable, "-m", "ose.cli", "top",
+                "--host", "127.0.0.1", "--port", str(port), "--format", "jsonl", "--count", "3", "--interval", ".1",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await asyncio.wait_for(process.communicate(), 8)
+            self.assertEqual(process.returncode, 0, stderr.decode())
+            reports = [json.loads(line) for line in stdout.splitlines()]
+            rows = {row["name"]: row for row in reports[-1]["components"]}
+            self.assertEqual(set(rows), {"source", "sink"})
+            self.assertGreater(rows["source"]["rates"]["out"], 0)
+            self.assertGreater(rows["sink"]["rates"]["in"], 0)
+            self.assertIsNotNone(rows["source"]["tick_p95_ms"])
+            self.assertEqual(rows["sink"]["queues"][0]["policy"]["capacity"], 1024)
+            self.assertEqual(rows["source"]["queues"][0]["scope"], "delivery")
+            self.assertEqual(set(broker.peers), {"source", "sink"})
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await broker.close()

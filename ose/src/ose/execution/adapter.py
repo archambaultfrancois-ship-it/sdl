@@ -10,6 +10,7 @@ from ose.delivery.stores import MemoryStore
 from ose.execution import ipc
 from ose.execution.process import start_component, tick_events, stop_component
 from ose.execution.scheduler import Scheduler, reserve_snapshot
+from ose.execution.observation import TickTimings
 from ose.transport.tcp import Client
 from ose.transport.udp import UDP
 
@@ -33,6 +34,7 @@ class Adapter:
             store.on_change = self.activity.set
             self.buffers[sub["to"].split(".")[1]] = Buffer(policy, store)
         self.scheduler = Scheduler(self.node, self.buffers)
+        self.timings = TickTimings()
         self.running = True
         self.started_at = time.monotonic()
         self.timed_ticks, self.tick_index, self.activated_at_ns = False, 0, 0
@@ -111,7 +113,8 @@ class Adapter:
             elapsed = max(time.monotonic() - self.started_at, .001)
             metrics = {"inputs": {p: b.snapshot() for p, b in self.buffers.items()},
                 "ticks_hz": self.metrics.get("ticks", 0) / elapsed,
-                "publications_hz": self.metrics.get("publications", 0) / elapsed, **self.metrics}
+                "publications_hz": self.metrics.get("publications", 0) / elapsed,
+                "running": bool(self.activated_at_ns), **self.metrics, **self.timings.snapshot(self.scheduler)}
             await self.client.request("metrics", json.dumps(metrics).encode())
             await asyncio.sleep(.1)
 
@@ -129,7 +132,8 @@ class Adapter:
             reserve_snapshot(self.buffers, selected)
             self.tick_index += 1
             timestamp = time.monotonic_ns() - self.activated_at_ns if self.timed_ticks else None
-            async for port, payload in tick_events(self.process, self.node, selected, timestamp, self.tick_index):
+            async for port, payload in self.timings.events(
+                    tick_events(self.process, self.node, selected, timestamp, self.tick_index)):
                 desc = self.node["outputs"][port]
                 envelope = self.codec.wrap(desc["catalogue"], payload)
                 result, _ = await self.client.request("publish", envelope, timeout=self.request_timeout, topic=f"{self.name}.{port}")
