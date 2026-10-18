@@ -141,6 +141,9 @@ Wireshark exports of selected packets do not produce a new complete SDL recordin
 Use SDL validation before replaying a file into an application; CLI replay does this
 preflight automatically.
 
+Use [`sdl-recording transform`](recording_transform.md) to concatenate, filter or
+split SDL recordings, rebuilding a valid section and END record in each output.
+
 ## Wireshark inspection
 
 Build and install the [native C plugin](../tools/wireshark/README.md), then open

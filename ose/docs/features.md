@@ -53,6 +53,7 @@
 - **[Source content filters](recording.md#content-filters)**: filter publications at the broker or producer worker before transfer to the recorder.
 - **[File rotation and retention](recording.md#file-rotation-and-cyclic-retention)**: split captures by size and optionally retain only the latest files.
 - **[Recording replay](replay.md)**: feed PCAPNG/MCAP topics into simulation or live local/distributed inputs with looping, speed and pause controls.
+- **[Recording transformations](../../sdl/docs/recording_transform.md)**: filter, concatenate/rebase and split recording series in their original format.
 - **[External client SDKs](clients.md)** *(local broker)*: publish and subscribe from Python, C, Rust, Java and Ada without a client-side model.
 - **[External input contracts](clients.md#feeding-a-model-input)**: connect declared application inputs to externally published topics and check their SDL compatibility.
 - **[Runtime inspection](../README.md#quick-start)**: inspect live local queue, retry, failure and processing counters, or read the final saved status after shutdown.

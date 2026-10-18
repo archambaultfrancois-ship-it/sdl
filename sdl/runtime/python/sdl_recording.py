@@ -561,3 +561,9 @@ def convert_recording(source, output, *, format='pcapng', overwrite=False):
                log_time_ns=record.log_time_ns, publish_time_ns=record.publish_time_ns, sequence=record.sequence)
             count += 1
    return count
+
+
+def transform_recordings(inputs, output, **options):
+   """Filter, concatenate/rebase and split recordings; see recording_transform.md."""
+   from sdl_recording_transform import transform_recordings as transform
+   return transform(inputs, output, **options)

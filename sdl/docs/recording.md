@@ -15,6 +15,9 @@ The same services also support the [SDL PCAPNG profile](recording_pcapng.md)
 for USER0 captures and conversion in both directions. Reader APIs and CLI commands
 detect the container automatically; `info` reports both `format` and `profile`.
 
+[`sdl-recording transform`](recording_transform.md) filters, concatenates/rebases
+and splits recording series while preserving each input container format.
+
 ## Container mapping
 
 | MCAP record | SDL profile requirement |

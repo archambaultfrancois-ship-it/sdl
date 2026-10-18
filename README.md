@@ -97,6 +97,16 @@ Short example: `record-inspect FILE -cs -b +1s -d 4s -f table`.
 `record-check` remains a compatibility shortcut for `inspect --check`, with JSON
 output by default.
 
+[`sdl-recording transform`](sdl/docs/recording_transform.md) combines filtering,
+concatenation/rebasing and splitting, preserving PCAPNG or MCAP input formats:
+
+```sh
+sdl-recording transform capture-*.pcapng --concat --filter 'state == 1' \
+  --topic 'alarm.*' --split-size 100MB --output 'alarms-{index:04d}.pcapng'
+```
+
+Add `--dry-run` to validate the inputs and preview output files without writing.
+
 `app-build`, `app-validate`, `app-simulate`, `app-distributed`, and `app-make`
 forward to the application's Makefile targets; its targets must exist.
 `app-run` builds the application with `make build`, then runs its `build/plan.json`

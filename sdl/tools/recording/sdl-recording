@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect, validate, convert and replay SDL2 MCAP/PCAPNG recordings."""
+"""Inspect, validate, transform, convert and replay SDL2 MCAP/PCAPNG recordings."""
 
 import argparse
 from decimal import Decimal, DecimalException, localcontext
@@ -262,8 +262,36 @@ def main(argv=None):
    convert.add_argument('--format', choices=('mcap', 'pcapng'), default='pcapng',
       help='output container (default: pcapng)')
    convert.add_argument('--overwrite', action='store_true')
+   from sdl_recording_transform import parse_duration, parse_size, time_bound
+   transform = sub.add_parser('transform', help='filter, concatenate and split recordings without changing their format')
+   transform.add_argument('files', nargs='+', help='input files in the desired order; shell globs are supported')
+   transform.add_argument('-o', '--output', required=True,
+      help='output path/pattern: {index:04d}, {source}, {format}; parent directory must exist')
+   transform.add_argument('--concat', action='store_true', help='assemble all inputs into one logical stream')
+   transform.add_argument('--timeline', choices=('preserve', 'append'), default='preserve')
+   transform.add_argument('--gap', type=parse_duration, default=0, help='extra gap between appended inputs (seconds or ns/us/ms/s/m/h)')
+   transform.add_argument('-t', '--topic', action='append', default=[], help='topic glob; repeat for alternatives')
+   transform.add_argument('--type', dest='types', action='append', default=[], help='root type glob; repeat for alternatives')
+   transform.add_argument('--filter', action='append', default=[], help='SDL content predicate; repeated predicates are ANDed')
+   transform.add_argument('--from', dest='start', type=time_bound, help='inclusive original log time; +offset from each input start')
+   stop = transform.add_mutually_exclusive_group()
+   stop.add_argument('--to', dest='end', type=time_bound, help='exclusive original log time; +offset from each input start')
+   stop.add_argument('--duration', type=parse_duration, help='selected duration from --from or each input start')
+   transform.add_argument('--split-duration', type=parse_duration, help='maximum log-time span per output (e.g. 10m)')
+   transform.add_argument('--split-size', type=parse_size, help='maximum complete output bytes (e.g. 100MB)')
+   transform.add_argument('--split-messages', type=_positive, help='maximum messages per output')
+   transform.add_argument('--dry-run', action='store_true', help='validate and calculate exact output counts/sizes without creating files')
+   transform.add_argument('--overwrite', action='store_true', help='replace existing outputs only after successful staging')
    args = parser.parse_args(argv)
    try:
+      if args.command == 'transform':
+         from sdl_recording import transform_recordings
+         _emit(transform_recordings(args.files, args.output, concat=args.concat, timeline=args.timeline,
+            gap_ns=args.gap, topics=args.topic, types=args.types, filters=args.filter,
+            start=args.start, end=args.end, duration_ns=args.duration,
+            split_duration_ns=args.split_duration, split_size=args.split_size,
+            split_messages=args.split_messages, dry_run=args.dry_run, overwrite=args.overwrite))
+         return 0
       reader = RecordingReader(args.file)
       if args.command == 'convert':
          count = convert_recording(args.file, args.output, format=args.format, overwrite=args.overwrite)
@@ -316,6 +344,9 @@ def main(argv=None):
    except (RecordingError, OSError, ValueError, ImportError, AttributeError) as error:
       print('sdl-recording: ' + str(error), file=sys.stderr)
       return 1
+   except KeyboardInterrupt:
+      print('sdl-recording: interrupted', file=sys.stderr)
+      return 130
 
 
 if __name__ == '__main__':

@@ -128,6 +128,8 @@ On the Termux development environment, source `~/.bashrc` before using the JDK.
   [recording reference](docs/recording.md) and the optional
   [native services](docs/recording_native.md) for C, Rust, Java JNI, Ada and C MEX.
   The [PCAPNG profile](docs/recording_pcapng.md) adds USER0 captures and MCAP conversion.
+  [`sdl-recording transform`](docs/recording_transform.md) combines filtering,
+  concatenation/rebasing and splitting of recording series in their original format.
   Run `make recording-deps test-recording` to install the optional dependency and test it.
 - [Wireshark](tools/wireshark/README.md) decodes catalogue announcements and
   subsequent UDP messages, and inspects SDL USER0 recordings.
