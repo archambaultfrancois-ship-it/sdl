@@ -32,9 +32,15 @@ root = pathlib.Path.cwd()
 sdk = sdk_root()
 assert 'share/ose/sdk' in str(sdk), sdk
 for asset in ('java/org/sdlchain/Component.java', 'ada/chain_component.ads',
-              'client/java/chain_jni.c', 'client/ada/chain_client-typed.adb'):
+              'client/java/chain_jni.c', 'client/ada/chain_client-typed.adb',
+              'client/c/chain_parameters.h', 'client/rust/src/parameters.rs',
+              'client/rust/src/parameters_tls.rs',
+              'client/java/org/sdlchain/client/ParameterClient.java',
+              'client/ada/chain_parameters.ads', 'client/ada/chain_parameters.adb',
+              'client/ada/chain_parameters-typed.ads', 'client/ada/chain_parameters-typed.adb'):
     assert (sdk / asset).is_file(), asset
 (root / 'probe.sdl').write_text('message Empty {}')
+(root / 'settings.sdl').write_text('message Settings { uint32 limit; }')
 languages = sys.argv[2].split(',')
 containers = {
     'python': {'language': 'python', 'handler': 'handler.py'},
@@ -44,8 +50,11 @@ containers = {
     'ada': {'language': 'ada', 'handler': 'handler_ada.adb', 'unit': 'Handler_Ada'},
 }
 model = {'version': 1, 'schemas': 'probe.sdl', 'components': {
-    name: {'inputs': {}, 'outputs': {}, 'trigger': {'mode': 'periodic', 'period_ms': 100}}
-    for name in languages}, 'subscriptions': []}
+    name: {'inputs': {}, 'outputs': {}, 'trigger': {'mode': 'periodic', 'period_ms': 100},
+           'parameter_bindings': {'settings': {'path': 'shared/settings', 'access': 'read_write'}}}
+    for name in languages}, 'subscriptions': [],
+    'shared_parameters': {'shared/settings': {'schema': 'settings.sdl', 'root': 'Settings',
+                                             'initial': {'limit': 42}}}}
 deployment = {'version': 1, 'components': {
     name: {'container': containers[name]} for name in languages}}
 (root / 'model.json').write_text(json.dumps(model)); (root / 'deployment.json').write_text(json.dumps(deployment))

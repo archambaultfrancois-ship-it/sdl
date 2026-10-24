@@ -120,9 +120,16 @@ def main():
     command.add_argument("--plan", required=True)
     command.add_argument("--node", required=True)
     command.add_argument("--port", type=int, required=True)
+    from ose.parameters import cli as parameter_cli
+    parameter_cli.parser(commands)
     args = parser.parse_args()
     try:
-        if args.action in ("build", "validate"):
+        if args.action == "parameters":
+            try:
+                asyncio.run(parameter_cli.run(args))
+            except KeyboardInterrupt:
+                return 130
+        elif args.action in ("build", "validate"):
             if not args.sdl_root:
                 raise ValueError("set SDL_ROOT or pass --sdl-root explicitly")
             if args.action == "validate":

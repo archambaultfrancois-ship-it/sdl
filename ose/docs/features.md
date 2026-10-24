@@ -16,6 +16,7 @@
 - **[Periodic and input-driven execution](runtime.md#when-ticks-start)**: run sources and consumers on model-defined periods or input changes.
 - **[Input snapshots](runtime.md#building-a-ticks-input-snapshot)**: combine required and optional inputs, reserving FIFO values until tick completion.
 - **[Required-input timeouts](runtime.md#required-input-timeouts)**: continue through the existing callback with a null value when an input deadline expires.
+- **[Shared parameter blocks](parameters.md)**: bind typed SDL settings to selected components, read or replace whole blocks through five language APIs, and distribute the latest values locally or across workers.
 - **[Application clock](callbacks.md#timed-input-callbacks)**: access callback time and tick indices in real-time execution and simulation.
 - **[Process supervision](architecture.md#process-lifecycle)** *(local execution)*: start isolated components behind a READY barrier and shut them down cleanly on interrupts or failure.
 

@@ -130,3 +130,87 @@ CenvSubscription *cenv_subscribe(CenvClient *client, const char *topic, const ch
     hooks.on_message = callback; hooks.destroy = destroy;
     return cenv_subscribe_raw(client, topic, root, c->local, policy, hooks);
 }
+
+#include "chain_parameters.h"
+struct CenvParameterBlock {
+    CenvParameterClient *client;
+    SdlContext *codec;
+    char *path, *root;
+};
+void cenv_parameter_block_free(CenvParameterBlock *block) {
+    if (!block) return;
+    type_context_free(block->codec); free(block->path); free(block->root); free(block);
+}
+CenvParameterBlock *cenv_parameter_block(CenvParameterClient *client, const char *path, const char *root) {
+    CenvParameterPacket *packet;
+    CenvParameterBlock *block;
+    char *actual;
+    char *local;
+    size_t local_size;
+    SdlCompatibilityDiagnostic *check;
+    int compatible;
+    if (!client || !path || !root) { cenv_set_error("argument", "invalid parameter block"); return NULL; }
+    packet = cenv_parameter_path_request(client, "parameters_describe", path, NULL, 0);
+    if (!packet) return NULL;
+    actual = cenv_parameter_packet_text(packet, "root");
+    if (!actual || strcmp(actual, root)) {
+        cenv_string_free(actual); cenv_parameter_packet_free(packet);
+        cenv_set_error("schema", "wrong parameter root"); return NULL;
+    }
+    cenv_string_free(actual);
+    local = type_description(&root, 1, &local_size);
+    check = local ? type_compare_catalogues(cenv_parameter_packet_data(packet), cenv_parameter_packet_size(packet),
+        local, local_size, root, true) : NULL;
+    compatible = check && check->code == SDL_COMPAT_COMPATIBLE;
+    type_compatibility_free(check); type_free(local);
+    if (!compatible) {
+        cenv_parameter_packet_free(packet);
+        cenv_set_error("schema", "incompatible local parameter type; register the matching SDL types"); return NULL;
+    }
+    block = calloc(1, sizeof(*block));
+    if (block) {
+        block->client = client;
+        block->codec = type_prepare(cenv_parameter_packet_data(packet), cenv_parameter_packet_size(packet));
+        block->path = malloc(strlen(path) + 1); block->root = malloc(strlen(root) + 1);
+        if (block->path) memcpy(block->path, path, strlen(path) + 1);
+        if (block->root) memcpy(block->root, root, strlen(root) + 1);
+    }
+    cenv_parameter_packet_free(packet);
+    if (!block || !block->codec || !block->path || !block->root) {
+        cenv_parameter_block_free(block); cenv_set_error("schema", "cannot prepare parameter block"); return NULL;
+    }
+    return block;
+}
+void *cenv_parameter_decode(CenvParameterBlock *block, const CenvParameterPacket *packet) {
+    char *path;
+    const char *root;
+    void *value = NULL;
+    if (!block || !packet) { cenv_set_error("argument", "invalid parameter packet"); return NULL; }
+    path = cenv_parameter_packet_text(packet, "path");
+    root = type_message_name(block->codec, cenv_parameter_packet_data(packet), cenv_parameter_packet_size(packet));
+    if (path && !strcmp(path, block->path) && root && !strcmp(root, block->root))
+        value = type_decode(block->codec, cenv_parameter_packet_data(packet), cenv_parameter_packet_size(packet));
+    cenv_string_free(path);
+    if (!value) cenv_set_error("schema", "cannot decode parameter block");
+    return value;
+}
+void *cenv_parameter_get(CenvParameterBlock *block) {
+    CenvParameterPacket *packet;
+    void *value;
+    if (!block) { cenv_set_error("argument", "NULL parameter block"); return NULL; }
+    packet = cenv_parameter_path_request(block->client, "parameters_get", block->path, NULL, 0);
+    if (!packet) return NULL;
+    value = cenv_parameter_decode(block, packet); cenv_parameter_packet_free(packet); return value;
+}
+int cenv_parameter_set(CenvParameterBlock *block, const void *message) {
+    CenvParameterPacket *packet;
+    void *payload;
+    size_t size;
+    if (!block || !message) { cenv_set_error("argument", "invalid parameter value"); return 0; }
+    payload = type_encode(block->codec, block->root, message, &size);
+    if (!payload) { cenv_set_error("schema", "cannot encode parameter block"); return 0; }
+    packet = cenv_parameter_path_request(block->client, "parameters_set", block->path, payload, size);
+    type_free(payload);
+    if (!packet) return 0;
+    cenv_parameter_packet_free(packet); return 1;
+}

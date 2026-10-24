@@ -137,3 +137,47 @@ JNIEXPORT jlong JNICALL JNI_NAME(subscribe)(JNIEnv *env, jclass cls, jlong clien
     if (h) destroy(h);
     free(t); free(r); free(c); free(o); if (!sub) error(env); return (jlong)(intptr_t)sub;
 }
+
+#include "chain_parameters.h"
+#define PARAM_JNI(n) Java_org_sdlchain_client_ParameterClient_00024Native_##n
+JNIEXPORT jlong JNICALL PARAM_JNI(connect)(JNIEnv *env, jclass cls, jobjectArray options, jint port) {
+    char *values[6] = {NULL, NULL, NULL, NULL, NULL, NULL};
+    CenvParameterClient *client = NULL;
+    int i;
+    (void)cls;
+    if (!options || (*env)->GetArrayLength(env, options) != 6 || port < 1 || port > 65535) {
+        cenv_set_error("argument", "invalid parameter connection options"); error(env); return 0;
+    }
+    for (i = 0; i < 6; ++i) {
+        jbyteArray value = (*env)->GetObjectArrayElement(env, options, i);
+        if (value) { values[i] = copy(env, value); (*env)->DeleteLocalRef(env, value); }
+    }
+    if (!(*env)->ExceptionCheck(env))
+        client = cenv_parameters_connect(values[0], (uint16_t)port, values[1], values[2], values[3], values[4], values[5]);
+    for (i = 0; i < 6; ++i) free(values[i]);
+    if (!client) error(env);
+    return (jlong)(intptr_t)client;
+}
+JNIEXPORT jobjectArray JNICALL PARAM_JNI(request)(JNIEnv *env, jclass cls, jlong handle,
+        jbyteArray operation, jbyteArray arguments, jbyteArray payload) {
+    char *op = copy(env, operation), *args = copy(env, arguments), *data = copy(env, payload);
+    CenvParameterPacket *packet = NULL;
+    jobjectArray result = NULL;
+    (void)cls;
+    if (op && args && data) packet = cenv_parameters_request((void *)(intptr_t)handle, op, args,
+        (const uint8_t *)data, (size_t)(*env)->GetArrayLength(env, payload));
+    free(op); free(args); free(data);
+    if (!packet) { error(env); return NULL; }
+    result = (*env)->NewObjectArray(env, 2, (*env)->FindClass(env, "[B"), NULL);
+    if (result) {
+        const char *header = cenv_parameter_packet_header(packet);
+        jbyteArray h = bytes(env, header, strlen(header));
+        jbyteArray b = bytes(env, cenv_parameter_packet_data(packet), cenv_parameter_packet_size(packet));
+        if (h && b) { (*env)->SetObjectArrayElement(env, result, 0, h); (*env)->SetObjectArrayElement(env, result, 1, b); }
+    }
+    cenv_parameter_packet_free(packet);
+    return result;
+}
+JNIEXPORT void JNICALL PARAM_JNI(free)(JNIEnv *env, jclass cls, jlong handle) {
+    (void)env; (void)cls; cenv_parameters_free((void *)(intptr_t)handle);
+}

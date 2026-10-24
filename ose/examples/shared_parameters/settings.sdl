@@ -1,0 +1,11 @@
+message DetectionParams {
+    bool enabled;
+    fl64 threshold;
+    fl64 hysteresis;
+    uint32 window_ms;
+}
+
+message SafetySettings {
+    bool enabled;
+    fl64 maximum_threshold;
+}

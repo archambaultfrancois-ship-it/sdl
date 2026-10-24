@@ -14,6 +14,8 @@ import time
 import uuid
 
 from ose.codec.sdl2 import SDL2
+from ose.parameters.service import ParameterEndpoint, OPERATIONS as PARAMETER_OPERATIONS
+from ose.parameters.bindings import RemoteBindings, updates
 from ose.config import EXTERNAL_LIMITS
 from ose.delivery.buffers import Buffer
 from ose.delivery.engine import DeliveryEngine
@@ -33,7 +35,10 @@ def fingerprint(plan):
                 ("inputs", "outputs", "trigger", "parameters", "env")} for name, node in plan["components"].items()},
                "subscriptions": plan["subscriptions"], "max_frame": plan["max_frame"],
                "external_topics": plan.get("external_topics", {}),
-               "external_limits": plan.get("broker", {}).get("external", {})}
+               "external_limits": plan.get("broker", {}).get("external", {}),
+               "shared_parameters": plan.get("shared_parameters", {}),
+               "parameter_clients": plan.get("parameter_clients", {}),
+               "parameter_bindings": {name: node.get("parameter_bindings", {}) for name, node in plan["components"].items()}}
     return hashlib.sha256(json.dumps(logical, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -76,6 +81,7 @@ class Coordinator:
         if not math.isfinite(lease_seconds) or lease_seconds < .3:
             raise ValueError("lease must be finite and at least 0.3 seconds")
         self.plan, self.codec = plan, SDL2(plan["sdl_root"])
+        self.parameters = ParameterEndpoint(plan, self.codec)
         self.lease_seconds = lease_seconds
         self.authority = authority
         self.epoch, self.plan_id = uuid.uuid4().hex, fingerprint(plan)
@@ -119,6 +125,7 @@ class Coordinator:
                 delivery.store.notify()
 
     def disconnected(self, peer):
+        self.parameters.disconnect(peer)
         self.release_external(peer)
         for name, session in list(self.sessions.items()):
             if session["peer"] is peer:
@@ -253,6 +260,17 @@ class Coordinator:
         self.authority()
         op = header["op"]
         caller = identity(peer.writer)
+        if op in PARAMETER_OPERATIONS:
+            node = None
+            if "node" in header:
+                name = header["node"]
+                session = self.current(name, header.get("token"))
+                if session["peer"] is not peer or (caller is not None and caller != name):
+                    raise ValueError("invalid parameter worker session")
+                node = self.plan["components"][name]
+            return await self.parameters.request(peer, header, body, node=node, certificate=caller)
+        if peer in self.parameters.external:
+            raise ValueError("parameter-only client session")
         if op in ("recording_points", "recording_describe"):
             return await self.recording.request(peer, header)
         if op == "status":
@@ -378,7 +396,7 @@ class Coordinator:
             "report_age_ms": (time.monotonic() - self.sessions[name]["metric_time"]) * 1000
                 if self.sessions.get(name, {}).get("metric_time") is not None else None}
             for name, desc in self.observation["components"].items()}}
-        return {"epoch": self.epoch, "observation": observation,
+        return {"epoch": self.epoch, "observation": observation, "parameters": self.parameters.service.snapshot(),
                 "enabled": self.activated, "metrics": dict(self.metrics),
                 "external_publishers": len(self.external_peers),
                 "components": {name: {"ready": session["ready"], "host": session["host"],
@@ -390,6 +408,7 @@ class Coordinator:
             self.monitor.cancel()
             await asyncio.gather(self.monitor, return_exceptions=True)
         await self.rpc.close()
+        self.parameters.close()
         for delivery in self.engines.values():
             delivery.store.close()
 
@@ -448,7 +467,10 @@ class Worker:
             self.last_contact = lease_clock()
             # Renew during native/user initialization too.
             tasks = [asyncio.create_task(self._heartbeat()), asyncio.create_task(self._watchdog()), self.client.task]
-            initialization = asyncio.create_task(start_component(self.node))
+            self.parameters = await RemoteBindings(self.node, self.control, self.activity).open()
+            if self.parameters.task:
+                tasks.append(self.parameters.task)
+            initialization = asyncio.create_task(start_component(self.node, self.parameters))
             tasks.append(initialization)
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             if initialization not in done:
@@ -480,6 +502,8 @@ class Worker:
         # completed. Wakeups and explicit state stop those loops anyway.
         self.closing = True
         self.activity.set()
+        if hasattr(self, "parameters"):
+            await self.parameters.close()
         for delivery in self.engines.values():
             delivery.store.notify()
         self.recording.close()
@@ -613,6 +637,8 @@ class Worker:
         self.started_at = time.monotonic_ns()
         while not self.closing:
             self.activity.clear()
+            if hasattr(self, "parameters"):
+                await updates(self.process, self.node, self.parameters.drain())
             selected = self.scheduler.select()
             if selected is None:
                 try:
@@ -623,7 +649,7 @@ class Worker:
             reserve_snapshot(self.buffers, selected)
             self.metrics["ticks"] += 1
             async for port, payload in self.timings.events(tick_events(self.process, self.node, selected,
-                    time.monotonic_ns() - self.started_at, self.metrics["ticks"])):
+                    time.monotonic_ns() - self.started_at, self.metrics["ticks"], **({"parameters": self.parameters} if self.node.get("parameter_bindings") else {}))):
                 desc = self.node["outputs"][port]
                 await self.publish(f"{self.name}.{port}", self.codec.wrap(desc["catalogue"], payload))
             self.scheduler.complete(selected)

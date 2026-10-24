@@ -52,12 +52,23 @@ def generate(name, node, handler, sdl_root, schemas, destination, identity):
         spec += [f'   procedure On_{port} (Self : in out Handler; Ctx : in out Context; Message : {nullable}Input_{port});']
     for port, desc in node['outputs'].items():
         spec += [f'   procedure Publish_{port} (Ctx : in out Context; Message : {typ(desc)});']
+    for alias, desc in node.get('parameter_bindings', {}).items():
+        if 'read' in desc['access']:
+            spec += [f'   function Parameters_{alias} (Ctx : Context) return {typ(desc)};']
+        if 'write' in desc['access']:
+            spec += [f'   procedure Set_Parameters_{alias} (Ctx : in out Context; Value : {typ(desc)});']
     spec += ['   procedure Run (Self : in out Handler\'Class);', 'private', '   type Context is limited record',
              '      Config : Ada.Strings.Unbounded.Unbounded_String;',
              '      Time, Index : Interfaces.Unsigned_64 := 0;',
              '      Active : Boolean := False;', '      Owner : Ada.Task_Identification.Task_Id := Ada.Task_Identification.Null_Task_Id;']
     for port in node['outputs']:
         spec += [f'      Output_{port} : SDL_Runtime.Context;']
+    for alias, desc in node.get('parameter_bindings', {}).items():
+        spec += [f'      Parameter_Codec_{alias} : SDL_Runtime.Context;']
+        if 'read' in desc['access']:
+            spec += [f'      Parameter_Value_{alias} : {typ(desc)};', f'      Parameter_Present_{alias} : Boolean := False;']
+    if node.get('parameter_bindings'):
+        spec += ['      Parameter_Writes : Boolean := False;']
     spec += ['   end record;', f'end {api};', '']
     (destination / (stem + '.ads')).write_text('\n'.join(spec))
     body = ['with Ada.Unchecked_Deallocation;', 'with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;',
@@ -87,12 +98,37 @@ def generate(name, node, handler, sdl_root, schemas, destination, identity):
                  '      if not Ctx.Active or else Ctx.Owner /= Ada.Task_Identification.Current_Task then',
                  '         raise Program_Error with "publication requires the active tick callback";', '      end if;',
                  f'      Publish ({literal(port)}, {package}.Encode (Ctx.Output_{port}, Message));', '   end;']
+    for alias, desc in node.get('parameter_bindings', {}).items():
+        package = types[desc['root']][0]
+        if 'read' in desc['access']:
+            body += [f'   function Parameters_{alias} (Ctx : Context) return {typ(desc)} is (Ctx.Parameter_Value_{alias});']
+        if 'write' in desc['access']:
+            body += [f'   procedure Set_Parameters_{alias} (Ctx : in out Context; Value : {typ(desc)}) is', '   begin',
+                     '      if not Ctx.Parameter_Writes or else Ctx.Owner /= Ada.Task_Identification.Current_Task then raise Program_Error with "parameter writes require an active callback"; end if;',
+                     f'      Set_Parameters ({literal(alias)}, {package}.Encode (Ctx.Parameter_Codec_{alias}, Value));', '   end;']
     body += ['   procedure Run (Self : in out Handler\'Class) is', '      Ctx : Context;', '      E : Event;',
              '      Selected : Inputs;', '      Started : Boolean := False;']
     for port, desc in node['inputs'].items():
         body += [f'      Present_{port} : Boolean := False;', f'      type Owned_{port} is access all {typ(desc)};', f'      Value_{port} : Owned_{port};', f'      procedure Free_{port} is new Ada.Unchecked_Deallocation ({typ(desc)}, Owned_{port});',
                  f'      Remote_{port} : Unbounded_String;', f'      Decoder_{port} : SDL_Runtime.Context;']
-    body += ['      procedure Clear is', '      begin']
+    if node.get('parameter_bindings'):
+        body += ['      procedure Parameter_Update (Event_Value : Event; Initial : Boolean := False) is',
+                 '         Port, Cat : Unbounded_String;', '         Data : SDL_Runtime.Buffer;', '      begin',
+                 '         if Op (Event_Value) /= \'U\' then raise Protocol_Error with "expected parameter update"; end if;',
+                 '         Input (Event_Value, Port, Cat, Data);']
+        readable = [(a, d) for a, d in node['parameter_bindings'].items() if 'read' in d['access']]
+        for i, (alias, desc) in enumerate(readable):
+            package = types[desc['root']][0]
+            body += [f'         {"if" if i == 0 else "elsif"} To_String (Port) = {literal(alias)} then',
+                     f'            if To_String (Cat) /= {literal(desc["catalogue"])} or else (Initial and Ctx.Parameter_Present_{alias}) then',
+                     '               raise Protocol_Error with "invalid parameter catalogue or duplicate initial value";', '            end if;',
+                     f'            Ctx.Parameter_Value_{alias} := {package}.Decode (Ctx.Parameter_Codec_{alias}, SDL_Runtime.To_Bytes (Data));',
+                     f'            Ctx.Parameter_Present_{alias} := True;']
+        if readable: body += ['         else']
+        body += ['            raise Protocol_Error with "unknown readable parameter";']
+        if readable: body += ['         end if;']
+        body += ['      end Parameter_Update;']
+    body += ['      procedure Clear is' , '      begin']
     for port in node['inputs']:
         body += [f'         Selected.{port} := null; Free_{port} (Value_{port}); Present_{port} := False;']
     if not node['inputs']: body += ['         null;']
@@ -101,8 +137,17 @@ def generate(name, node, handler, sdl_root, schemas, destination, identity):
              '      Ctx.Config := To_Unbounded_String (Body_Text (E));']
     for port, desc in node['outputs'].items():
         body += [f'      Ctx.Output_{port} := {types[desc["root"]][0]}.Prepare ({literal(desc["catalogue"])});']
-    body += ['      Started := True; On_Start (Self, Ctx); Ready;', '      loop', '         Read_Event (E);', '         case Op (E) is',
+    for alias, desc in node.get('parameter_bindings', {}).items():
+        body += [f'      Ctx.Parameter_Codec_{alias} := {types[desc["root"]][0]}.Prepare ({literal(desc["catalogue"])});']
+    for alias, desc in node.get('parameter_bindings', {}).items():
+        if 'read' in desc['access']:
+            body += ['      Read_Event (E); Parameter_Update (E, True);']
+    if node.get('parameter_bindings'): body += ['      Ctx.Parameter_Writes := True; Ctx.Owner := Ada.Task_Identification.Current_Task;']
+    body += ['      Started := True; On_Start (Self, Ctx);']
+    if node.get('parameter_bindings'): body += ['      Ctx.Parameter_Writes := False;']
+    body += ['      Ready (' + ('True' if node.get('parameter_bindings') else 'False') + ');' , '      loop', '         Read_Event (E);', '         case Op (E) is',
              "         when 'X' =>", '            if Body_Size (E) /= 0 then raise Protocol_Error with "invalid STOP"; end if;', '            exit;',
+             *(["         when 'U' => Parameter_Update (E);"] if node.get('parameter_bindings') else []),
              "         when 'D' =>", '            declare', '               Port, Cat : Unbounded_String;', '               Data : SDL_Runtime.Buffer;',
              '            begin', '               Input (E, Port, Cat, Data);']
     for i, (port, desc) in enumerate(node['inputs'].items()):
@@ -124,11 +169,14 @@ def generate(name, node, handler, sdl_root, schemas, destination, identity):
     body += ['            end;', "         when 'T' =>"]
     for port, desc in node['inputs'].items():
         if desc.get('required', True): body += [f'            if not Present_{port} then raise Protocol_Error with "missing required input"; end if;']
+    if node.get('parameter_bindings'): body += ['            Ctx.Parameter_Writes := True;']
     body += ['            Tick (E, Ctx.Time, Ctx.Index); Ctx.Active := True; Ctx.Owner := Ada.Task_Identification.Current_Task;',
-             '            On_Tick (Self, Ctx, Selected); Ctx.Active := False; Clear; Finish;',
+             '            On_Tick (Self, Ctx, Selected); Ctx.Active := False;',
+             *(['            Ctx.Parameter_Writes := False;'] if node.get('parameter_bindings') else []),
+             '            Clear; Finish;',
              '         when others => raise Protocol_Error with "unexpected opcode";', '         end case;', '      end loop;',
              '      Clear; Started := False; On_Stop (Self, Ctx);', '   exception when others =>',
-             '      Ctx.Active := False; Clear;', '      if Started then',
+             '      Ctx.Active := False; Clear;', *(['      Ctx.Parameter_Writes := False;'] if node.get('parameter_bindings') else []), '      if Started then',
              '         begin On_Stop (Self, Ctx); exception when others => null; end;', '      end if;', '      raise;',
              '   end Run;', f'end {api};', '']
     (destination / (stem + '.adb')).write_text('\n'.join(body))

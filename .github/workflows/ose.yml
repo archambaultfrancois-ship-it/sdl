@@ -54,3 +54,5 @@ jobs:
           java-version: '7'
       - name: Verify actual Java 7 compilation and execution
         run: make -C ose test-java
+      - name: Verify shared parameters on Java 7
+        run: PYTHONPATH="$PWD/ose/src" TEST_LANGUAGES=java python -m unittest discover -s ose/tests/integration -p 'test_parameters.py' -k java -v

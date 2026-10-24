@@ -52,7 +52,7 @@ int chain_send(char op, const void *data, size_t size) {
     return fwrite(b,1,4,stdout)==4 && fwrite(&op,1,1,stdout)==1 &&
            (!size || fwrite(data,1,size,stdout)==size) && fflush(stdout)==0;
 }
-int chain_publish(const char *port, const void *payload, size_t size) {
+static int named_send(char op, const char *port, const void *payload, size_t size) {
     size_t n=strlen(port);
     uint8_t *data;
     int ok;
@@ -61,14 +61,27 @@ int chain_publish(const char *port, const void *payload, size_t size) {
     if (!data) return 0;
     data[0]=(uint8_t)(n>>8); data[1]=(uint8_t)n;
     memcpy(data+2,port,n); memcpy(data+2+n,payload,size);
-    ok=chain_send('P',data,2+n+size); free(data); return ok;
+    ok=chain_send(op,data,2+n+size); free(data); return ok;
+}
+int chain_publish(const char *port, const void *payload, size_t size) {
+    return named_send('P', port, payload, size);
+}
+int chain_set_parameters(const char *name, const void *payload, size_t size) {
+    ChainEvent result;
+    int ok;
+    if (!named_send('S', name, payload, size) || !chain_read(&result)) return 0;
+    ok = result.op == 'A' && result.size == 1 && result.data[0] == 1;
+    if (!ok && result.op == 'A' && result.size > 1 && result.data[0] == 0)
+        fprintf(stderr, "parameter write: %.*s\n", (int)(result.size - 1), (const char *)result.data + 1);
+    chain_release(&result);
+    return ok;
 }
 int chain_input(const ChainEvent *event, const uint8_t **port, size_t *port_size,
                 const uint8_t **catalogue, size_t *catalogue_size,
                 const uint8_t **payload, size_t *payload_size) {
     const uint8_t *data;
     size_t n,c;
-    if (event->op!='D' || event->size<6) return 0;
+    if ((event->op!='D' && event->op!='U') || event->size<6) return 0;
     data=event->data;
     n=((size_t)data[0]<<8)|data[1];
     if (n>event->size-6) return 0;

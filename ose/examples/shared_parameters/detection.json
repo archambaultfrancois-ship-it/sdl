@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "threshold": 85.0,
+  "hysteresis": 5.0,
+  "window_ms": 200
+}

@@ -21,6 +21,135 @@ fn guard<T: Default>(f: impl FnOnce() -> Result<T>) -> T {
         }
     }
 }
+
+pub struct ParameterPacket {
+    header: CString,
+    payload: Vec<u8>,
+}
+#[no_mangle]
+pub unsafe extern "C" fn cenv_parameters_connect(
+    host: *const c_char,
+    port: u16,
+    client: *const c_char,
+    token: *const c_char,
+    ca: *const c_char,
+    certificate: *const c_char,
+    key: *const c_char,
+) -> *mut parameters::ParameterClient {
+    guard(|| {
+        let result = if ca.is_null() && certificate.is_null() && key.is_null() {
+            parameters::ParameterClient::connect(
+                string(host)?,
+                port,
+                string(client)?,
+                string(token)?,
+            )?
+        } else {
+            parameters::ParameterClient::connect_tls(
+                string(host)?,
+                port,
+                string(client)?,
+                parameters::TlsConfig {
+                    ca: string(ca)?,
+                    certificate: string(certificate)?,
+                    key: string(key)?,
+                },
+            )?
+        };
+        Ok(Box::into_raw(Box::new(result)))
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn cenv_parameters_free(client: *mut parameters::ParameterClient) {
+    if !client.is_null() {
+        drop(Box::from_raw(client));
+    }
+}
+#[no_mangle]
+pub unsafe extern "C" fn cenv_parameters_request(
+    client: *mut parameters::ParameterClient,
+    op: *const c_char,
+    arguments: *const c_char,
+    payload: *const u8,
+    size: usize,
+) -> *mut ParameterPacket {
+    guard(|| {
+        let client = client
+            .as_ref()
+            .ok_or_else(|| Error::new("argument", "NULL parameter client"))?;
+        let (header, payload) = client.request(
+            string(op)?,
+            json::parse(string(arguments)?.as_bytes())?,
+            bytes(payload, size)?,
+        )?;
+        Ok(Box::into_raw(Box::new(ParameterPacket {
+            header: cstring(header.stringify()),
+            payload,
+        })))
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn cenv_parameter_packet_header(
+    packet: *const ParameterPacket,
+) -> *const c_char {
+    packet
+        .as_ref()
+        .map(|p| p.header.as_ptr())
+        .unwrap_or(std::ptr::null())
+}
+#[no_mangle]
+pub unsafe extern "C" fn cenv_parameter_path_request(
+    client: *mut parameters::ParameterClient,
+    op: *const c_char,
+    path: *const c_char,
+    payload: *const u8,
+    size: usize,
+) -> *mut ParameterPacket {
+    guard(|| {
+        let client = client
+            .as_ref()
+            .ok_or_else(|| Error::new("argument", "NULL parameter client"))?;
+        let (header, payload) = client.request(
+            string(op)?,
+            object([("path", string(path)?.into())]),
+            bytes(payload, size)?,
+        )?;
+        Ok(Box::into_raw(Box::new(ParameterPacket {
+            header: cstring(header.stringify()),
+            payload,
+        })))
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn cenv_parameter_packet_text(
+    packet: *const ParameterPacket,
+    key: *const c_char,
+) -> *mut c_char {
+    guard(|| {
+        let packet = packet
+            .as_ref()
+            .ok_or_else(|| Error::new("argument", "NULL parameter packet"))?;
+        let header = json::parse(packet.header.as_bytes())?;
+        Ok(cstring(header.get(string(key)?)?.text()?).into_raw())
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn cenv_parameter_packet_data(packet: *const ParameterPacket) -> *const u8 {
+    packet
+        .as_ref()
+        .map(|p| p.payload.as_ptr())
+        .unwrap_or(std::ptr::null())
+}
+#[no_mangle]
+pub unsafe extern "C" fn cenv_parameter_packet_size(packet: *const ParameterPacket) -> usize {
+    packet.as_ref().map(|p| p.payload.len()).unwrap_or(0)
+}
+#[no_mangle]
+pub unsafe extern "C" fn cenv_parameter_packet_free(packet: *mut ParameterPacket) {
+    if !packet.is_null() {
+        drop(Box::from_raw(packet));
+    }
+}
 unsafe fn string<'a>(p: *const c_char) -> Result<&'a str> {
     if p.is_null() {
         return Err(Error::new("argument", "NULL string"));

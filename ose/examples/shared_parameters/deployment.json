@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "components": {
+    "detector_1": {
+      "container": {
+        "language": "python",
+        "handler": "detector.py"
+      }
+    },
+    "detector_2": {
+      "container": {
+        "language": "python",
+        "handler": "detector.py"
+      }
+    }
+  },
+  "parameter_clients": {
+    "operator": {
+      "read": [
+        "atelier/security",
+        "machines/press_1/detection",
+        "machines/press_2/detection"
+      ],
+      "write": [
+        "atelier/security",
+        "machines/press_1/detection",
+        "machines/press_2/detection"
+      ],
+      "token": "local-example-parameters"
+    }
+  }
+}

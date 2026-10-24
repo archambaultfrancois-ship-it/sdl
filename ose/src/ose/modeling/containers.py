@@ -40,9 +40,9 @@ def generate_python(name, node, handler, sdl_root, schemas, destination):
             (parent / "__init__.py").touch()
             parent = parent.parent
 
-    imports, aliases, mapped = [], {}, {"inputs": {}, "outputs": {}}
+    imports, aliases, mapped = [], {}, {"inputs": {}, "outputs": {}, "parameter_bindings": {}}
     for direction in mapped:
-        for port, desc in node[direction].items():
+        for port, desc in node.get(direction, {}).items():
             module, symbol = roots[desc["root"]]
             key = (module, symbol)
             if key not in aliases:
@@ -56,16 +56,22 @@ def generate_python(name, node, handler, sdl_root, schemas, destination):
              "sys.path.insert(0, str(Path(__file__).resolve().parent / 'types'))",
              "from ose.execution.callbacks import CallbackContext, run_callbacks",
              *imports, "", "", "class Context(CallbackContext):"]
-    if not mapped["outputs"]:
+    if not mapped["outputs"] and not mapped["parameter_bindings"]:
         lines.append("    pass")
     for port, alias in mapped["outputs"].items():
         lines += [f"    def publish_{port}(self, message: {alias}) -> None:",
                   f"        self.publish({port!r}, message)", ""]
+    for alias, typ in mapped['parameter_bindings'].items():
+        access = node['parameter_bindings'][alias]['access']
+        if 'read' in access:
+            lines += [f"    def parameters_{alias}(self) -> {typ}:", f"        return self.parameter({alias!r})", ""]
+        if 'write' in access:
+            lines += [f"    def set_parameters_{alias}(self, value: {typ}) -> None:", f"        self.set_parameter({alias!r}, value)", ""]
     def mapping(direction):
         return "{" + ", ".join(f"{port!r}: {alias}" for port, alias in mapped[direction].items()) + "}"
     lines += ["", "if __name__ == '__main__':",
               f"    run_callbacks(name={name!r}, handler={str(handler)!r}, sdl_root={str(sdl_root)!r},",
-              f"                  input_types={mapping('inputs')}, output_types={mapping('outputs')}, context_type=Context)", ""]
+              f"                  input_types={mapping('inputs')}, output_types={mapping('outputs')}, context_type=Context, parameter_types={mapping('parameter_bindings')})", ""]
     path = destination / "container.py"
     path.write_text("\n".join(lines))
     return path

@@ -25,6 +25,10 @@ test-integration:
 	SDL_ROOT="$(SDL_ROOT)" $(PYTHON) -m unittest discover -s tests/integration -v
 test-distributed:
 	SDL_ROOT="$(SDL_ROOT)" $(PYTHON) -m unittest discover -s tests/integration -p 'test_distributed.py' -v
+.PHONY: test-parameters
+test-parameters:
+	SDL_ROOT="$(SDL_ROOT)" $(PYTHON) -m unittest discover -s tests/unit -p 'test_parameters.py' -v
+	SDL_ROOT="$(SDL_ROOT)" $(PYTHON) -m unittest discover -s tests/integration -p 'test_parameters.py' -v
 test-simulated:
 	SDL_ROOT="$(SDL_ROOT)" $(PYTHON) -m unittest discover -s tests/simulation -v
 

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "events": [
+    {
+      "at": 1,
+      "parameter": "machines/press_1/detection",
+      "value": {
+        "enabled": true,
+        "threshold": 85.0,
+        "hysteresis": 5.0,
+        "window_ms": 200
+      }
+    }
+  ]
+}

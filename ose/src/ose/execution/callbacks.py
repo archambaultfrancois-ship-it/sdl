@@ -10,7 +10,7 @@ from ose.execution.component import ComponentSession
 
 class CallbackContext:
     """Component parameters and typed publication, valid during a scheduled tick."""
-    def __init__(self, session, name, input_types, output_types, codec):
+    def __init__(self, session, name, input_types, output_types, codec, parameter_types=None):
         self.session, self.name, self.codec = session, name, codec
         self.config = session.config
         self.parameters = self.config.get("parameters", {})
@@ -21,6 +21,16 @@ class CallbackContext:
             for port, cls in types.items():
                 if codec.api.message_name(cls) != self.config[direction][port]["root"]:
                     raise ValueError("generated types differ from INIT; rebuild the container")
+        self._parameter_writes = True
+        self.parameter_types = parameter_types or {}
+        if set(self.parameter_types) != set(self.config.get('parameter_bindings', {})):
+            raise ValueError('generated parameter bindings differ from INIT; rebuild the container')
+        self._parameter_codecs = {}
+        for alias, cls in self.parameter_types.items():
+            binding = self.config['parameter_bindings'][alias]
+            if codec.api.message_name(cls) != binding['root']:
+                raise ValueError('generated parameter root differs from INIT')
+            self._parameter_codecs[alias] = codec.api.prepare(binding['catalogue'], [cls])
         self._active = False
         self._decoders = OrderedDict()
         self._encoders = {port: codec.api.prepare(self.config["outputs"][port]["catalogue"], [cls])
@@ -45,6 +55,24 @@ class CallbackContext:
         if not isinstance(message, self.output_types[port]):
             raise TypeError(f"output {port} expects {self.output_types[port].__name__}")
         self.session.publish(port, self.codec.api.encode(self._encoders[port], message))
+
+    def parameter(self, alias):
+        binding = self.config.get('parameter_bindings', {}).get(alias)
+        if binding is None or 'read' not in binding['access']:
+            raise ValueError('parameter read access denied')
+        catalogue, payload = self.session.parameter_values[alias]
+        value = self.codec.api.decode(self._parameter_codecs[alias], payload)
+        if not isinstance(value, self.parameter_types[alias]):
+            raise ValueError('wrong parameter message root')
+        return value
+
+    def set_parameter(self, alias, value):
+        if not self._parameter_writes:
+            raise RuntimeError("parameter writes require an active initialization or tick callback")
+        if alias not in self.parameter_types or not isinstance(value, self.parameter_types[alias]):
+            raise TypeError('wrong parameter message type')
+        payload = self.codec.api.encode(self._parameter_codecs[alias], value)
+        self.session.set_parameters(alias, payload)
 
     def _decode(self, raw):
         if set(raw) - set(self.input_types):
@@ -113,11 +141,14 @@ def _call(callback, *args):
 
 
 def run_callbacks(*, name, handler, sdl_root, input_types, output_types,
-                  context_type=CallbackContext, reader=None, writer=None):
+                  context_type=CallbackContext, reader=None, writer=None, parameter_types=None):
     """Dispatch one complete scheduler snapshot, finishing only successful ticks."""
     codec = SDL2(sdl_root)
     session = ComponentSession(reader, writer, auto_ready=False, timed_ticks=True)
-    context = context_type(session, name, input_types, output_types, codec)
+    if parameter_types:
+        context = context_type(session, name, input_types, output_types, codec, parameter_types)
+    else:
+        context = context_type(session, name, input_types, output_types, codec)
     module = _load_handler(handler)
     start = _callback(module, "on_start", 1)
     stop = _callback(module, "on_stop", 1)
@@ -126,10 +157,12 @@ def run_callbacks(*, name, handler, sdl_root, input_types, output_types,
     try:
         if start:
             _call(start, context)
+        context._parameter_writes = False
         session.ready()
         for raw in session.ticks():
             inputs = context._decode(raw)
             context._active = True
+            context._parameter_writes = True
             try:
                 if tick:
                     _call(tick, context, inputs) if input_types else _call(tick, context)
@@ -139,6 +172,8 @@ def run_callbacks(*, name, handler, sdl_root, input_types, output_types,
                             _call(callback, context, inputs[port])
             finally:
                 context._active = False
+                context._parameter_writes = False
     finally:
+        context._parameter_writes = False
         if stop:
             _call(stop, context)

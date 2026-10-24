@@ -22,6 +22,15 @@ class Event:
         return body
 
 
+@dataclass(frozen=True)
+class ParameterEvent:
+    at: int
+    index: int
+    parameter: str
+    path: Path
+    payload: bytes
+
+
 def envelope_bytes(path):
     with path.open("rb") as stream:
         body = stream.read(MAX_SIZE + 1)
@@ -30,7 +39,7 @@ def envelope_bytes(path):
     return body
 
 
-def read_scenario(path, topics, codec):
+def read_scenario(path, topics, codec, parameters=None):
     if path is None:
         return []
     path = Path(path).resolve()
@@ -40,6 +49,17 @@ def read_scenario(path, topics, codec):
         raise ValueError("scenario events must be a list")
     events = []
     for index, event in enumerate(document["events"]):
+        if isinstance(event, dict) and 'parameter' in event:
+            fields(event, ('at', 'parameter', 'value'), ('at', 'parameter', 'value'))
+            key = event['parameter']
+            if parameters is None or not isinstance(key, str) or key not in parameters.blocks:
+                raise ValueError('scenario must update a declared shared parameter block')
+            from ose.parameters.values import Values
+            desc = parameters.blocks[key]
+            payload = Values(codec.api, desc['catalogue'], desc['root']).encode(event['value'])
+            parameters.validate(key, payload)
+            events.append(ParameterEvent(seconds_ns(event['at']), index, key, path, payload))
+            continue
         fields(event, ("at", "topic", "envelope"), ("at", "topic", "envelope"))
         if not isinstance(event["topic"], str) or event["topic"] not in topics:
             raise ValueError("scenario must publish to a declared external topic")

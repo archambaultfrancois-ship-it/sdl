@@ -8,6 +8,7 @@ from ose.delivery.buffers import Buffer
 from ose.delivery.policies import SubscriptionPolicy
 from ose.delivery.stores import MemoryStore
 from ose.execution import ipc
+from ose.parameters.bindings import RemoteBindings, updates
 from ose.execution.process import start_component, tick_events, stop_component
 from ose.execution.scheduler import Scheduler, reserve_snapshot
 from ose.execution.observation import TickTimings
@@ -121,6 +122,8 @@ class Adapter:
     async def _work(self):
         while True:
             self.activity.clear()
+            if hasattr(self, "parameters"):
+                await updates(self.process, self.node, self.parameters.drain())
             selected = self.scheduler.select()
             if selected is None:
                 try:
@@ -133,7 +136,8 @@ class Adapter:
             self.tick_index += 1
             timestamp = time.monotonic_ns() - self.activated_at_ns if self.timed_ticks else None
             async for port, payload in self.timings.events(
-                    tick_events(self.process, self.node, selected, timestamp, self.tick_index)):
+                    tick_events(self.process, self.node, selected, timestamp, self.tick_index,
+                                **({"parameters": self.parameters} if self.node.get("parameter_bindings") else {}))):
                 desc = self.node["outputs"][port]
                 envelope = self.codec.wrap(desc["catalogue"], payload)
                 result, _ = await self.client.request("publish", envelope, timeout=self.request_timeout, topic=f"{self.name}.{port}")
@@ -162,7 +166,8 @@ class Adapter:
                     client = await Client.connect(host, port, on_data, self.plan["max_frame"])
                     self.data_clients[identity] = client
                     await client.request("attach", node=self.name, subscription=identity)
-            self.process, self.timed_ticks = await start_component(self.node)
+            self.parameters = await RemoteBindings(self.node, self.client.request, self.activity).open()
+            self.process, self.timed_ticks = await start_component(self.node, self.parameters)
             await self.client.request("ready")
             # Supervisor activates delivery only after every component is ready.
             while True:
@@ -175,11 +180,15 @@ class Adapter:
             tasks = [*(asyncio.create_task(self._receiver(identity)) for identity in self.subscriptions),
                      asyncio.create_task(self._work()), asyncio.create_task(self._report()), self.client.task,
                      *(client.task for client in self.data_clients.values()), asyncio.create_task(self.process.wait())]
+            if self.parameters.task:
+                tasks.append(self.parameters.task)
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 task.result()
             raise RuntimeError(f"component {self.name} stopped unexpectedly")
         finally:
+            if hasattr(self, "parameters"):
+                await self.parameters.close()
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)

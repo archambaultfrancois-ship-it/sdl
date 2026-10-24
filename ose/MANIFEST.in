@@ -1,9 +1,10 @@
 include README.md Makefile sdl-dependency.json
 recursive-include docs *.md
 recursive-include sdk *.md *.py *.c *.h *.rs *.toml *.java *.ads *.adb
-recursive-include examples *.json *.sdl *.py *.c *.rs *.toml *.java *.ads *.adb
+recursive-include examples *.json *.sdl *.py *.c *.rs *.toml *.java *.ads *.adb *.md Makefile
 recursive-include tests *.py *.java *.ads *.adb
 recursive-include .github *.yml
 prune build
+prune examples/shared_parameters/build
 prune sdk/rust/target
 global-exclude *.pyc

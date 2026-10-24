@@ -14,7 +14,8 @@ package Chain_Component is
    procedure Input (E : Event; Port, Catalogue : out Ada.Strings.Unbounded.Unbounded_String;
                     Payload : out SDL_Runtime.Buffer);
    procedure Tick (E : Event; Time_Ns, Tick_Index : in out Interfaces.Unsigned_64);
-   procedure Ready;
+   procedure Ready (Parameters : Boolean := False);
+   procedure Set_Parameters (Name : String; Payload : SDL_Runtime.Bytes);
    procedure Finish;
    procedure Publish (Port : String; Payload : SDL_Runtime.Bytes);
    overriding procedure Finalize (E : in out Event);

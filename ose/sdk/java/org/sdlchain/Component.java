@@ -80,6 +80,52 @@ public final class Component {
         private Thread owner;
         private final Port[] outputs;
         private final OutputStream stream;
+        private InputStream inputStream;
+        private Port[] parameters = new Port[0];
+        private boolean[] parameterRead = new boolean[0], parameterWrite = new boolean[0];
+        private byte[][] parameterValues = new byte[0][];
+        protected final void configureParameters(Port[] ports, boolean[] readable, boolean[] writable) {
+            parameters = ports; parameterRead = readable; parameterWrite = writable;
+            parameterValues = new byte[ports.length][];
+        }
+        protected final Object parameter(int slot) throws IOException {
+            if (slot < 0 || slot >= parameters.length || !parameterRead[slot] || parameterValues[slot] == null)
+                throw new IOException("parameter is not readable");
+            return parameters[slot].decode(parameters[slot].catalogue, parameterValues[slot]);
+        }
+        protected final void setParameter(int slot, SdlCodec.Message value) throws IOException {
+            if (owner != Thread.currentThread()) throw new IllegalStateException("parameter writes require an active callback");
+            if (slot < 0 || slot >= parameters.length || !parameterWrite[slot] || !parameters[slot].type.isInstance(value))
+                throw new IOException("invalid writable parameter");
+            Port port = parameters[slot];
+            byte[] name = utf8(port.name), payload = SdlCodec.encode(port.encoder, value);
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream(); DataOutputStream data = new DataOutputStream(bytes);
+            data.writeShort(name.length); data.write(name); data.write(payload);
+            send(stream, 'S', bytes.toByteArray());
+            Frame result = read(inputStream);
+            if (result.op == 'A' && Arrays.equals(result.body, new byte[]{1})) return;
+            if (result.op == 'A' && result.body.length > 0 && result.body[0] == 0)
+                throw new IOException(text(Arrays.copyOfRange(result.body, 1, result.body.length)));
+            throw new IOException("invalid parameter write result");
+        }
+        private void parameterUpdate(Frame event, boolean initial) throws IOException {
+            if (event.op != 'U') throw new IOException("expected parameter update");
+            DataInputStream data = new DataInputStream(new ByteArrayInputStream(event.body));
+            int length = data.readUnsignedShort();
+            if (length == 0 || length > data.available() - 4) throw new IOException("invalid parameter alias");
+            byte[] name = new byte[length]; data.readFully(name);
+            String alias = text(name); int slot = -1;
+            for (int i = 0; i < parameters.length; ++i) if (parameters[i].name.equals(alias)) slot = i;
+            if (slot < 0 || !parameterRead[slot] || (initial && parameterValues[slot] != null))
+                throw new IOException("unknown or duplicate initial parameter");
+            int catSize = data.readInt();
+            if (catSize < 1 || catSize > data.available()) throw new IOException("invalid parameter catalogue");
+            byte[] catalogue = new byte[catSize]; data.readFully(catalogue);
+            byte[] payload = new byte[data.available()]; data.readFully(payload);
+            if (!parameters[slot].catalogue.equals(text(catalogue))) throw new IOException("wrong parameter catalogue");
+            parameters[slot].decode(parameters[slot].catalogue, payload);
+            parameterValues[slot] = payload;
+        }
         public Context(String name, Port[] outputs) { this(name, outputs, System.out); }
         public Context(String name, Port[] outputs, OutputStream stream) {
             this.name = name; this.outputs = outputs; this.stream = stream;
@@ -118,15 +164,21 @@ public final class Component {
         Frame init = read(stream);
         if (init.op != 'I') throw new IOException("expected INIT");
         ctx.configJson = text(init.body);
+        ctx.inputStream = stream;
         // Validate JSON before exposing INIT to user code.
         if (!(Json.parse(ctx.configJson) instanceof Map)) throw new IOException("INIT must be a JSON object");
         boolean started = false; Throwable failure = null;
         try {
-            started = true; callbacks.start(); send(ctx.stream, 'R', new byte[]{1});
+            for (int i = 0; i < ctx.parameters.length; ++i)
+                if (ctx.parameterRead[i]) ctx.parameterUpdate(read(stream), true);
+            started = true; ctx.owner = Thread.currentThread();
+            try { callbacks.start(); } finally { ctx.owner = null; }
+            send(ctx.stream, 'R', new byte[]{(byte)(ctx.parameters.length == 0 ? 1 : 3)});
             Object[] selected = new Object[inputs.length]; boolean[] present = new boolean[inputs.length];
             for (;;) {
                 Frame event = read(stream);
                 if (event.op == 'X') { if (event.body.length != 0) throw new IOException("invalid STOP"); break; }
+                if (event.op == 'U') { ctx.parameterUpdate(event, false); continue; }
                 if (event.op == 'D') {
                     DataInputStream data = new DataInputStream(new ByteArrayInputStream(event.body));
                     int size = data.readUnsignedShort();

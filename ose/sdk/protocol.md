@@ -9,19 +9,24 @@ catalogue-relative message ID, without S2PS/2 (the adapter adds/removes it).
 | Opcode | Direction | Body |
 | --- | --- | --- |
 | `I` INIT | Adapter → component | JSON component configuration, parameters and port catalogues |
-| `R` READY | Component → engine | Empty (legacy), or byte `0x01` to support timestamped TICKs |
+| `R` READY | Component → engine | Empty (legacy), byte `0x01` for timestamped TICKs, or `0x03` for ticks and shared parameters |
 | `D` INPUT | Adapter → component | u16 port length, port, u32 catalogue length, catalogue, SDL2 payload |
 | `T` TICK | Engine → component | Empty (legacy), or u64 time_ns then u64 tick_index; preceding INPUTs form the snapshot |
 | `P` PUBLISH | Component → adapter | u16 port length, port, SDL2 payload |
 | `F` FINISHED | Component → adapter | Empty |
 | `X` STOP | Adapter → component | Empty |
+| `U` PARAMETER UPDATE | Adapter → component | Alias/catalogue/SDL payload, same layout as INPUT |
+| `S` PARAMETER SET | Component → adapter | Alias/SDL payload, same layout as PUBLISH |
+| `A` PARAMETER RESULT | Adapter → component | Byte 1, or byte 0 followed by a UTF-8 error |
 
 Timestamp fields are unsigned and big endian. An extended TICK has exactly 16
 body bytes and a positive component-local tick index, starting at one. A component
 advertises support with READY body `0x01`. The real-time adapter sends extended
 ticks only to capable components and retains empty ticks for legacy READYs.
 Simulation requires the capability and rejects legacy components before ticking.
-Other READY bodies and malformed TICK contexts are rejected.
+READY `0x03` also supports shared parameter blocks; other bodies and malformed
+TICK contexts are rejected. See [shared parameters](../docs/parameters.md) for
+initial UPDATE frames before user initialization, typed APIs and snapshot rules.
 
 Updated generated containers advertise the capability automatically and accept
 empty historical ticks too, using time zero and the next local index. Raw Python

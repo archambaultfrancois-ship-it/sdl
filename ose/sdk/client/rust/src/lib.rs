@@ -13,6 +13,9 @@ use std::{
 };
 mod ffi;
 pub mod json;
+pub mod parameters;
+#[cfg(unix)]
+mod parameters_tls;
 use json::{object, Json};
 #[derive(Clone, Debug)]
 pub struct Error {

@@ -68,9 +68,12 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
     bindings = destination / "types"
     types = merge_schemas(name, "c", schemas, bindings)
     reserved = {"ChainContext", "ChainPortSpec", "ChainHook", "ComponentCallbacks", "main", "dispatch", "inputs", "outputs",
-                "chain_now", "chain_time_ns", "chain_tick_index"}
+                "chain_now", "chain_time_ns", "chain_tick_index", "parameters", "ChainParameterSpec",
+                "chain_parameter_value", "chain_set_parameter_value", "chain_run_callbacks_parameters"}
     if node["inputs"]:
         reserved.add("ComponentInputs")
+    reserved.update('parameters_' + alias for alias in node.get('parameter_bindings', {}))
+    reserved.update('set_parameters_' + alias for alias in node.get('parameter_bindings', {}))
     reserved.update("publish_" + port for port in node["outputs"])
     reserved.update("Input_" + port for port in node["inputs"])
     reserved.update("Output_" + port for port in node["outputs"])
@@ -94,6 +97,12 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
     header += ["} ComponentCallbacks;", "extern const ComponentCallbacks component_callbacks;"]
     for port, desc in node["outputs"].items():
         header.append(f"int publish_{port}(ChainContext *, const {types[desc['root']][1]} *);")
+    for alias, desc in node.get('parameter_bindings', {}).items():
+        typ = types[desc['root']][1]
+        if 'read' in desc['access']:
+            header.append(f"const {typ} *parameters_{alias}(const ChainContext *);")
+        if 'write' in desc['access']:
+            header.append(f"int set_parameters_{alias}(ChainContext *, const {typ} *);")
     header += ["#endif", ""]
     (destination / "component.h").write_text("\n".join(header))
     source = ['/* Generated from the component model. */', '#include "component.h"', '#include <stdio.h>']
@@ -111,6 +120,17 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
     for index, (port, desc) in enumerate(node["outputs"].items()):
         source += [f"int publish_{port}(ChainContext *ctx, const {types[desc['root']][1]} *message) {{",
                    f"    return chain_publish_value(ctx, {index}, message);", "}"]
+    source += ['static const ChainParameterSpec parameters[] = {']
+    for alias, desc in node.get('parameter_bindings', {}).items():
+        source.append('    {' + ', '.join((c_string(alias), c_string(desc['root']), c_string(desc['catalogue']),
+            '1' if 'read' in desc['access'] else '0', '1' if 'write' in desc['access'] else '0')) + '},')
+    source += ['    {NULL, NULL, NULL, 0, 0}', '};']
+    for index, (alias, desc) in enumerate(node.get('parameter_bindings', {}).items()):
+        typ = types[desc['root']][1]
+        if 'read' in desc['access']:
+            source += [f'const {typ} *parameters_{alias}(const ChainContext *ctx) {{ return chain_parameter_value(ctx, {index}); }}']
+        if 'write' in desc['access']:
+            source += [f'int set_parameters_{alias}(ChainContext *ctx, const {typ} *value) {{ return chain_set_parameter_value(ctx, {index}, value); }}']
     source += ["static int dispatch(ChainContext *ctx) {"]
     if node["inputs"]:
         source += ["    ComponentInputs selected;"]
@@ -129,7 +149,7 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
     source += [f"    if ({condition}) {{", '        fputs("missing component callbacks\\n", stderr); return 1;', "    }"]
     for function in sorted(registrations):
         source.append(f"    if (!{function}()) return 1;")
-    source += [f"    return chain_run_callbacks({c_string(name)}, inputs, {len(node['inputs'])}, outputs, {len(node['outputs'])},",
+    source += [f"    return chain_run_callbacks_parameters({c_string(name)}, inputs, {len(node['inputs'])}, outputs, {len(node['outputs'])}, parameters, {len(node.get('parameter_bindings', {}))},",
                "        component_callbacks.on_start, dispatch, component_callbacks.on_stop);", "}", ""]
     (destination / "container.c").write_text("\n".join(source))
     sdk = sdk_root() / "c"
@@ -153,9 +173,14 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
              "fn codec<T>(value: std::result::Result<T, sdl_runtime::CodecError>) -> Result<T> {",
              '    value.map_err(|error| format!("SDL codec: {error:?}").into())', "}",
              "pub struct Context {", "    pub name: &'static str,", "    pub config_json: String,", "    active: bool,",
-             "    tick: sdl_chain_component::TickContext,"]
+             "    tick: sdl_chain_component::TickContext,", "    parameter_writes: bool,"]
     for port in node["outputs"]:
         lines.append(f"    output_{port}: sdl_runtime::Context,")
+    for alias, desc in node.get('parameter_bindings', {}).items():
+        module, symbol = types[desc['root']]
+        lines.append(f'    parameter_codec_{alias}: sdl_runtime::Context,')
+        if 'read' in desc['access']:
+            lines.append(f'    parameter_value_{alias}: Option<crate::types::{module}::{symbol}>,')
     lines += ["}", "impl Context {",
               "    pub fn time_ns(&self) -> u64 { self.tick.time_ns }",
               "    pub fn tick_index(&self) -> u64 { self.tick.tick_index }",
@@ -165,6 +190,26 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
         lines += [f"    pub fn publish_{port}(&mut self, message: &crate::types::{module}::{symbol}) -> Result {{",
                   '        if !self.active { return Err("publication is only allowed inside a tick callback".into()); }',
                   f"        publish({rust_string(port)}, &codec(sdl_runtime::encode(&self.output_{port}, message))?)?;", "        Ok(())", "    }"]
+    for alias, desc in node.get('parameter_bindings', {}).items():
+        module, symbol = types[desc['root']]
+        typ = f'crate::types::{module}::{symbol}'
+        if 'read' in desc['access']:
+            lines += [f'    pub fn parameters_{alias}(&self) -> &{typ} {{ self.parameter_value_{alias}.as_ref().expect("missing initial parameters") }}']
+        if 'write' in desc['access']:
+            lines += [f'    pub fn set_parameters_{alias}(&mut self, value: &{typ}) -> Result {{',
+                      '        if !self.parameter_writes { return Err("parameter writes require an active callback".into()); }',
+                      f'        sdl_chain_component::set_parameters({rust_string(alias)}, &codec(sdl_runtime::encode(&self.parameter_codec_{alias}, value))?)?;',
+                      '        Ok(())', '    }']
+    if node.get('parameter_bindings'):
+        lines += ['    fn parameter_update(&mut self, event: &sdl_chain_component::Event, initial: bool) -> Result {',
+                  '        if event.op != b\'U\' { return Err("expected parameter update".into()); }',
+                  '        let data = input(event)?;', '        match data.port {']
+        for alias, desc in node['parameter_bindings'].items():
+            if 'read' not in desc['access']: continue
+            lines += [f'            {rust_string(alias)} => {{',
+                      f'                if data.catalogue != {rust_string(desc["catalogue"])} || (initial && self.parameter_value_{alias}.is_some()) {{ return Err("invalid parameter update".into()); }}',
+                      f'                self.parameter_value_{alias} = Some(codec(sdl_runtime::decode(&self.parameter_codec_{alias}, data.payload))?);', '            }']
+        lines += ['            _ => return Err("unknown readable parameter".into()),', '        }', '        Ok(())', '    }']
     lines.append("}")
     if node["inputs"]:
         lines.append("pub struct Inputs<'a> {")
@@ -193,18 +238,26 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
         lines += ["    fn on_tick(&mut self, _ctx: &mut Context) -> Result {", '        Err("implement on_tick".into())']
     lines += ["    }", "}", "pub fn run<H: Callbacks>(mut handler: H) -> Result {", "    let init = receive()?;",
               '    if init.op != b\'I\' { return Err("expected INIT".into()); }', "    let mut ctx = Context {",
-              f"        name: {rust_string(name)}, config_json: String::from_utf8(init.data)?, active: false, tick: Default::default(),"]
+              f"        name: {rust_string(name)}, config_json: String::from_utf8(init.data)?, active: false, tick: Default::default(), parameter_writes: true,"]
     for port, desc in node["outputs"].items():
         module, symbol = types[desc["root"]]
         lines.append(f"        output_{port}: codec(sdl_runtime::prepare({rust_string(desc['catalogue'])}, &[crate::types::{module}::{symbol}::type_info()]))?,")
+    for alias, desc in node.get('parameter_bindings', {}).items():
+        module, symbol = types[desc['root']]
+        lines.append(f'        parameter_codec_{alias}: codec(sdl_runtime::prepare({rust_string(desc["catalogue"])}, &[crate::types::{module}::{symbol}::type_info()]))?,')
+        if 'read' in desc['access']:
+            lines.append(f'        parameter_value_{alias}: None,')
     lines += ["    };", "    let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result {"]
     for port, desc in node["inputs"].items():
         module, symbol = types[desc["root"]]
         lines += [f"        let mut selected_{port}: Option<crate::types::{module}::{symbol}> = None;",
                   f"        let mut received_{port} = false;",
                   f"        let mut decoder_{port}: Option<(String, sdl_runtime::Context)> = None;"]
-    lines += ["        handler.on_start(&mut ctx)?;", "        send(b'R', sdl_chain_component::TICK_CONTEXT)?;", "        loop {", "            let event = receive()?;",
-              "            match event.op {", "                b'D' => {", "                    let data = input(&event)?;",
+    for alias, desc in node.get('parameter_bindings', {}).items():
+        if 'read' in desc['access']:
+            lines += ['        ctx.parameter_update(&receive()?, true)?;']
+    lines += ["        handler.on_start(&mut ctx)?;", "        ctx.parameter_writes = false;", "        send(b'R', &[3])?;" if node.get("parameter_bindings") else "        send(b'R', sdl_chain_component::TICK_CONTEXT)?;", "        loop {", "            let event = receive()?;",
+              "            match event.op {", *(["                b'U' => ctx.parameter_update(&event, false)?,"] if node.get('parameter_bindings') else []), "                b'D' => {", "                    let data = input(&event)?;",
               "                    match data.port {"]
     for port, desc in node["inputs"].items():
         module, symbol = types[desc["root"]]
@@ -229,19 +282,19 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
     for port, desc in node["inputs"].items():
         if desc.get("required", True):
             lines.append(f'                    if !received_{port} {{ return Err("missing required input: {port}".into()); }}')
-    lines.append("                    ctx.active = true;")
+    lines.append("                    ctx.active = true; ctx.parameter_writes = true;")
     if node["inputs"]:
         fields = ", ".join(f"{port}: selected_{port}.as_ref()" for port in node["inputs"])
         lines.append(f"                    handler.on_tick(&mut ctx, &Inputs {{ {fields} }})?;")
     else:
         lines.append("                    handler.on_tick(&mut ctx)?;")
-    lines += ["                    ctx.active = false;", "                    send(b'F', &[])?;"]
+    lines += ["                    ctx.active = false; ctx.parameter_writes = false;", "                    send(b'F', &[])?;"]
     for port in node["inputs"]:
         lines.append(f"                    selected_{port} = None;")
         lines.append(f"                    received_{port} = false;")
     lines += ["                }", "                b'X' if event.data.is_empty() => return Ok(()),",
               '                _ => return Err("unexpected component event".into()),', "            }", "        }", "    }));",
-              "    ctx.active = false;", "    let stop = handler.on_stop(&mut ctx);", "    match execution {",
+              "    ctx.active = false; ctx.parameter_writes = false;", "    let stop = handler.on_stop(&mut ctx);", "    match execution {",
               "        Ok(result) => result.and(stop),", "        Err(panic) => std::panic::resume_unwind(panic),", "    }", "}", ""]
     (source / "container.rs").write_text("\n".join(lines))
     (source / "main.rs").write_text("// Generated component entry point.\npub mod types;\npub mod container;\n" +

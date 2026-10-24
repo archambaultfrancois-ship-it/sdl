@@ -3,15 +3,18 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass, field
 import heapq
+import hashlib
 import json
 from pathlib import Path
 import signal
 from ose.codec.sdl2 import SDL2
+from ose.parameters.service import ParameterService
+from ose.parameters.bindings import LocalBindings
 from ose.execution.process import start_component, tick_events, stop_component
 from ose.execution.scheduler import reserve_snapshot
 from ose.execution.simulation.clock import MAX_NS, VirtualClock, Schedule, seconds_ns
 from ose.execution.simulation.router import Router
-from ose.execution.simulation.scenario import read_scenario
+from ose.execution.simulation.scenario import read_scenario, ParameterEvent
 from ose.execution.simulation.trace import Trace
 
 DEFAULT_OUTPUT_LIMIT = 16 * 1024 * 1024
@@ -57,11 +60,13 @@ class Simulation:
         self.horizon, self.clock = seconds_ns(duration, positive=True), VirtualClock()
         self.order, self.ancestors = topology(plan)
         self.codec = SDL2(plan["sdl_root"])
+        self.parameter_service = ParameterService(plan, self.codec)
+        self.parameter_bindings = {name: LocalBindings(node, self.parameter_service) for name, node in plan["components"].items()}
         if scenario is not None and events is not None:
             raise ValueError("scenario and prevalidated replay events are mutually exclusive")
         # Replay supplies preflighted disk-backed events with exact nanosecond
         # timestamps, using the same injection and fingerprint checks as scenarios.
-        self.events = (read_scenario(scenario, plan.get("external_topics", {}), self.codec)
+        self.events = (read_scenario(scenario, plan.get("external_topics", {}), self.codec, self.parameter_service)
                        if events is None else events)
         self.event_count = self.events.event_count if hasattr(self.events, "event_count") else len(self.events)
         if self.event_count is None:
@@ -94,9 +99,11 @@ class Simulation:
         self.external_bytes = 0
         self.cursor, self.waves, self.ticks = 0, 0, 0
         self.reason, self.summary = "failed", None
+        self.parameter_changes = 0
+        self.parameter_scenario_events = 0
 
     async def _start(self, name):
-        process, capable = await start_component(self.plan["components"][name])
+        process, capable = await start_component(self.plan["components"][name], self.parameter_bindings[name])
         self.processes[name] = process
         if not capable:
             raise ValueError(f"{name}: simulated execution requires timestamped ticks; rebuild the container or update its SDK")
@@ -106,7 +113,8 @@ class Simulation:
             outputs, size = deque(), 0
             schedule = self.schedules[name]
             async for port, payload in tick_events(self.processes[name], schedule.node, selected,
-                                                  self.clock.time_ns, schedule.tick_index):
+                                                  self.clock.time_ns, schedule.tick_index,
+                                                  **({"parameters": self.parameter_bindings[name]} if schedule.node.get("parameter_bindings") else {})):
                 size += len(payload) + len(port.encode()) + 3
                 if size > self.limit:
                     raise ValueError(f"{name}: tick outputs exceed max_tick_output_bytes={self.limit}")
@@ -125,6 +133,8 @@ class Simulation:
             self.schedules[name].tick_index += 1
             self.trace.emit("tick", component=name, tick_index=self.schedules[name].tick_index,
                             inputs={port: None if record is None else record["id"] for port, record in selected[name].items()})
+        for name in names:
+            self.parameter_bindings[name].staged = {}
         semaphore = asyncio.Semaphore(self.workers)
         tasks = [asyncio.create_task(self._calculate(name, selected[name], semaphore)) for name in names]
         try:
@@ -134,6 +144,13 @@ class Simulation:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+        for name in names:
+            bindings = self.parameter_bindings[name]
+            for path, payload in bindings.staged.items():
+                self.parameter_service.set(path, payload)
+                self.parameter_changes += 1
+                self.trace.emit('parameter', component=name, path=path, sha256=hashlib.sha256(payload).hexdigest())
+            bindings.staged = None
         # No callback output becomes visible until every calculation in the wave succeeded.
         for name, outputs in zip(names, results):
             self.busy[name] = PendingTick(selected[name], deque(enumerate(outputs, 1)))
@@ -176,6 +193,15 @@ class Simulation:
     async def _inject(self):
         while self.cursor < self.event_count and self.events[self.cursor].at == self.clock.time_ns:
             event = self.events[self.cursor]
+            if isinstance(event, ParameterEvent):
+                self.parameter_scenario_events += 1
+                self.parameter_service.set(event.parameter, event.payload)
+                self.parameter_changes += 1
+                self.trace.emit('parameter', component='scenario', path=event.parameter, sha256=hashlib.sha256(event.payload).hexdigest())
+                self.cursor += 1
+                if self.cursor % 64 == 0:
+                    await asyncio.sleep(0)
+                continue
             publication = self.router.publish(event.topic, event.read(), f"scenario:{event.index}")
             self.router.advance(publication)
             if publication.pending:
@@ -206,16 +232,22 @@ class Simulation:
         return dict(mode="simulated", functional=True, transport_simulation=False, running=False,
                     time_ns=self.clock.time_ns, ticks=self.ticks, waves=self.waves, publications=self.router.sequence,
                     stop_reason=self.reason, waiting_inputs=waiting, pending_ticks=len(self.busy),
-                    pending_external=len(self.external), external_events=self.cursor,
+                    pending_external=len(self.external), external_events=self.cursor - self.parameter_scenario_events, parameter_changes=self.parameter_changes,
                     inputs={name: {port: buffer.snapshot() for port, buffer in buffers.items()}
                             for name, buffers in self.router.buffers.items()}, trace_sha256=self.trace.digest.hexdigest())
 
     async def execute(self):
         starting = []
         try:
-            starting = [asyncio.create_task(self._start(name)) for name in self.order]
-            await asyncio.wait_for(asyncio.gather(*starting), 20)
+            if self.plan.get('shared_parameters'):
+                for name in self.order:
+                    await asyncio.wait_for(self._start(name), 20)
+            else:
+                starting = [asyncio.create_task(self._start(name)) for name in self.order]
+                await asyncio.wait_for(asyncio.gather(*starting), 20)
             self.trace.emit("start", duration_ns=self.horizon, functional=True)
+            for path, payload in sorted(self.parameter_service.values.items()):
+                self.trace.emit('parameter_initial', path=path, sha256=hashlib.sha256(payload).hexdigest())
             while self.clock.time_ns < self.horizon:
                 await self._inject()
                 while await self._pump():
@@ -257,6 +289,7 @@ class Simulation:
             finally:
                 self.trace.close()
                 self.router.close()
+                self.parameter_service.close()
                 self.busy.clear()
                 self.external.clear()
                 self.external_bytes = 0

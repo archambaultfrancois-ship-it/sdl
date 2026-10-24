@@ -12,6 +12,7 @@ from ose.delivery.stores import MemoryStore
 from ose.transport.tcp import TCP
 from ose.transport.udp import UDP
 from ose.transport.protocol import encode
+from ose.parameters.service import ParameterEndpoint, OPERATIONS as PARAMETER_OPERATIONS
 from ose.recording.taps import TapHub, OPERATIONS as RECORDING_OPERATIONS
 from ose.execution.observation import describe
 
@@ -19,6 +20,7 @@ from ose.execution.observation import describe
 class Broker(Sessions):
     def __init__(self, plan):
         self.plan, self.codec = plan, SDL2(plan["sdl_root"])
+        self.parameters = ParameterEndpoint(plan, self.codec)
         self.catalogues, self.topics, self.engines = {}, {}, {}
         self.epoch, self.sequence = uuid.uuid4().hex, 0
         self.retained, self.peers, self.ready, self.metrics = {}, {}, set(), Counter()
@@ -92,10 +94,35 @@ class Broker(Sessions):
         data_subscription = None
         session = None
         publications = set()
+        parameter_polls = set()
         try:
             while not self.closing:
                 header, body = await peer.receive()
                 op = header["op"]
+                if op in PARAMETER_OPERATIONS:
+                    try:
+                        if session is not None or data_subscription is not None:
+                            raise ValueError("parameter operations require a separate control session")
+                        if op == 'parameters_next':
+                            if parameter_polls:
+                                raise ValueError('one active parameter poll per connection required')
+                            poll = asyncio.create_task(self._parameter_reply(peer, header, body, node))
+                            parameter_polls.add(poll)
+                            def completed(poll):
+                                parameter_polls.discard(poll)
+                                if not poll.cancelled():
+                                    poll.exception()
+                            poll.add_done_callback(completed)
+                            continue
+                        result, binary = await self.parameters.request(peer, header, body,
+                            node=self.plan["components"][node] if node is not None else None)
+                        await self._reply(peer, header["request"], result, binary=binary)
+                    except (ValueError, KeyError, TypeError) as error:
+                        await self._reply(peer, header.get("request"), error=str(error), error_code="parameters")
+                    continue
+                if peer in self.parameters.external:
+                    await self._reply(peer, header.get("request"), error="parameter-only client session")
+                    continue
                 if op in RECORDING_OPERATIONS:
                     try:
                         if not self.limits["enabled"]:
@@ -230,6 +257,10 @@ class Broker(Sessions):
         except (asyncio.IncompleteReadError, ConnectionError, ValueError):
             pass
         finally:
+            for poll in parameter_polls:
+                poll.cancel()
+            await asyncio.gather(*parameter_polls, return_exceptions=True)
+            self.parameters.disconnect(peer)
             self.recording.disconnected(peer)
             pending = list(publications)
             for publication in pending:
@@ -248,6 +279,14 @@ class Broker(Sessions):
                     self.engines[data_subscription].store.notify()
             self.connections.discard(task)
             await peer.close()
+
+    async def _parameter_reply(self, peer, header, body, node):
+        try:
+            result, binary = await self.parameters.request(peer, header, body,
+                node=self.plan['components'][node] if node is not None else None)
+            await self._reply(peer, header['request'], result, binary=binary)
+        except (ValueError, KeyError, TypeError) as error:
+            await self._reply(peer, header.get('request'), error=str(error), error_code='parameters')
 
     async def _reply(self, peer, request, result=None, *, binary=None, error=None, error_code=None):
         header = {"op": "result", "request": request}
@@ -393,7 +432,7 @@ class Broker(Sessions):
             "generation": self.generations.get(name),
             "report_age_ms": (time.monotonic() - self.metric_times[name]) * 1000 if name in self.metric_times else None}
             for name, desc in self.observation["components"].items()}}
-        return {"epoch": self.epoch, "observation": observation,
+        return {"epoch": self.epoch, "observation": observation, "parameters": self.parameters.service.snapshot(),
                 "enabled": self.enabled, "ready": sorted(self.ready), "subscriptions": {key: engine.snapshot() for key, engine in self.engines.items()},
                 "components": dict(self.metrics), "udp_errors": self.udp.errors, "errors": self.errors,
                 "topics": {topic: {"root": port["root"], "publications": self.topic_counts[topic],
@@ -403,6 +442,7 @@ class Broker(Sessions):
 
     async def close(self):
         self.closing = True
+        self.parameters.close()
         self.recording.close()
         self.enabled = False
         for task in self.send_tasks:

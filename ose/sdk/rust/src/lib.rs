@@ -41,16 +41,26 @@ pub fn send(op: u8, data: &[u8]) -> io::Result<()> {
     writer.write_all(data)?;
     writer.flush()
 }
-pub fn publish(port: &str, payload: &[u8]) -> io::Result<()> {
+fn named_send(op: u8, port: &str, payload: &[u8]) -> io::Result<()> {
     if port.len() > u16::MAX as usize { return Err(invalid("port too long")); }
     let mut data = Vec::new();
     data.extend_from_slice(&(port.len() as u16).to_be_bytes());
     data.extend_from_slice(port.as_bytes()); data.extend_from_slice(payload);
-    send(b'P', &data)
+    send(op, &data)
+}
+pub fn publish(port: &str, payload: &[u8]) -> io::Result<()> { named_send(b'P', port, payload) }
+pub fn set_parameters(name: &str, payload: &[u8]) -> io::Result<()> {
+    named_send(b'S', name, payload)?;
+    let result = receive()?;
+    if result.op == b'A' && result.data == [1] { return Ok(()); }
+    if result.op == b'A' && result.data.first() == Some(&0) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, String::from_utf8_lossy(&result.data[1..]).into_owned()));
+    }
+    Err(invalid("invalid parameter write result"))
 }
 pub fn input(event: &Event) -> io::Result<Input<'_>> {
     let d = &event.data;
-    if event.op != b'D' || d.len() < 6 { return Err(invalid("expected input")); }
+    if !matches!(event.op, b'D' | b'U') || d.len() < 6 { return Err(invalid("expected input")); }
     let n = u16::from_be_bytes([d[0],d[1]]) as usize;
     if n > d.len()-6 { return Err(invalid("truncated port")); }
     let c = u32::from_be_bytes(d[2+n..6+n].try_into().unwrap()) as usize;

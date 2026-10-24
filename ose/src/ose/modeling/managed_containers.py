@@ -111,7 +111,7 @@ def generate_java(name, node, handler, sdl_root, schemas, destination, identity)
         return '.'.join(types[desc['root']])
     def ports(direction):
         expressions = []
-        for index, (port, desc) in enumerate(node[direction].items()):
+        for index, (port, desc) in enumerate(node.get(direction, {}).items()):
             resource = direction + '_' + str(index) + '.sdl'
             target = classes / package.replace('.', '/') / resource
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -125,9 +125,18 @@ def generate_java(name, node, handler, sdl_root, schemas, destination, identity)
         methods += [f'        ports[{i}] = {direction}_{i}();' for i in range(len(expressions))]
         methods += ['        return ports;', '    }']
         return methods
-    lines = [f'package {package};', 'import org.sdlchain.Component;', 'public final class API {'] + ports('inputs') + ports('outputs')
+    lines = [f'package {package};', 'import org.sdlchain.Component;', 'public final class API {'] + ports('inputs') + ports('outputs') + ports('parameter_bindings')
     lines += ['    public static final class Context extends Component.Context {',
               f'        public Context() throws Exception {{ super({java_string(name)}, outputs()); }}']
+    if node.get('parameter_bindings'):
+        readable = ','.join(str('read' in b['access']).lower() for b in node['parameter_bindings'].values())
+        writable = ','.join(str('write' in b['access']).lower() for b in node['parameter_bindings'].values())
+        lines[-1] = f'        public Context() throws Exception {{ super({java_string(name)}, outputs()); configureParameters(parameter_bindings(), new boolean[]{{{readable}}}, new boolean[]{{{writable}}}); }}'
+        for i, (alias, desc) in enumerate(node['parameter_bindings'].items()):
+            if 'read' in desc['access']:
+                lines += [f'        public {typ(desc)} parameters_{alias}() throws Exception {{ return ({typ(desc)})parameter({i}); }}']
+            if 'write' in desc['access']:
+                lines += [f'        public void set_parameters_{alias}({typ(desc)} value) throws Exception {{ setParameter({i}, value); }}']
     for i, (port, desc) in enumerate(node['outputs'].items()):
         lines += [f'        public void publish_{port}({typ(desc)} message) throws Exception {{ publish({i}, message); }}']
     lines += ['    }', '    public static final class Inputs {']

@@ -21,6 +21,8 @@ package body Chain_Component is
                      Catalogue : access System.Address; Catalogue_Size : access Interfaces.C.size_t;
                      Payload : access System.Address; Payload_Size : access Interfaces.C.size_t) return Interfaces.C.int
      with Import, Convention => C, External_Name => "chain_input";
+   function C_Set_Parameters (Name : Interfaces.C.char_array; Data : System.Address; Size : Interfaces.C.size_t) return Interfaces.C.int
+     with Import, Convention => C, External_Name => "chain_set_parameters";
    procedure Check (Result : Interfaces.C.int) is
    begin
       if Result = 0 then raise Protocol_Error with "invalid or incomplete CH/1 frame"; end if;
@@ -63,7 +65,17 @@ package body Chain_Component is
       end if;
       Check (C_Tick (E.Raw'Access, T'Access, I'Access)); Time_Ns := T; Tick_Index := I;
    end Tick;
-   procedure Ready is begin Check (C_Ready); end Ready;
+   procedure Ready (Parameters : Boolean := False) is
+      Capability : aliased Interfaces.C.unsigned_char := 3;
+   begin
+      if Parameters then
+         Check (C_Send (Interfaces.C.To_C ('R'), Capability'Address, 1));
+      else Check (C_Ready); end if;
+   end Ready;
+   procedure Set_Parameters (Name : String; Payload : SDL_Runtime.Bytes) is
+   begin
+      Check (C_Set_Parameters (Interfaces.C.To_C (Name), Payload'Address, Interfaces.C.size_t (Payload'Length)));
+   end Set_Parameters;
    procedure Finish is begin Check (C_Send (Interfaces.C.To_C ('F'), System.Null_Address, 0)); end Finish;
    procedure Publish (Port : String; Payload : SDL_Runtime.Bytes) is
    begin

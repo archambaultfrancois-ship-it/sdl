@@ -1,4 +1,5 @@
 """Resolve and build a graph using only the public SDL generator/runtime."""
+import base64
 import hashlib
 import json
 import os
@@ -25,13 +26,15 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
     destination.mkdir(parents=True, exist_ok=True)
     codec, schema_cache, generated_paths = SDL2(sdl_root), {}, {}
     schema_languages = {}
+    parameter_defs = model.get("shared_parameters", {})
     for component, node in model["components"].items():
         language = deployment["components"][component].get("container", {}).get("language")
-        for direction in ("inputs", "outputs"):
-            for desc in node[direction].values():
-                schema_path = (model_path.parent / desc.get("schema", model["schemas"])).resolve()
-                if language:
-                    schema_languages.setdefault(schema_path, set()).add(language)
+        descriptions = [desc for direction in ("inputs", "outputs") for desc in node[direction].values()]
+        descriptions += [parameter_defs[b["path"]] for b in node.get("parameter_bindings", {}).values()]
+        for desc in descriptions:
+            schema_path = (model_path.parent / desc.get("schema", model["schemas"])).resolve()
+            if language:
+                schema_languages.setdefault(schema_path, set()).add(language)
     def catalogue(path):
         path = (model_path.parent / path).resolve()
         if path not in schema_cache:
@@ -59,6 +62,17 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
                 raise ValueError("container handler must be outside the generated build directory")
             handlers[name] = handler
     catalogue(model["schemas"])
+    from ose.parameters.values import Values
+    shared_parameters, parameter_codecs = {}, {}
+    for path, desc in parameter_defs.items():
+        text = catalogue(desc.get("schema", model["schemas"]))
+        key = (text, desc["root"])
+        if key not in parameter_codecs:
+            parameter_codecs[key] = Values(codec.api, text, desc["root"])
+        payload = parameter_codecs[key].encode(desc["initial"])
+        shared_parameters[path] = {"root": desc["root"], "catalogue": text,
+                                   "initial_payload": base64.b64encode(payload).decode()}
+
     for name, original in model["components"].items():
         node = json.loads(json.dumps(original))
         for direction in ("inputs", "outputs"):
@@ -67,13 +81,17 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
                 port["catalogue_id"] = codec.identity(port["catalogue"])
                 if port["root"] not in codec.api.message_names(codec.api.prepare(port["catalogue"])):
                     raise ValueError(f"unknown root {port['root']}")
+        for alias, binding in node.get("parameter_bindings", {}).items():
+            desc = shared_parameters[binding["path"]]
+            binding.update(root=desc["root"], catalogue=desc["catalogue"])
         execution = deployment["components"][name]
         generated_build = []
         if "container" in execution:
             handler = handlers[name]
             language = execution["container"]["language"]
             paths = dict.fromkeys((model_path.parent / desc.get("schema", model["schemas"])).resolve()
-                                  for direction in ("inputs", "outputs") for desc in node[direction].values())
+                                  for desc in [d for direction in ("inputs", "outputs") for d in node[direction].values()] +
+                                  [parameter_defs[b["path"]] for b in node.get("parameter_bindings", {}).values()])
             schemas = [(generated_paths[path] / language, codec.python_bindings(generated_paths[path]) if language == "python"
                         else codec.native_bindings(generated_paths[path], language)) for path in paths]
             component_dir = destination / "components" / name
@@ -130,7 +148,10 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
         value = deployment.get(key, default)
         if type(value) is not int or value < 128 or (key == "max_datagram" and value > 65507):
             raise ValueError(f"invalid {key}")
+    from ose.parameters.service import ParameterService
+    ParameterService({"shared_parameters": shared_parameters, "max_frame": deployment.get("max_frame", 1024 * 1024)}, codec)
     return {"version": 1, "execution": deployment.get("execution", "local"), "sdl_root": str(codec.root), "components": components, "subscriptions": subscriptions,
+            "shared_parameters": shared_parameters, "parameter_clients": deployment.get("parameter_clients", {}),
             "external_topics": external_topics, "broker": deployment.get("broker", {}), "build_dir": str(destination), "max_frame": deployment.get("max_frame", 1024 * 1024),
             "max_datagram": deployment.get("max_datagram", 1200)}
 

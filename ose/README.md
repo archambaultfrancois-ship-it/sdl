@@ -95,6 +95,13 @@ failure counts, as well as observed average publication and processing rates.
 
 ## Model and SDK
 
+[Shared parameter blocks](docs/parameters.md) provide named SDL settings with
+per-component read/write bindings, initial values before `on_start`, and updates
+between callbacks. Several components may share a block; the last complete write
+replaces its value. CLI and external clients can read, write and watch selected
+blocks locally or through the distributed coordinator. See the runnable
+[two-detector example](examples/shared_parameters/README.md).
+
 See [architecture](docs/architecture.md) for document fields and process layout,
 [runtime execution](docs/runtime.md) for ticks, message flow and acknowledgements,
 [simulation](docs/simulation.md) for reproducible virtual-time execution and parallel workers,

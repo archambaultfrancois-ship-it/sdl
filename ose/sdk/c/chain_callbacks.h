@@ -18,12 +18,23 @@ typedef struct {
     int required;
     double timeout; /* Seconds; zero means no timeout. Timed inputs may be NULL. */
 } ChainPortSpec;
+typedef struct {
+    const char *name, *root, *catalogue;
+    int readable, writable;
+} ChainParameterSpec;
 typedef int (*ChainHook)(ChainContext *);
 
 int chain_run_callbacks(const char *name,
     const ChainPortSpec *inputs, size_t input_count,
     const ChainPortSpec *outputs, size_t output_count,
     ChainHook start, ChainHook dispatch, ChainHook stop);
+int chain_run_callbacks_parameters(const char *name,
+    const ChainPortSpec *inputs, size_t input_count,
+    const ChainPortSpec *outputs, size_t output_count,
+    const ChainParameterSpec *parameters, size_t parameter_count,
+    ChainHook start, ChainHook dispatch, ChainHook stop);
+const void *chain_parameter_value(const ChainContext *, size_t index);
+int chain_set_parameter_value(ChainContext *, size_t index, const void *value);
 /* Borrowed decoded values last until the callback returns. A timed-out input
  * has an explicit INPUT frame and a NULL value. Missing required frames fail. */
 const void *chain_input_value(ChainContext *, size_t index);

@@ -17,7 +17,11 @@ typedef struct {
     size_t input_count, output_count;
     Input *selected;
     SdlContext **encoders;
-    int active, failed;
+    const ChainParameterSpec *parameters;
+    size_t parameter_count;
+    Input *parameter_values;
+    SdlContext **parameter_codecs;
+    int active, failed, parameter_writes;
 } Runtime;
 
 double chain_now(const ChainContext *ctx) { return (double)ctx->time_ns / 1000000000.0; }
@@ -48,6 +52,46 @@ int chain_publish_value(ChainContext *ctx, size_t index, const void *value) {
     result = chain_publish(runtime->outputs[index].name, payload, size);
     type_free(payload);
     return result ? 1 : chain_fail(ctx, "output IPC failed");
+}
+
+const void *chain_parameter_value(const ChainContext *ctx, size_t index) {
+    Runtime *runtime = ctx->private_runtime;
+    return index < runtime->parameter_count && runtime->parameters[index].readable
+        ? runtime->parameter_values[index].message : NULL;
+}
+int chain_set_parameter_value(ChainContext *ctx, size_t index, const void *value) {
+    Runtime *runtime = ctx->private_runtime;
+    void *payload;
+    size_t size;
+    int ok;
+    if (!runtime->parameter_writes || index >= runtime->parameter_count || !runtime->parameters[index].writable || !value) return 0;
+    payload = type_encode(runtime->parameter_codecs[index], runtime->parameters[index].root, value, &size);
+    if (!payload) return 0;
+    ok = chain_set_parameters(runtime->parameters[index].name, payload, size);
+    type_free(payload);
+    return ok;
+}
+static int parameter_update(ChainContext *ctx, const ChainEvent *event, int initial) {
+    Runtime *runtime = ctx->private_runtime;
+    const uint8_t *name, *text, *payload;
+    const char *root;
+    size_t n, text_size, payload_size, i;
+    void *value;
+    if (event->op != 'U' || !chain_input(event, &name, &n, &text, &text_size, &payload, &payload_size)) return 0;
+    for (i = 0; i < runtime->parameter_count; ++i)
+        if (strlen(runtime->parameters[i].name) == n && !memcmp(runtime->parameters[i].name, name, n)) break;
+    if (i == runtime->parameter_count || !runtime->parameters[i].readable ||
+        (initial && runtime->parameter_values[i].present) ||
+        strlen(runtime->parameters[i].catalogue) != text_size ||
+        memcmp(runtime->parameters[i].catalogue, text, text_size)) return 0;
+    root = type_message_name(runtime->parameter_codecs[i], payload, payload_size);
+    if (!root || strcmp(root, runtime->parameters[i].root)) return 0;
+    value = type_decode(runtime->parameter_codecs[i], payload, payload_size);
+    if (!value) return 0;
+    type_free(runtime->parameter_values[i].message);
+    runtime->parameter_values[i].message = value;
+    runtime->parameter_values[i].present = 1;
+    return 1;
 }
 
 static int admit(ChainContext *ctx, const ChainEvent *event) {
@@ -98,9 +142,10 @@ static int admit(ChainContext *ctx, const ChainEvent *event) {
     return input->message ? 1 : chain_fail(ctx, "SDL input decoding failed");
 }
 
-int chain_run_callbacks(const char *name,
+int chain_run_callbacks_parameters(const char *name,
     const ChainPortSpec *inputs, size_t input_count,
     const ChainPortSpec *outputs, size_t output_count,
+    const ChainParameterSpec *parameters, size_t parameter_count,
     ChainHook start, ChainHook dispatch, ChainHook stop) {
     Runtime runtime;
     ChainContext ctx;
@@ -110,12 +155,15 @@ int chain_run_callbacks(const char *name,
     int result = 1, initialized = 0;
     memset(&runtime, 0, sizeof(runtime));
     memset(&ctx, 0, sizeof(ctx));
+    runtime.parameters = parameters; runtime.parameter_count = parameter_count;
+    runtime.parameter_values = calloc(parameter_count ? parameter_count : 1, sizeof(Input));
+    runtime.parameter_codecs = calloc(parameter_count ? parameter_count : 1, sizeof(SdlContext *));
     runtime.inputs = inputs; runtime.outputs = outputs;
     runtime.input_count = input_count; runtime.output_count = output_count;
     ctx.name = name; ctx.private_runtime = &runtime;
     runtime.selected = calloc(input_count ? input_count : 1, sizeof(Input));
     runtime.encoders = calloc(output_count ? output_count : 1, sizeof(SdlContext *));
-    if (!runtime.selected || !runtime.encoders) goto cleanup;
+    if (!runtime.selected || !runtime.encoders || !runtime.parameter_values || !runtime.parameter_codecs) goto cleanup;
     if (!chain_read(&event)) goto cleanup;
     if (event.op != 'I' || memchr(event.data, 0, event.size)) { chain_release(&event); goto cleanup; }
     config = malloc(event.size + 1);
@@ -126,12 +174,28 @@ int chain_run_callbacks(const char *name,
         runtime.encoders[index] = type_prepare(outputs[index].catalogue, strlen(outputs[index].catalogue));
         if (!runtime.encoders[index]) goto cleanup;
     }
-    initialized = 1;
-    if ((start && !start(&ctx)) || runtime.failed || !chain_ready()) goto cleanup;
+    for (index = 0; index < parameter_count; ++index) {
+        runtime.parameter_codecs[index] = type_prepare(parameters[index].catalogue, strlen(parameters[index].catalogue));
+        if (!runtime.parameter_codecs[index]) goto cleanup;
+    }
+    for (index = 0; index < parameter_count; ++index) {
+        int valid;
+        if (!parameters[index].readable) continue;
+        if (!chain_read(&event)) goto cleanup;
+        valid = parameter_update(&ctx, &event, 1);
+        chain_release(&event);
+        if (!valid) goto cleanup;
+    }
+    initialized = 1; runtime.parameter_writes = 1;
+    if ((start && !start(&ctx)) || runtime.failed) goto cleanup;
+    runtime.parameter_writes = 0;
+    { const uint8_t capabilities = parameter_count ? 3 : 1;
+      if (!chain_send('R', &capabilities, 1)) goto cleanup; }
     while (chain_read(&event)) {
         char op = event.op;
         int valid = 1;
-        if (op == 'D') valid = admit(&ctx, &event);
+        if (op == 'U') valid = parameter_update(&ctx, &event, 0);
+        else if (op == 'D') valid = admit(&ctx, &event);
         else if (op == 'T') {
             if (!chain_tick(&event, &ctx.time_ns, &ctx.tick_index)) valid = chain_fail(&ctx, "invalid tick context");
         } else if (event.size || op != 'X') valid = chain_fail(&ctx, "unexpected component event");
@@ -144,9 +208,9 @@ int chain_run_callbacks(const char *name,
                 chain_fail(&ctx, "missing required input"); goto cleanup;
             }
         }
-        runtime.active = 1;
+        runtime.active = 1; runtime.parameter_writes = 1;
         valid = dispatch(&ctx);
-        runtime.active = 0;
+        runtime.active = 0; runtime.parameter_writes = 0;
         if (!valid || runtime.failed || !chain_send('F', NULL, 0)) goto cleanup;
         for (index = 0; index < input_count; ++index) {
             type_free(runtime.selected[index].message); runtime.selected[index].message = NULL;
@@ -154,7 +218,7 @@ int chain_run_callbacks(const char *name,
         }
     }
 cleanup:
-    runtime.active = 0;
+    runtime.active = 0; runtime.parameter_writes = 0;
     if (initialized && stop && !stop(&ctx)) result = 1;
     if (runtime.failed) result = 1;
     if (result) fprintf(stderr, "%s: component initialization, callback or IPC failed\n", name);
@@ -164,6 +228,19 @@ cleanup:
     }
     for (index = 0; runtime.encoders && index < output_count; ++index)
         type_context_free(runtime.encoders[index]);
+    for (index = 0; index < parameter_count; ++index) {
+        if (runtime.parameter_values) type_free(runtime.parameter_values[index].message);
+        if (runtime.parameter_codecs) type_context_free(runtime.parameter_codecs[index]);
+    }
+    free(runtime.parameter_values); free(runtime.parameter_codecs);
     free(runtime.selected); free(runtime.encoders); free(config);
     return result;
+}
+
+int chain_run_callbacks(const char *name,
+    const ChainPortSpec *inputs, size_t input_count,
+    const ChainPortSpec *outputs, size_t output_count,
+    ChainHook start, ChainHook dispatch, ChainHook stop) {
+    return chain_run_callbacks_parameters(name, inputs, input_count, outputs, output_count,
+        NULL, 0, start, dispatch, stop);
 }

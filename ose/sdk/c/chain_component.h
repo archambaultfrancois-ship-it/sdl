@@ -8,6 +8,7 @@ int chain_read(ChainEvent *event);
 void chain_release(ChainEvent *event);
 int chain_send(char op, const void *data, size_t size);
 int chain_publish(const char *port, const void *payload, size_t size);
+int chain_set_parameters(const char *name, const void *payload, size_t size);
 /* Opt in to timestamped ticks. Historical chain_send('R', NULL, 0) stays valid. */
 int chain_ready(void);
 /* Empty historical TICKs return time zero and the next local index. */

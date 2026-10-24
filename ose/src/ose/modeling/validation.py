@@ -5,8 +5,8 @@ from ose.modeling.model import fields
 
 
 def validate_graph(model, deployment):
-    fields(model, ("version", "schemas", "components", "subscriptions", "external_topics"), ("version", "schemas", "components", "subscriptions"))
-    fields(deployment, ("version", "components", "subscriptions", "max_frame", "max_datagram", "broker", "execution"), ("version", "components"))
+    fields(model, ("version", "schemas", "components", "subscriptions", "external_topics", "shared_parameters"), ("version", "schemas", "components", "subscriptions"))
+    fields(deployment, ("version", "components", "subscriptions", "max_frame", "max_datagram", "broker", "execution", "parameter_clients"), ("version", "components"))
     if deployment.get("execution", "local") not in ("local", "distributed"):
         raise ValueError("execution must be local or distributed")
     distributed = deployment.get("execution") == "distributed"
@@ -43,10 +43,12 @@ def validate_graph(model, deployment):
         raise ValueError("components must be a nonempty object")
     if set(deployment["components"]) != set(components):
         raise ValueError("deployment must cover exactly the model components")
+    from ose.parameters.model import validate_parameters
+    validate_parameters(model, deployment)
     for name, node in components.items():
         if not name or "." in name:
             raise ValueError("component names must be nonempty and contain no dots")
-        fields(node, ("inputs", "outputs", "trigger", "parameters"), ("inputs", "outputs", "trigger"))
+        fields(node, ("inputs", "outputs", "trigger", "parameters", "parameter_bindings"), ("inputs", "outputs", "trigger"))
         if not isinstance(node.get("parameters", {}), dict):
             raise ValueError("parameters must be an object")
         for direction in ("inputs", "outputs"):

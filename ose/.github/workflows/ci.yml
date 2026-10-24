@@ -64,3 +64,5 @@ jobs:
       - name: Select SDL project
         run: echo "SDL_ROOT=$PWD/build/sdl-dependency/${{ steps.sdl.outputs.subdirectory }}" >> "$GITHUB_ENV"
       - run: make test-java
+      - name: Verify shared parameters on Java 7
+        run: PYTHONPATH="$PWD/src" TEST_LANGUAGES=java python -m unittest discover -s tests/integration -p 'test_parameters.py' -k java -v

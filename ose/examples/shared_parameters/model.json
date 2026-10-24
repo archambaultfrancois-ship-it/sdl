@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "schemas": "settings.sdl",
+  "shared_parameters": {
+    "atelier/security": {
+      "root": "SafetySettings",
+      "initial": {
+        "enabled": true,
+        "maximum_threshold": 100.0
+      }
+    },
+    "machines/press_1/detection": {
+      "root": "DetectionParams",
+      "initial": {
+        "enabled": true,
+        "threshold": 80.0,
+        "hysteresis": 5.0,
+        "window_ms": 200
+      }
+    },
+    "machines/press_2/detection": {
+      "root": "DetectionParams",
+      "initial": {
+        "enabled": true,
+        "threshold": 90.0,
+        "hysteresis": 5.0,
+        "window_ms": 200
+      }
+    }
+  },
+  "components": {
+    "detector_1": {
+      "inputs": {},
+      "outputs": {},
+      "trigger": {
+        "mode": "periodic",
+        "period_ms": 100
+      },
+      "parameter_bindings": {
+        "detection": {
+          "path": "machines/press_1/detection",
+          "access": "read"
+        },
+        "security": {
+          "path": "atelier/security",
+          "access": "read"
+        }
+      }
+    },
+    "detector_2": {
+      "inputs": {},
+      "outputs": {},
+      "trigger": {
+        "mode": "periodic",
+        "period_ms": 100
+      },
+      "parameter_bindings": {
+        "detection": {
+          "path": "machines/press_2/detection",
+          "access": "read"
+        },
+        "security": {
+          "path": "atelier/security",
+          "access": "read"
+        }
+      }
+    }
+  },
+  "subscriptions": []
+}
