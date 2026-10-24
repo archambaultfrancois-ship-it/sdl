@@ -6,7 +6,9 @@ case 'prepare'
  names=regexp(catalogue,'(?:^SDL2\||\|)([^#|{}]+)\{','tokens');
  for k=1:numel(names)
   owner=names{k}{1};fn=regexprep(owner,'[^\w.]','_');
-  if exist(fn,'file')||~isempty(which(fn))
+  % Octave 6 cannot resolve dotted package names with exist/which.
+  parts=strsplit(fn,'.');for p=1:numel(parts)-1,parts{p}=['+' parts{p}];end
+  if exist(fn,'file')||~isempty(which(fn))||exist([fullfile(parts{:}) '.m'],'file')
    fields=feval(fn,'fields');bindings{end+1}=struct('owner',owner,'fields',{fields});
   end
  end
