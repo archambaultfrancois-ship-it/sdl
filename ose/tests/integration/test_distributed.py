@@ -150,6 +150,56 @@ class DistributedTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(value == sequence * 2 for sequence, value in self.values()))
         self.assertEqual(self.workers["middle"].metrics["direct_bytes_received"], 0)
 
+    async def test_shutdown_stops_when_wakeup_absorbs_cancellation(self):
+        class RacingEvent:
+            def __init__(self):
+                self.entered = asyncio.Event()
+                self.swallowed = False
+
+            def clear(self): pass
+            def set(self): pass
+
+            async def wait(self):
+                self.entered.set()
+                try:
+                    await asyncio.Future()
+                except asyncio.CancelledError:
+                    if self.swallowed:
+                        raise
+                    # Model Python 3.10 wait_for returning a completed wakeup
+                    # or RPC result instead of propagating cancellation.
+                    self.swallowed = True
+
+        cases = [("_send", "source", "signal", True),
+                 ("_poll", "middle", "signal", True),
+                 ("_heartbeat", "source", None, True),
+                 ("_metrics", "source", None, True),
+                 ("_work", "sink", None, True),
+                 ("_work", "sink", None, False)]
+        for method, name, key, enabled in cases:
+            with self.subTest(method=method, enabled=enabled):
+                worker = Worker(self.plan, name, "127.0.0.1", self.coordinator.port)
+                racing = RacingEvent()
+                worker.directory["enabled"] = enabled
+                worker.epoch, worker.lease_seconds = "test", 1
+
+                async def control(op, body=b"", **kwargs):
+                    await racing.wait()
+                    return {"epoch": worker.epoch, "empty": True}, None
+
+                worker.control = control
+                if method == "_send":
+                    worker.engines[key].store.changed = racing
+                elif method == "_work":
+                    worker.activity = racing
+                coroutine = getattr(worker, method)(key) if key is not None else getattr(worker, method)()
+                task = asyncio.create_task(coroutine)
+                self.tasks[f"{method}:{enabled}"] = task
+                await asyncio.wait_for(racing.entered.wait(), 1)
+                await asyncio.wait_for(worker.close([task]), 1)
+                self.assertTrue(racing.swallowed)
+                self.assertTrue(task.done())
+
     async def test_replacement_preserves_survivors_and_fences_old_direct_sender(self):
         await self.start_graph()
         await self.until(lambda: len(self.values()) >= 5)

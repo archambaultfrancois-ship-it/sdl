@@ -426,6 +426,7 @@ class Worker:
         self.started_at = 0
         self.sequence = 0
         self.direct_clients = {}
+        self.closing = False
 
     def recording_points(self):
         return {f"{self.name}.{port}": dict(topic=f"{self.name}.{port}", root=desc["root"], catalogue=desc["catalogue"],
@@ -475,6 +476,12 @@ class Worker:
             await finish_cleanup(self.close(tasks))
 
     async def close(self, tasks):
+        # Python 3.10 wait_for can absorb cancellation when its child has just
+        # completed. Wakeups and explicit state stop those loops anyway.
+        self.closing = True
+        self.activity.set()
+        for delivery in self.engines.values():
+            delivery.store.notify()
         self.recording.close()
         reader = getattr(getattr(self, "client", None), "task", None)
         for task in tasks:
@@ -499,8 +506,10 @@ class Worker:
             delivery.store.close()
 
     async def _heartbeat(self):
-        while True:
+        while not self.closing:
             result, _ = await self.control("heartbeat")
+            if self.closing:
+                return
             if result["epoch"] != self.epoch:
                 raise ValueError("coordinator generation changed")
             self.directory = result
@@ -511,18 +520,20 @@ class Worker:
             await asyncio.sleep(self.lease_seconds / 4)
 
     async def _watchdog(self):
-        while True:
+        while not self.closing:
             await asyncio.sleep(self.lease_seconds / 4)
             if lease_clock() - self.last_contact >= self.lease_seconds:
                 raise RuntimeError("coordinator authorization expired")
 
     async def _metrics(self):
-        while True:
+        while not self.closing:
             metrics = {**self.metrics, "running": bool(self.started_at),
                        **self.timings.snapshot(self.scheduler),
                        "inputs": {key: value.snapshot() for key, value in self.buffers.items()},
                        "direct": {key: value.snapshot() for key, value in self.engines.items()}}
             await self.control("metrics", json.dumps(metrics).encode())
+            if self.closing:
+                return
             await asyncio.sleep(.5)
 
     async def receive(self, peer, header, body):
@@ -576,8 +587,10 @@ class Worker:
                     return "full"
 
     async def _poll(self, key):
-        while True:
+        while not self.closing:
             result, body = await self.control("poll", subscription=key)
+            if self.closing:
+                return
             if result.get("empty"):
                 continue
             record = result["record"]
@@ -590,13 +603,15 @@ class Worker:
                 await self.control("ack", subscription=key, id=record["id"])
 
     async def _work(self):
-        while not self.directory["enabled"]:
+        while not self.closing and not self.directory["enabled"]:
             self.activity.clear()
             if not self.directory["enabled"]:
                 await self.activity.wait()
+        if self.closing:
+            return
         self.scheduler.start()
         self.started_at = time.monotonic_ns()
-        while True:
+        while not self.closing:
             self.activity.clear()
             selected = self.scheduler.select()
             if selected is None:
@@ -649,10 +664,12 @@ class Worker:
     async def _send(self, key):
         sub, delivery = self.outgoing[key], self.engines[key]
         name = sub["to"].split(".")[0]
-        while True:
+        while not self.closing:
             delivery.store.changed.clear()
             target = self.directory["nodes"].get(name)
             for record in list(delivery.due(limit=32)):
+                if self.closing:
+                    return
                 if target is None or record["target_token"] != target["token"]:
                     delivery.fail(record["id"], "target_generation_changed")
                     continue
@@ -677,6 +694,8 @@ class Worker:
                 except (OSError, ValueError, asyncio.TimeoutError):
                     # A failed attempt still consumes retry budget, with bounded storage.
                     delivery.sent(record["id"])
+            if self.closing:
+                return
             deadline = delivery.store.next_deadline()
             timeout = max(.001, deadline - time.monotonic()) if deadline is not None else None
             try:
