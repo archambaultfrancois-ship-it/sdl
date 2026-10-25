@@ -108,29 +108,35 @@ class DeliveryLimitTests(unittest.IsolatedAsyncioTestCase):
         self.plan["components"]["source"]["outputs"]["output"] = port
         self.plan["components"]["sink"]["inputs"]["input"] = copy.deepcopy(port)
         broker = await self.start()
-        entered, release = asyncio.Event(), asyncio.Event()
-        async def do_not_read(header, body):
-            entered.set()
-            await release.wait()
-        client = await self.client(broker, on_data=do_not_read)
-        await client.request("hello", node="sink", udp_port=1)
-        peer = broker.peers["sink"][0]
-        peer.writer.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
-        envelope = self.codec.wrap(text, b"\x01" + b"x" * 200000)
-        self.codec.validate(text, "Large", envelope)
-        for number in range(10):
-            broker.engines["link"].enqueue({"id": f"{broker.epoch}:{number}", "epoch": broker.epoch,
-                "sequence": number, "topic": "source.output", "body": envelope})
-        broker.enabled = True
+        # Bound the receive window before connecting; a blocked callback alone
+        # still lets the transport and kernel absorb all ten frames on some hosts.
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.addCleanup(sock.close)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16384)
+        sock.setblocking(False)
+        await asyncio.get_running_loop().sock_connect(sock, ("127.0.0.1", broker.port))
+        reader, writer = await asyncio.open_connection(sock=sock)
+        client = TCP(reader, writer)
         try:
-            await asyncio.wait_for(entered.wait(), 3)
+            await client.send({"op": "hello", "request": 1, "node": "sink", "udp_port": 1})
+            header, _ = await client.receive()
+            self.assertNotIn("error", header)
+            writer.transport.pause_reading()
+            peer = broker.peers["sink"][0]
+            peer.writer.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+            envelope = self.codec.wrap(text, b"\x01" + b"x" * 200000)
+            self.codec.validate(text, "Large", envelope)
+            for number in range(10):
+                broker.engines["link"].enqueue({"id": f"{broker.epoch}:{number}", "epoch": broker.epoch,
+                    "sequence": number, "topic": "source.output", "body": envelope})
+            broker.enabled = True
             await eventually(lambda: peer.writer.transport.get_write_buffer_size() > 65536)
             await asyncio.sleep(.4)
             _, high_water = peer.writer.transport.get_write_buffer_limits()
             self.assertLessEqual(peer.writer.transport.get_write_buffer_size(), len(envelope) + high_water + 1024)
             self.assertEqual(broker.engines["link"].metrics["retries"], 0)
         finally:
-            release.set()
+            await client.close()
 
     async def test_tcp_publish_fits_but_oversize_data_is_refused_before_admission(self):
         self.plan["max_frame"] = 256

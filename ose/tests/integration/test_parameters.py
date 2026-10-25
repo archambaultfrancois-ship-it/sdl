@@ -27,7 +27,7 @@ def on_start(ctx):
     ctx.set_parameters_detection(p)
 def on_tick(ctx):
     p = ctx.parameters_detection()
-    ctx.publish_out(p)
+    ctx.publish_result(p)
     p.threshold += 1.0
     ctx.set_parameters_detection(p)
 '''
@@ -40,7 +40,7 @@ static int on_start(ChainContext *ctx) {
 }
 static int on_tick(ChainContext *ctx) {
     Settings p = *parameters_detection(ctx);
-    if (!publish_out(ctx, &p)) return 0;
+    if (!publish_result(ctx, &p)) return 0;
     p.threshold += 1.0;
     return set_parameters_detection(ctx, &p);
 }
@@ -57,7 +57,7 @@ impl Callbacks for Handler {
     }
     fn on_tick(&mut self, ctx: &mut Context) -> Result {
         let mut p = ctx.parameters_detection().clone();
-        ctx.publish_out(&p)?;
+        ctx.publish_result(&p)?;
         p.threshold += 1.0;
         ctx.set_parameters_detection(&p)
     }
@@ -74,7 +74,7 @@ public class ParameterHandler extends API.Handler {
     }
     public void onTick(API.Context ctx, API.Inputs inputs) throws Exception {
         Settings p = ctx.parameters_detection();
-        ctx.publish_out(p);
+        ctx.publish_result(p);
         p.threshold += 1.0;
         ctx.set_parameters_detection(p);
     }
@@ -100,7 +100,7 @@ package body Parameter_Handler is
     overriding procedure On_Tick (Self : in out Object; Ctx : in out Chain_probe.Context; Selected : Chain_probe.Inputs) is
         P : SDL_settings.T_Settings := Chain_probe.Parameters_detection (Ctx);
     begin
-        Chain_probe.Publish_out (Ctx, P);
+        Chain_probe.Publish_result (Ctx, P);
         P.F_threshold := P.F_threshold + 1.0;
         Chain_probe.Set_Parameters_detection (Ctx, P);
     end;
@@ -116,7 +116,7 @@ class ComponentParameterTests(unittest.IsolatedAsyncioTestCase):
             (root / filename).write_text(source)
             if language == 'ada':
                 (root / 'parameter_handler.ads').write_text(ADA_SPEC)
-            node = dict(inputs={}, outputs={'out': {'root': 'Settings'}}, trigger=dict(mode='periodic', period_ms=100),
+            node = dict(inputs={}, outputs={'result': {'root': 'Settings'}}, trigger=dict(mode='periodic', period_ms=100),
                         parameter_bindings={'detection': {'path': 'machine/detection', 'access': 'read_write'}})
             model = dict(version=1, schemas='settings.sdl', components={'probe': node}, subscriptions=[],
                          shared_parameters={'machine/detection': dict(root='Settings', initial={'threshold': 80.})})
@@ -136,8 +136,8 @@ class ComponentParameterTests(unittest.IsolatedAsyncioTestCase):
                 observed = []
                 for index in (1, 2):
                     async for port, payload in tick_events(process, node, {}, 0, index, bindings):
-                        self.assertEqual(port, 'out')
-                        value = codec.api.decode_dynamic(codec.api.prepare(node['outputs']['out']['catalogue']), payload)
+                        self.assertEqual(port, 'result')
+                        value = codec.api.decode_dynamic(codec.api.prepare(node['outputs']['result']['catalogue']), payload)
                         observed.append(value.fields['threshold'])
                 self.assertEqual(observed, [81., 82.])
             finally:

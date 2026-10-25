@@ -1,4 +1,6 @@
 with Chain_Text;
+-- The native client bridge registers foreign threads with the GNAT task runtime.
+with GNAT.Threads;
 with Interfaces.C;
 with Interfaces.C.Strings;
 package body Chain_Parameters is
