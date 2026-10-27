@@ -1,6 +1,7 @@
 """CLI for complete parameter blocks; all access goes through the service."""
 import json
 import os
+import sys
 from pathlib import Path
 from ose.modeling.model import unique_pairs
 
@@ -13,7 +14,7 @@ def parser(commands):
         if name != 'list':
             action.add_argument('path')
         if name == 'set':
-            action.add_argument('--file', required=True)
+            action.add_argument('--file', required=True, help='complete parameter JSON file, or - for stdin')
         if name == 'watch':
             action.add_argument('--count', type=int)
         action.add_argument('--client', required=True)
@@ -30,10 +31,23 @@ def parser(commands):
         action.add_argument('--insecure', action='store_true')
 
 
+def read_value(source):
+    limit = 1024 * 1024
+    if source == '-':
+        data = sys.stdin.buffer.read(limit + 1)
+    else:
+        with Path(source).open('rb') as stream:
+            data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError('parameter JSON exceeds 1 MiB')
+    return json.loads(data.decode('utf-8'), object_pairs_hook=unique_pairs)
+
+
 async def run(options):
     from ose.parameters.client import ParameterClient
     from ose.transport.secure import contexts
     from ose.codec.runtime import Runtime
+    value = read_value(options.file) if options.parameter_action == 'set' else None
     if options.sdl_root:
         from ose.codec.sdl2 import SDL2
         runtime = SDL2(options.sdl_root)
@@ -68,10 +82,6 @@ async def run(options):
         if options.parameter_action == 'get':
             print(json.dumps(await block.get(), allow_nan=False), flush=True)
         elif options.parameter_action == 'set':
-            source = Path(options.file)
-            if source.stat().st_size > 1024 * 1024:
-                raise ValueError('parameter JSON exceeds 1 MiB')
-            value = json.loads(source.read_text(), object_pairs_hook=unique_pairs)
             await block.set(value)
             print(json.dumps({'updated': options.path}), flush=True)
         else:

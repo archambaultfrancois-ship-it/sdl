@@ -44,6 +44,51 @@ case ":$PATH:" in
 esac
 unset _ose_env_path
 
+_ose_env_load_parameter_token() {
+    # Explicit values (including an empty value) always take precedence.
+    # Refresh our own previous value when switching application or client.
+    if [[ ${OSE_PARAMETER_TOKEN+x} && ( ! ${_ose_env_parameter_token_auto+x} ||
+            "${OSE_PARAMETER_TOKEN-}" != "${_ose_env_parameter_token_auto-}" ) ]]; then
+        export OSE_PARAMETER_TOKEN
+        return 0
+    fi
+    unset OSE_PARAMETER_TOKEN _ose_env_parameter_token_auto
+    local configuration token
+    for configuration in "$OSE_APP_ROOT/build/plan.json" \
+            "$OSE_APP_ROOT/deployment.local.json" "$OSE_APP_ROOT/deployment.json"; do
+        [[ -f "$configuration" ]] || continue
+        if ! token=$("$OSE_PYTHON" - "$configuration" "${OSE_PARAMETER_CLIENT:-operator}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+try:
+    document = json.loads(Path(sys.argv[1]).read_text())
+    token = document.get('parameter_clients', {}).get(sys.argv[2], {}).get('token', '')
+    if not isinstance(token, str) or '\0' in token:
+        raise ValueError('parameter client token must be text without NUL characters')
+except (OSError, UnicodeError, ValueError, AttributeError, TypeError) as error:
+    print(f'Cannot load parameter token from {sys.argv[1]}: {error}', file=sys.stderr)
+    sys.exit(1)
+# The final dot preserves any trailing newlines through shell substitution.
+sys.stdout.write(token + '.')
+PY
+        ); then
+            return 0
+        fi
+        token=${token%.}
+        if [[ -n "$token" ]]; then
+            export OSE_PARAMETER_TOKEN="$token"
+            _ose_env_parameter_token_auto="$token"
+        fi
+        # An existing plan is authoritative, including clients without a token.
+        return 0
+    done
+    return 0
+}
+
+_ose_env_load_parameter_token
+
 _ose_env_cli() {
     "$OSE_PYTHON" -m ose.cli "$@"
 }
@@ -117,6 +162,20 @@ _ose_env_recording_tool() (
     "$OSE_PYTHON" "$SDL_ROOT/tools/recording/sdl-recording" "$@"
 )
 
+_ose_env_parameters() (
+    cd -- "$OSE_APP_ROOT" || return
+    local action="${1:---help}"
+    if [[ $# -gt 0 ]]; then
+        shift
+    fi
+    case "$action" in
+        list|get|set|watch)
+            "$OSE_PYTHON" -m ose.cli parameters "$action" \
+                --client "${OSE_PARAMETER_CLIENT:-operator}" "$@" ;;
+        *) "$OSE_PYTHON" -m ose.cli parameters "$action" "$@" ;;
+    esac
+)
+
 _ose_env_help() {
     printf 'Framework: %s\nApplication: %s\nPython: %s\n' \
         "$FRAMEWORK_ROOT" "$OSE_APP_ROOT" "$OSE_PYTHON"
@@ -135,6 +194,11 @@ record-deps             manually rebuild/install recording and filter services
 record-info FILE        show recording metadata
 record-inspect FILE ... display messages; --check validates, --summary counts
 record-check FILE ...   compatibility shortcut for inspect --check (JSON)
+params [ACTION ...]     shared parameter CLI; no arguments shows help
+params-list             list accessible parameter blocks
+params-get PATH         read a complete block as JSON
+params-set PATH --file FILE  replace a complete block; --file - reads stdin
+params-watch PATH ...   watch updates; --count N stops after N values
 ose-env                 show these paths and shortcuts
 
 Application shortcuts use its Makefile targets. Recorder commands run from the
@@ -147,6 +211,16 @@ Example commands inside record>:
   filter alarm.event machine_id == 2
   start
 Stop before changing a filter.
+
+Parameter shortcuts also run from the application directory. The default client
+is operator; set OSE_PARAMETER_CLIENT or pass --client NAME to select another.
+When sourcing, OSE_PARAMETER_TOKEN loads automatically for the selected client
+from build/plan.json, or deployment.local.json / deployment.json before a build.
+An explicitly set token is preserved; the token is never printed by this script.
+Set OSE_PARAMETER_CLIENT before sourcing to load another client's token.
+Endpoint/plan, token-env, host/port and distributed TLS options pass through.
+Example: params-get machines/1/detection
+         params-set machines/1/detection --file detection.json
 EOF
 }
 
@@ -163,6 +237,11 @@ alias record='_ose_env_record'
 alias record-info='_ose_env_recording_tool info'
 alias record-inspect='_ose_env_recording_tool inspect --format text'
 alias record-check='_ose_env_recording_tool inspect --check'
+alias params='_ose_env_parameters'
+alias params-list='_ose_env_parameters list'
+alias params-get='_ose_env_parameters get'
+alias params-set='_ose_env_parameters set'
+alias params-watch='_ose_env_parameters watch'
 alias ose-env='_ose_env_help'
 
 if [[ $- == *i* ]]; then

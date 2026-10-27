@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 import tempfile
@@ -276,11 +277,14 @@ def on_tick(ctx):
                 await ParameterClient.connect('127.0.0.1', port, 'operator', token='wrong-token', runtime=self.codec)
             env = dict(os.environ, OSE_PARAMETER_TOKEN='test-only-parameter-token',
                        PYTHONPATH=str(Path(__file__).resolve().parents[2] / 'src'))
-            async def call(action, *args):
+            async def call(action, *args, data=None, success=True):
                 process = await asyncio.create_subprocess_exec(os.sys.executable, '-m', 'ose.cli', 'parameters', action, *args,
                     '--client', 'operator', '--host', '127.0.0.1', '--port', str(port), '--sdl-root', str(self.codec.root),
-                    env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                stdout, stderr = await asyncio.wait_for(process.communicate(), 15)
+                    env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout, stderr = await asyncio.wait_for(process.communicate(data), 15)
+                if not success:
+                    self.assertNotEqual(process.returncode, 0)
+                    return stderr.decode()
                 self.assertEqual(process.returncode, 0, stderr.decode())
                 return json.loads(stdout)
             self.assertEqual(await call('list'), ['machine/first', 'machine/second'])
@@ -290,6 +294,40 @@ def on_tick(ctx):
             self.assertEqual(await call('set', 'machine/first', '--file', str(source)), {'updated': 'machine/first'})
             self.assertEqual(await call('watch', 'machine/first', '--count', '1'),
                              {'path': 'machine/first', 'value': {'threshold': 85.}})
+            self.assertEqual(await call('set', 'machine/first', '--file', '-', data=b'{"threshold": 90.0}'),
+                             {'updated': 'machine/first'})
+            self.assertEqual(await call('get', 'machine/first'), {'threshold': 90.})
+            for data, error in ((b'', 'Expecting value'),
+                                (b'{"threshold": 1, "threshold": 2}', 'duplicate key'),
+                                (b' ' * (1024 * 1024 + 1), 'exceeds 1 MiB'),
+                                (b'{"extra": 1}', 'unknown parameter fields')):
+                with self.subTest(error=error):
+                    self.assertIn(error, await call('set', 'machine/first', '--file', '-', data=data, success=False))
+                    self.assertEqual(await call('get', 'machine/first'), {'threshold': 90.})
+        finally:
+            await broker.close()
+
+    @unittest.skipUnless(shutil.which('bash') and (Path(__file__).resolve().parents[3] / 'setenv.sh').is_file(),
+                         'requires Bash and the framework checkout')
+    async def test_shell_set_reads_stdin_after_automatic_token_loading(self):
+        await self.setup_plan()
+        broker = Broker(self.plan)
+        port = await broker.start()
+        try:
+            env = dict(os.environ, OSE_APP_ROOT=str(self.root), OSE_PYTHON=os.sys.executable,
+                       FRAMEWORK_ENV=str(Path(__file__).resolve().parents[3] / 'setenv.sh'))
+            env.pop('OSE_PARAMETER_TOKEN', None)
+            env.pop('OSE_PARAMETER_CLIENT', None)
+            script = ('set -eu\nshopt -s expand_aliases\nsource "$FRAMEWORK_ENV"\n'
+                      'params-set machine/first --file - --host 127.0.0.1 --port "$1"\n')
+            process = await asyncio.create_subprocess_exec('bash', '--noprofile', '--norc', '-c', script, 'test', str(port),
+                env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await asyncio.wait_for(process.communicate(b'{"threshold": 92.0}'), 15)
+            self.assertEqual(process.returncode, 0, stderr.decode())
+            self.assertEqual(json.loads(stdout), {'updated': 'machine/first'})
+            async with await ParameterClient.connect('127.0.0.1', port, 'operator',
+                    token='test-only-parameter-token', runtime=self.codec) as client:
+                self.assertEqual(await (await client.block('machine/first')).get(), {'threshold': 92.})
         finally:
             await broker.close()
 

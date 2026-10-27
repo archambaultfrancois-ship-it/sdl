@@ -117,6 +117,40 @@ an application's `make run` target. `app-distributed` defaults to `DURATION=300`
 with command-line assignments overriding that value. `app-cd` enters the application directory;
 `ose-ctl` runs this checkout's CLI with the selected Python interpreter.
 
+Shared parameters have shortcuts that run from `OSE_APP_ROOT`, so the default
+plan and endpoint are found even when invoked from another directory:
+
+```sh
+params-list
+params-get machines/press_1/detection
+params-set machines/press_1/detection --file detection.json
+params-watch machines/press_1/detection --count 3
+```
+
+These commands use client `operator` by default. Set `OSE_PARAMETER_CLIENT` or
+pass `--client NAME` to choose another identity. When sourcing, the environment
+automatically loads that client's token from `build/plan.json`, or, before a
+build, the first existing `deployment.local.json` / `deployment.json`. An existing
+plan is authoritative even if the client has no token. Set `OSE_PARAMETER_CLIENT`
+before sourcing to load another client's token. Explicit `OSE_PARAMETER_TOKEN`
+values are preserved, including an empty value; tokens are never printed by the
+script. Sourcing again refreshes an automatically loaded token for the selected
+application and client. Relative JSON filenames resolve
+from the application directory. All parameter CLI options, including `--plan`,
+`--endpoint`, `--token-env`, host/port and distributed TLS options, pass through.
+`params` shows help; `params ACTION ...` also accepts the ordinary CLI syntax.
+Writes replace complete typed blocks. See the [parameter guide](ose/docs/parameters.md).
+
+Use `--file -` to read JSON from stdin, with the same validation and 1 MiB limit:
+
+```sh
+printf '%s\n' '{"enabled":true,"threshold":85.0,"hysteresis":5.0,"window_ms":200}' \
+  | params-set machines/press_1/detection --file -
+```
+
+Supply every required field of the block; stdin also accepts redirection or a
+heredoc.
+
 ## Build and test
 
 From the repository root:

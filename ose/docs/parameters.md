@@ -120,6 +120,44 @@ ose-ctl parameters set machines/press_1/detection --client operator --file detec
 ose-ctl parameters watch machines/press_1/detection --client operator --count 3
 ```
 
+After sourcing the framework's `setenv.sh`, the equivalent shortcuts are:
+
+```sh
+params-list
+params-get machines/press_1/detection
+params-set machines/press_1/detection --file detection.json
+params-watch machines/press_1/detection --count 3
+```
+
+They run from `OSE_APP_ROOT` and default to client `operator`. Set
+`OSE_PARAMETER_CLIENT` or pass `--client NAME` to use another identity.
+When sourcing, `setenv.sh` loads `OSE_PARAMETER_TOKEN` for the selected client
+from `build/plan.json`, or the first existing `deployment.local.json` /
+`deployment.json` before a build. An existing plan takes precedence even when
+the client has no token. Explicit environment values, including an empty token,
+are preserved; the script never prints the token. Sourcing again refreshes an
+automatically loaded value, including when switching applications or clients.
+Set `OSE_PARAMETER_CLIENT` before sourcing when selecting another client's token;
+an explicit `--client` alone does not select a different token automatically.
+`--token-env` still selects a manually managed environment variable.
+Relative filenames resolve from the application directory.
+All CLI options pass through; `params` shows help and `params ACTION ...` is
+the general shortcut.
+
+For `set`, `--file -` reads a complete JSON block from stdin instead of a file:
+
+```sh
+params-set machines/press_1/detection --file - <<'JSON'
+{"enabled": true, "threshold": 85.0, "hysteresis": 5.0, "window_ms": 200}
+JSON
+# Pipes and redirected files work as well:
+cat detection.json | params-set machines/press_1/detection --file -
+```
+
+The ordinary `ose-ctl parameters set ... --client operator --file -` command
+supports the same input. File and stdin reads are bounded to 1 MiB and reject
+duplicate JSON keys; the service applies the same SDL validation to both.
+
 The CLI reads `build/endpoint.json` and finds SDL through `build/plan.json`,
 `SDL_ROOT`/`--sdl-root`, or an installed Python runtime. Use `--host` and `--port`
 for explicit endpoints. `--token-env NAME` selects another token environment
