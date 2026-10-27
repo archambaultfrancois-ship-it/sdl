@@ -203,6 +203,7 @@ params-get [PATTERN]    export matching paths; no pattern selects all
 params-get --exact PATH export one literal path as {path: block}
 params-get-all          export all accessible blocks as {path: block}
 params-set [PATH] --file FILE  import an export, or write one block with PATH
+params-set --dir DIR    recursively import every *.json export in DIR
 params-watch PATH ...   watch updates; --count N stops after N values
 ose-env                 show these paths and shortcuts
 
@@ -228,6 +229,7 @@ Example: params-get machines/1/detection
          params-set machines/1/detection --file detection.json
          params-get '/detection$' > detection-export.json
          params-set --file detection-export.json
+         params-set --dir parameters
 Use --file - for stdin. Imports replace complete blocks in sequence.
 EOF
 }

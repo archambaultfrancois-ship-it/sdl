@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from ose.modeling.model import unique_pairs
 
+MAX_JSON_SIZE = 1024 * 1024
+
 
 def parser(commands):
     command = commands.add_parser('parameters', help='read, write or watch shared SDL parameter blocks')
@@ -21,7 +23,9 @@ def parser(commands):
             action.add_argument('--exact', action='store_true', help='read one literal path instead of matching a pattern')
             action.add_argument('--export', action='store_true', help='export {path: block}; PATH is a regex by default, omitted selects all')
         if name == 'set':
-            action.add_argument('--file', required=True, help='block JSON with PATH, or {path: block} export without PATH; - for stdin')
+            source = action.add_mutually_exclusive_group(required=True)
+            source.add_argument('--file', help='block JSON with PATH, or {path: block} export without PATH; - for stdin')
+            source.add_argument('--dir', help='recursively import all *.json exports in a directory; no PATH')
         if name == 'watch':
             action.add_argument('--count', type=int)
         action.add_argument('--client', required=True)
@@ -38,23 +42,71 @@ def parser(commands):
         action.add_argument('--insecure', action='store_true')
 
 
-def read_value(source):
-    limit = 1024 * 1024
+def read_source(source):
     if source == '-':
-        data = sys.stdin.buffer.read(limit + 1)
+        data = sys.stdin.buffer.read(MAX_JSON_SIZE + 1)
     else:
         with Path(source).open('rb') as stream:
-            data = stream.read(limit + 1)
-    if len(data) > limit:
+            data = stream.read(MAX_JSON_SIZE + 1)
+    if len(data) > MAX_JSON_SIZE:
         raise ValueError('parameter JSON exceeds 1 MiB')
+    return data
+
+
+def read_value(source):
+    data = read_source(source)
     return json.loads(data.decode('utf-8'), object_pairs_hook=unique_pairs)
+
+
+def validate_import(value):
+    if (not isinstance(value, dict) or len(value) > 4096 or
+            any(not path or not isinstance(block, dict) for path, block in value.items())):
+        raise ValueError('parameter import requires a JSON object {path: complete block}, at most 4096 blocks')
+
+
+def read_directory(directory):
+    root = Path(directory)
+    if not root.is_dir():
+        raise ValueError(f'parameter directory does not exist or is not a directory: {root}')
+    def walk_error(error):
+        raise error
+    files = []
+    for folder, _, names in os.walk(root, onerror=walk_error, followlinks=False):
+        files.extend(Path(folder) / name for name in names
+                     if name.endswith('.json') and (Path(folder) / name).is_file())
+    if not files:
+        raise ValueError(f'no *.json files found in parameter directory: {root}')
+    merged, origins, total = {}, {}, 0
+    for source in sorted(files, key=lambda path: path.relative_to(root).as_posix()):
+        try:
+            data = read_source(source)
+            total += len(data)
+            if total > MAX_JSON_SIZE:
+                raise ValueError('parameter directory JSON exceeds 1 MiB in total')
+            value = json.loads(data.decode('utf-8'), object_pairs_hook=unique_pairs)
+            validate_import(value)
+        except (OSError, ValueError) as error:
+            raise ValueError(f'{source}: {error}') from error
+        for path, block in value.items():
+            if path in origins:
+                raise ValueError(f'duplicate parameter path {path}: {origins[path]} and {source}')
+            merged[path], origins[path] = block, source
+        validate_import(merged)
+    return merged
 
 
 async def run(options):
     from ose.parameters.client import ParameterClient
     from ose.transport.secure import contexts
     from ose.codec.runtime import Runtime
-    value = read_value(options.file) if options.parameter_action == 'set' else None
+    value = None
+    if options.parameter_action == 'set':
+        if options.dir is not None:
+            if options.path is not None:
+                raise ValueError('--dir cannot be combined with a positional parameter path')
+            value = read_directory(options.dir)
+        else:
+            value = read_value(options.file)
     pattern = None
     if options.parameter_action == 'get':
         if options.exact and options.path is None:
@@ -67,9 +119,7 @@ async def run(options):
             except re.error as error:
                 raise ValueError(f'invalid parameter path regex: {error}') from error
     if options.parameter_action == 'set' and options.path is None:
-        if (not isinstance(value, dict) or len(value) > 4096 or
-                any(not path or not isinstance(block, dict) for path, block in value.items())):
-            raise ValueError('parameter import requires a JSON object {path: complete block}, at most 4096 blocks')
+        validate_import(value)
     if options.sdl_root:
         from ose.codec.sdl2 import SDL2
         runtime = SDL2(options.sdl_root)

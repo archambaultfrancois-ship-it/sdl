@@ -368,6 +368,75 @@ def on_tick(ctx):
         finally:
             await broker.close()
 
+    async def test_cli_directory_imports_nested_json_in_file_order(self):
+        await self.setup_plan()
+        self.plan['parameter_clients']['operator']['write'].append('machine/second')
+        broker = Broker(self.plan)
+        port = await broker.start()
+        try:
+            directory = self.root / 'parameter exports'
+            nested = directory / 'a' / 'deep'
+            nested.mkdir(parents=True)
+            (directory / 'z.json').write_text('{"machine/first": {"threshold": 91.0}}')
+            (nested / 'values.json').write_text('{"machine/second": {"threshold": 22.0}}')
+            (directory / 'ignored.txt').write_text('not JSON')
+            (directory / 'ignored.JSON').write_text('not JSON')
+            self.assertEqual(await self.parameter_cli(port, 'set', '--dir', directory),
+                             {'updated': ['machine/second', 'machine/first']})
+            expected = {'machine/first': {'threshold': 91.}, 'machine/second': {'threshold': 22.}}
+            self.assertEqual(await self.parameter_cli(port, 'get'), expected)
+            empty = self.root / 'empty'
+            empty.mkdir()
+            for args, error in ((('--dir', directory, '--file', directory / 'z.json'), 'not allowed with argument'),
+                                (('machine/first', '--dir', directory), '--dir cannot be combined'),
+                                (('--dir', directory, '--exact'), 'unrecognized arguments: --exact'),
+                                (('--dir', directory / 'z.json'), 'not a directory'),
+                                (('--dir', self.root / 'missing'), 'not a directory'),
+                                (('--dir', empty), 'no *.json files found')):
+                with self.subTest(args=args):
+                    self.assertIn(error, await self.parameter_cli(port, 'set', *args, success=False))
+            self.assertEqual(await self.parameter_cli(port, 'get'), expected)
+        finally:
+            await broker.close()
+
+    async def test_cli_directory_validates_all_files_before_writing(self):
+        await self.setup_plan()
+        broker = Broker(self.plan)
+        port = await broker.start()
+        try:
+            directory = self.root / 'exports'
+            nested = directory / 'nested'
+            nested.mkdir(parents=True)
+            first, last = directory / 'a.json', nested / 'z.json'
+            first.write_text('{"machine/first": {"threshold": 95.0}}')
+            for document, error in (('{"machine/first": {"threshold": 95.0}}', 'duplicate parameter path machine/first'),
+                                    ('{broken', 'Expecting property name'),
+                                    ('{"machine/second": {"extra": 1}}', 'unknown parameter fields'),
+                                    ('{"threshold": 20.0}', 'parameter import requires'),
+                                    ('{"machine/second": {}, "machine/second": {}}', 'duplicate key'),
+                                    ('{"unknown/path": {"threshold": 20.0}}', 'parameter read access denied')):
+                last.write_text(document)
+                with self.subTest(error=error):
+                    reported = await self.parameter_cli(port, 'set', '--dir', directory, success=False)
+                    self.assertIn(error, reported)
+                    if error.startswith('duplicate parameter path'):
+                        self.assertIn(str(first), reported)
+                        self.assertIn(str(last), reported)
+                    self.assertEqual(await self.parameter_cli(port, 'get', 'machine/first'), {'threshold': 80.})
+            last.write_text('{}')
+            # Hidden *.json files are included too.
+            hidden = directory / '.hidden.json'
+            hidden.write_text('not JSON')
+            self.assertIn(str(hidden), await self.parameter_cli(port, 'set', '--dir', directory, success=False))
+            hidden.write_text('{}')
+            first.write_text(' ' * (600 * 1024) + '{"machine/first": {"threshold": 95.0}}')
+            last.write_text(' ' * (600 * 1024) + '{}')
+            self.assertIn('directory JSON exceeds 1 MiB in total',
+                          await self.parameter_cli(port, 'set', '--dir', directory, success=False))
+            self.assertEqual(await self.parameter_cli(port, 'get', 'machine/first'), {'threshold': 80.})
+        finally:
+            await broker.close()
+
     @unittest.skipUnless(shutil.which('bash') and (Path(__file__).resolve().parents[3] / 'setenv.sh').is_file(),
                          'requires Bash and the framework checkout')
     async def test_shell_set_reads_stdin_after_automatic_token_loading(self):

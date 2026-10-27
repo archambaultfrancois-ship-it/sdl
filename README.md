@@ -161,10 +161,16 @@ Exports can be sent directly back to the service:
 params-get '/detection$' | params-set --file -
 ```
 
+To restore exports spread across a directory tree, use
+`params-set --dir ./parameters`. It reads every `*.json` file recursively in
+relative filename order. Each file contains `{path: block}` exports; paths come
+from JSON keys. Duplicate paths or invalid files fail before any write. `--dir`
+cannot be combined with `--file` or a positional path.
+
 All imported blocks are decoded and validated before writing. Reads and writes
 are sequential, without an atomic snapshot or transaction across blocks. If a
 service write fails, the error lists the blocks already updated. JSON input is
-limited to 1 MiB in total, including grouped imports.
+limited to 1 MiB in total, including the sum of file contents in directory imports.
 
 Use `--file -` to read JSON from stdin, with the same validation and 1 MiB limit:
 

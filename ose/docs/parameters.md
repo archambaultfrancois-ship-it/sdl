@@ -185,13 +185,36 @@ For compatibility,
 An explicit path on `set` likewise continues to accept a bare block, rather than
 a path-keyed export. `watch` keeps its existing `{path, value}` event format.
 
+To import all `*.json` files in a directory and its subdirectories:
+
+```sh
+mkdir -p parameters/machines
+params-get '^machines/press_1/' > parameters/machines/press_1.json
+params-get '^machines/press_2/' > parameters/machines/press_2.json
+params-set --dir parameters
+```
+
+Every file must contain a path-keyed export, with one or several complete blocks.
+Names of files and directories do not determine parameter paths. Files are read
+in alphabetical order of relative paths, including hidden `*.json` files; other
+extensions are ignored. Symlinked subdirectories are not traversed. A missing directory
+or one containing no matching files is an error. Duplicate parameter paths across
+files are rejected, even when values are identical, and the error names both files.
+Malformed files and duplicate JSON keys are also errors. The whole tree is loaded
+and all blocks are validated before the first write.
+
+`--dir` is mutually exclusive with `--file` and a positional parameter path.
+`--exact` remains an option for `get` only. The ordinary CLI also supports
+`ose-ctl parameters set --dir parameters --client operator`.
+
 Imports describe and validate every block before the first write; empty imports
 are valid no-ops. They replace complete blocks, and each path needs write access.
 Reads do not form an atomic snapshot; writes are sequential, not transactional.
 A service or network failure can leave a partially applied import. The error
 names the failed block and lists acknowledged writes; a lost reply can leave the
 failed block's state uncertain, so read current values before retrying. Grouped
-imports have the same total 1 MiB JSON input limit as single-block writes.
+imports have the same total 1 MiB JSON input limit as single-block writes; for a
+directory this limit applies to the sum of all selected file contents.
 
 For `set`, `--file -` reads a complete JSON block from stdin instead of a file:
 
