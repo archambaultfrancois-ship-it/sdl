@@ -268,6 +268,19 @@ def on_tick(ctx):
         finally:
             await broker.close()
 
+    async def parameter_cli(self, port, action, *args, data=None, success=True):
+        env = dict(os.environ, OSE_PARAMETER_TOKEN='test-only-parameter-token',
+                   PYTHONPATH=str(Path(__file__).resolve().parents[2] / 'src'))
+        process = await asyncio.create_subprocess_exec(os.sys.executable, '-m', 'ose.cli', 'parameters', action, *args,
+            '--client', 'operator', '--host', '127.0.0.1', '--port', str(port), '--sdl-root', str(self.codec.root),
+            env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, stderr = await asyncio.wait_for(process.communicate(data), 15)
+        if not success:
+            self.assertNotEqual(process.returncode, 0)
+            return stderr.decode()
+        self.assertEqual(process.returncode, 0, stderr.decode())
+        return json.loads(stdout)
+
     async def test_cli_list_get_set_watch_and_invalid_credentials(self):
         await self.setup_plan()
         broker = Broker(self.plan)
@@ -275,18 +288,8 @@ def on_tick(ctx):
         try:
             with self.assertRaises(ValueError):
                 await ParameterClient.connect('127.0.0.1', port, 'operator', token='wrong-token', runtime=self.codec)
-            env = dict(os.environ, OSE_PARAMETER_TOKEN='test-only-parameter-token',
-                       PYTHONPATH=str(Path(__file__).resolve().parents[2] / 'src'))
             async def call(action, *args, data=None, success=True):
-                process = await asyncio.create_subprocess_exec(os.sys.executable, '-m', 'ose.cli', 'parameters', action, *args,
-                    '--client', 'operator', '--host', '127.0.0.1', '--port', str(port), '--sdl-root', str(self.codec.root),
-                    env=env, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                stdout, stderr = await asyncio.wait_for(process.communicate(data), 15)
-                if not success:
-                    self.assertNotEqual(process.returncode, 0)
-                    return stderr.decode()
-                self.assertEqual(process.returncode, 0, stderr.decode())
-                return json.loads(stdout)
+                return await self.parameter_cli(port, action, *args, data=data, success=success)
             self.assertEqual(await call('list'), ['machine/first', 'machine/second'])
             self.assertEqual(await call('get', 'machine/first'), {'threshold': 80.})
             source = self.root / 'new-parameters.json'
@@ -304,6 +307,64 @@ def on_tick(ctx):
                 with self.subTest(error=error):
                     self.assertIn(error, await call('set', 'machine/first', '--file', '-', data=data, success=False))
                     self.assertEqual(await call('get', 'machine/first'), {'threshold': 90.})
+        finally:
+            await broker.close()
+
+    async def test_cli_exports_exact_and_regex_paths_and_reimports_them(self):
+        await self.setup_plan()
+        self.plan['shared_parameters']['machine/first_backup'] = dict(self.plan['shared_parameters']['machine/first'])
+        self.plan['parameter_clients']['operator']['read'].append('machine/first_backup')
+        self.plan['parameter_clients']['operator']['write'].extend(['machine/second', 'machine/first_backup'])
+        broker = Broker(self.plan)
+        port = await broker.start()
+        try:
+            async def call(action, *args, data=None, success=True):
+                return await self.parameter_cli(port, action, *args, data=data, success=success)
+            expected = {'machine/first': {'threshold': 80.}, 'machine/first_backup': {'threshold': 80.},
+                        'machine/second': {'threshold': 10.}}
+            self.assertEqual(await call('get', 'machine/first', '--export', '--exact'),
+                             {'machine/first': expected['machine/first']})
+            self.assertEqual(await call('get', 'machine/first', '--export'),
+                             {path: value for path, value in expected.items() if 'first' in path})
+            self.assertEqual(await call('get', '--export'), expected)
+            self.assertEqual(await call('get'), expected)
+            exported = await call('get', '--export', '^machine/')
+            self.assertEqual(exported, expected)
+            self.assertEqual(await call('get', '--export', '/first$'), {'machine/first': expected['machine/first']})
+            self.assertEqual(await call('get', '--export', 'no-match'), {})
+            self.assertIn('get --exact requires PATH', await call('get', '--exact', success=False))
+            self.assertIn('invalid parameter path regex', await call('get', '--export', '[', success=False))
+            await call('set', 'machine/first', '--file', '-', data=b'{"threshold": 99.0}')
+            self.assertEqual(await call('set', '--file', '-', data=json.dumps(exported).encode()),
+                             {'updated': ['machine/first', 'machine/first_backup', 'machine/second']})
+            self.assertEqual(await call('get', '--export', '.*'), expected)
+            source = self.root / 'export.json'
+            source.write_text(json.dumps({'machine/first': {'threshold': 88.}}))
+            self.assertEqual(await call('set', '--file', source), {'updated': ['machine/first']})
+            self.assertEqual(await call('get', 'machine/first'), {'threshold': 88.})
+            self.assertEqual(await call('set', '--file', '-', data=b'{}'), {'updated': []})
+            for data in (b'[]', b'{"machine/first": 8}', b'{"": {}}'):
+                self.assertIn('parameter import requires', await call('set', '--file', '-', data=data, success=False))
+        finally:
+            await broker.close()
+
+    async def test_cli_import_prevalidates_and_reports_partial_service_failure(self):
+        await self.setup_plan()
+        broker = Broker(self.plan)
+        port = await broker.start()
+        try:
+            async def call(action, *args, data=None, success=True):
+                return await self.parameter_cli(port, action, *args, data=data, success=success)
+            invalid = {'machine/first': {'threshold': 95.}, 'machine/second': {'extra': 1}}
+            self.assertIn('unknown parameter fields', await call('set', '--file', '-',
+                data=json.dumps(invalid).encode(), success=False))
+            self.assertEqual(await call('get', 'machine/first'), {'threshold': 80.})
+            valid = {'machine/first': {'threshold': 95.}, 'machine/second': {'threshold': 20.}}
+            error = await call('set', '--file', '-', data=json.dumps(valid).encode(), success=False)
+            self.assertIn('parameter write access denied', error)
+            self.assertIn('updated blocks: ["machine/first"]', error)
+            self.assertEqual(await call('get', 'machine/first'), {'threshold': 95.})
+            self.assertEqual(await call('get', 'machine/second'), {'threshold': 10.})
         finally:
             await broker.close()
 
@@ -325,6 +386,21 @@ def on_tick(ctx):
             stdout, stderr = await asyncio.wait_for(process.communicate(b'{"threshold": 92.0}'), 15)
             self.assertEqual(process.returncode, 0, stderr.decode())
             self.assertEqual(json.loads(stdout), {'updated': 'machine/first'})
+            script = ('set -eu\nset -o pipefail\nshopt -s expand_aliases\nsource "$FRAMEWORK_ENV"\n'
+                      'params-get "/first$" --host 127.0.0.1 --port "$1" | '
+                      'params-set --file - --host 127.0.0.1 --port "$1"\n'
+                      'params-get --exact machine/first --host 127.0.0.1 --port "$1"\n'
+                      'params-get --host 127.0.0.1 --port "$1"\n'
+                      'params-get-all --host 127.0.0.1 --port "$1"\n')
+            process = await asyncio.create_subprocess_exec('bash', '--noprofile', '--norc', '-c', script, 'test', str(port),
+                env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await asyncio.wait_for(process.communicate(), 15)
+            self.assertEqual(process.returncode, 0, stderr.decode())
+            imported, exact, exported, all_alias = [json.loads(line) for line in stdout.splitlines()]
+            self.assertEqual(imported, {'updated': ['machine/first']})
+            self.assertEqual(exact, {'machine/first': {'threshold': 92.}})
+            self.assertEqual(exported, {'machine/first': {'threshold': 92.}, 'machine/second': {'threshold': 10.}})
+            self.assertEqual(all_alias, exported)
             async with await ParameterClient.connect('127.0.0.1', port, 'operator',
                     token='test-only-parameter-token', runtime=self.codec) as client:
                 self.assertEqual(await (await client.block('machine/first')).get(), {'threshold': 92.})

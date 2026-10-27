@@ -120,11 +120,14 @@ ose-ctl parameters set machines/press_1/detection --client operator --file detec
 ose-ctl parameters watch machines/press_1/detection --client operator --count 3
 ```
 
-After sourcing the framework's `setenv.sh`, the equivalent shortcuts are:
+After sourcing the framework's `setenv.sh`, the shell shortcuts are:
 
 ```sh
 params-list
 params-get machines/press_1/detection
+params-get '/detection$'
+params-get
+params-set --file parameters.json
 params-set machines/press_1/detection --file detection.json
 params-watch machines/press_1/detection --count 3
 ```
@@ -143,6 +146,52 @@ an explicit `--client` alone does not select a different token automatically.
 Relative filenames resolve from the application directory.
 All CLI options pass through; `params` shows help and `params ACTION ...` is
 the general shortcut.
+
+### Export and restore blocks by path
+
+The `params-get` shortcut always includes paths in its output. Single-block and
+multiple-block exports use the same JSON shape:
+
+```json
+{
+  "machines/press_1/detection": {
+    "enabled": true, "threshold": 85.0, "hysteresis": 5.0, "window_ms": 200
+  }
+}
+```
+
+Use `params-get PATTERN` to search paths with a Python regular expression.
+The pattern is optional: `params-get` alone exports every listed block.
+`params-get-all` remains a synonym. Use `params-get --exact PATH` to select
+one literal path. Quote patterns to keep the shell from expanding them.
+Anchor with `^` / `$` when needed; for example `^machines/press_1/` selects one
+machine and `/detection$` selects detection blocks. Every selected block must be
+readable. A pattern matching nothing produces `{}`; invalid patterns fail.
+
+`params-set --file FILE` reads the embedded paths, without an `--all` option:
+
+```sh
+params-get > parameters.json
+params-set --file parameters.json
+params-get '/detection$' | params-set --file -
+```
+
+The ordinary CLI supports `ose-ctl parameters get --export [PATTERN] --client operator`
+and `ose-ctl parameters get --export --exact PATH --client operator`. Export mode
+interprets the positional argument as a pattern, or selects all paths when omitted.
+`ose-ctl parameters get --client operator` with no path also exports all blocks.
+For compatibility,
+`ose-ctl parameters get PATH` without `--export` still returns only the value.
+An explicit path on `set` likewise continues to accept a bare block, rather than
+a path-keyed export. `watch` keeps its existing `{path, value}` event format.
+
+Imports describe and validate every block before the first write; empty imports
+are valid no-ops. They replace complete blocks, and each path needs write access.
+Reads do not form an atomic snapshot; writes are sequential, not transactional.
+A service or network failure can leave a partially applied import. The error
+names the failed block and lists acknowledged writes; a lost reply can leave the
+failed block's state uncertain, so read current values before retrying. Grouped
+imports have the same total 1 MiB JSON input limit as single-block writes.
 
 For `set`, `--file -` reads a complete JSON block from stdin instead of a file:
 

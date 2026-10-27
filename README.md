@@ -123,6 +123,9 @@ plan and endpoint are found even when invoked from another directory:
 ```sh
 params-list
 params-get machines/press_1/detection
+params-get '/detection$' > detection-export.json
+params-get > parameters.json
+params-set --file parameters.json
 params-set machines/press_1/detection --file detection.json
 params-watch machines/press_1/detection --count 3
 ```
@@ -139,7 +142,29 @@ application and client. Relative JSON filenames resolve
 from the application directory. All parameter CLI options, including `--plan`,
 `--endpoint`, `--token-env`, host/port and distributed TLS options, pass through.
 `params` shows help; `params ACTION ...` also accepts the ordinary CLI syntax.
+`params-get` always exports a JSON object `{path: block}`, including for a single
+selection. Its optional positional argument is a Python regular expression that
+searches block paths; no argument selects every listed block. Use
+`params-get --exact PATH` for a literal path. Quote patterns to avoid shell
+expansion. `params-get-all` remains a synonym for `params-get` without a pattern.
+Every selected block must be readable. `params-set --file FILE` imports this format
+without requiring a separate path or an `--all` option. Supplying an explicit path
+to `params-set` still writes a bare block. The ordinary
+`ose-ctl parameters get PATH` keeps its value-only output for existing scripts;
+use `get --export [PATTERN]` for the same path-keyed pattern export as the shell
+shortcuts, or `get --export --exact PATH` to export one literal path.
 Writes replace complete typed blocks. See the [parameter guide](ose/docs/parameters.md).
+
+Exports can be sent directly back to the service:
+
+```sh
+params-get '/detection$' | params-set --file -
+```
+
+All imported blocks are decoded and validated before writing. Reads and writes
+are sequential, without an atomic snapshot or transaction across blocks. If a
+service write fails, the error lists the blocks already updated. JSON input is
+limited to 1 MiB in total, including grouped imports.
 
 Use `--file -` to read JSON from stdin, with the same validation and 1 MiB limit:
 

@@ -169,7 +169,10 @@ _ose_env_parameters() (
         shift
     fi
     case "$action" in
-        list|get|set|watch)
+        get)
+            "$OSE_PYTHON" -m ose.cli parameters get --export \
+                --client "${OSE_PARAMETER_CLIENT:-operator}" "$@" ;;
+        list|set|watch)
             "$OSE_PYTHON" -m ose.cli parameters "$action" \
                 --client "${OSE_PARAMETER_CLIENT:-operator}" "$@" ;;
         *) "$OSE_PYTHON" -m ose.cli parameters "$action" "$@" ;;
@@ -196,8 +199,10 @@ record-inspect FILE ... display messages; --check validates, --summary counts
 record-check FILE ...   compatibility shortcut for inspect --check (JSON)
 params [ACTION ...]     shared parameter CLI; no arguments shows help
 params-list             list accessible parameter blocks
-params-get PATH         read a complete block as JSON
-params-set PATH --file FILE  replace a complete block; --file - reads stdin
+params-get [PATTERN]    export matching paths; no pattern selects all
+params-get --exact PATH export one literal path as {path: block}
+params-get-all          export all accessible blocks as {path: block}
+params-set [PATH] --file FILE  import an export, or write one block with PATH
 params-watch PATH ...   watch updates; --count N stops after N values
 ose-env                 show these paths and shortcuts
 
@@ -221,6 +226,9 @@ Set OSE_PARAMETER_CLIENT before sourcing to load another client's token.
 Endpoint/plan, token-env, host/port and distributed TLS options pass through.
 Example: params-get machines/1/detection
          params-set machines/1/detection --file detection.json
+         params-get '/detection$' > detection-export.json
+         params-set --file detection-export.json
+Use --file - for stdin. Imports replace complete blocks in sequence.
 EOF
 }
 
@@ -240,6 +248,7 @@ alias record-check='_ose_env_recording_tool inspect --check'
 alias params='_ose_env_parameters'
 alias params-list='_ose_env_parameters list'
 alias params-get='_ose_env_parameters get'
+alias params-get-all='_ose_env_parameters get'
 alias params-set='_ose_env_parameters set'
 alias params-watch='_ose_env_parameters watch'
 alias ose-env='_ose_env_help'

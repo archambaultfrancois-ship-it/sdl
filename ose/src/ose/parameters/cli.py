@@ -1,6 +1,8 @@
 """CLI for complete parameter blocks; all access goes through the service."""
+import asyncio
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from ose.modeling.model import unique_pairs
@@ -11,10 +13,15 @@ def parser(commands):
     actions = command.add_subparsers(dest='parameter_action', required=True)
     for name in ('list', 'get', 'set', 'watch'):
         action = actions.add_parser(name)
-        if name != 'list':
+        if name in ('get', 'set'):
+            action.add_argument('path', nargs='?')
+        elif name == 'watch':
             action.add_argument('path')
+        if name == 'get':
+            action.add_argument('--exact', action='store_true', help='read one literal path instead of matching a pattern')
+            action.add_argument('--export', action='store_true', help='export {path: block}; PATH is a regex by default, omitted selects all')
         if name == 'set':
-            action.add_argument('--file', required=True, help='complete parameter JSON file, or - for stdin')
+            action.add_argument('--file', required=True, help='block JSON with PATH, or {path: block} export without PATH; - for stdin')
         if name == 'watch':
             action.add_argument('--count', type=int)
         action.add_argument('--client', required=True)
@@ -48,6 +55,21 @@ async def run(options):
     from ose.transport.secure import contexts
     from ose.codec.runtime import Runtime
     value = read_value(options.file) if options.parameter_action == 'set' else None
+    pattern = None
+    if options.parameter_action == 'get':
+        if options.exact and options.path is None:
+            raise ValueError('get --exact requires PATH')
+        # Keep existing value-only CLI reads literal. Shell shortcuts select
+        # export mode, where a positional pattern (or all paths) is the default.
+        if not options.exact and (options.export or options.path is None):
+            try:
+                pattern = re.compile(options.path if options.path is not None else '.*')
+            except re.error as error:
+                raise ValueError(f'invalid parameter path regex: {error}') from error
+    if options.parameter_action == 'set' and options.path is None:
+        if (not isinstance(value, dict) or len(value) > 4096 or
+                any(not path or not isinstance(block, dict) for path, block in value.items())):
+            raise ValueError('parameter import requires a JSON object {path: complete block}, at most 4096 blocks')
     if options.sdl_root:
         from ose.codec.sdl2 import SDL2
         runtime = SDL2(options.sdl_root)
@@ -78,12 +100,35 @@ async def run(options):
         if options.parameter_action == 'list':
             print(json.dumps(await client.list()), flush=True)
             return
-        block = await client.block(options.path)
         if options.parameter_action == 'get':
-            print(json.dumps(await block.get(), allow_nan=False), flush=True)
+            paths = [options.path] if pattern is None else [path for path in await client.list() if pattern.search(path)]
+            exported = {}
+            for path in paths:
+                block = await client.block(path)
+                exported[path] = await block.get()
+            result = exported if options.export or pattern is not None else exported[options.path]
+            print(json.dumps(result, allow_nan=False), flush=True)
         elif options.parameter_action == 'set':
-            await block.set(value)
-            print(json.dumps({'updated': options.path}), flush=True)
+            if options.path is not None:
+                block = await client.block(options.path)
+                await block.set(value)
+                print(json.dumps({'updated': options.path}), flush=True)
+            else:
+                # Validate every block before the first write. Service-side
+                # failures may still occur after earlier writes have succeeded.
+                blocks = {}
+                for path, contents in value.items():
+                    blocks[path] = await client.block(path)
+                    blocks[path].values.encode(contents)
+                updated = []
+                for path, block in blocks.items():
+                    try:
+                        await block.set(value[path])
+                    except (ValueError, OSError, asyncio.TimeoutError) as error:
+                        raise ValueError(f'parameter import failed at {path}; updated blocks: '
+                                         f'{json.dumps(updated)}; {error}') from error
+                    updated.append(path)
+                print(json.dumps({'updated': updated}), flush=True)
         else:
             await client.subscribe([options.path])
             count = 0
