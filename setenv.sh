@@ -27,22 +27,37 @@ fi
 
 # Include optional build directories even before they exist, so record can
 # prepare them without requiring another source. Never add an empty path entry.
+_ose_env_prepend_path() {
+    local variable="$1" entry="$2" remaining item result
+    remaining="${!variable-}"
+    result="$entry"
+    if [[ -n "$remaining" ]]; then
+        while :; do
+            item="${remaining%%:*}"
+            # Remove every existing occurrence, then prepend exactly once.
+            # Preserve unrelated entries and their order, including inherited
+            # empty entries; an initially empty variable stays free of them.
+            if [[ "$item" != "$entry" ]]; then
+                result+=":$item"
+            fi
+            [[ "$remaining" == *:* ]] || break
+            remaining="${remaining#*:}"
+        done
+    fi
+    export "$variable=$result"
+}
+
 for _ose_env_path in \
     "$SDL_ROOT/build/recording-deps" \
     "$SDL_ROOT/build/filter/release" \
     "$SDL_ROOT/runtime/filter/python" \
     "$SDL_ROOT/runtime/python" \
     "$OSE_ROOT/src"; do
-    case ":${PYTHONPATH-}:" in
-        *":$_ose_env_path:"*) ;;
-        *) export PYTHONPATH="$_ose_env_path${PYTHONPATH:+:$PYTHONPATH}" ;;
-    esac
+    _ose_env_prepend_path PYTHONPATH "$_ose_env_path"
 done
-case ":$PATH:" in
-    *":$SDL_ROOT/tools/recording:"*) ;;
-    *) export PATH="$SDL_ROOT/tools/recording:$PATH" ;;
-esac
+_ose_env_prepend_path PATH "$SDL_ROOT/tools/recording"
 unset _ose_env_path
+unset -f _ose_env_prepend_path
 
 _ose_env_load_parameter_token() {
     # Explicit values (including an empty value) always take precedence.
@@ -163,16 +178,47 @@ _ose_env_recording_tool() (
 )
 
 _ose_env_parameters() (
-    cd -- "$OSE_APP_ROOT" || return
     local action="${1:---help}"
     if [[ $# -gt 0 ]]; then
         shift
     fi
+    if [[ "$action" == sync ]]; then
+        # Resolve storage before entering the application directory, which is
+        # still needed for the default plan and endpoint.
+        local directory
+        local -a arguments=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --dir)
+                    arguments+=("$1")
+                    shift
+                    if [[ $# -gt 0 ]]; then
+                        directory="$1"
+                        if [[ "$directory" != /* && "$directory" != -* ]]; then
+                            directory="$PWD/$directory"
+                        fi
+                        arguments+=("$directory")
+                        shift
+                    fi ;;
+                --dir=*)
+                    directory="${1#--dir=}"
+                    [[ "$directory" == /* ]] || directory="$PWD/$directory"
+                    arguments+=("--dir=$directory")
+                    shift ;;
+                --)
+                    arguments+=("$@")
+                    break ;;
+                *) arguments+=("$1"); shift ;;
+            esac
+        done
+        set -- "${arguments[@]}"
+    fi
+    cd -- "$OSE_APP_ROOT" || return
     case "$action" in
         get)
             "$OSE_PYTHON" -m ose.cli parameters get --export \
                 --client "${OSE_PARAMETER_CLIENT:-operator}" "$@" ;;
-        list|set|watch)
+        list|set|watch|sync)
             "$OSE_PYTHON" -m ose.cli parameters "$action" \
                 --client "${OSE_PARAMETER_CLIENT:-operator}" "$@" ;;
         *) "$OSE_PYTHON" -m ose.cli parameters "$action" "$@" ;;
@@ -205,6 +251,7 @@ params-get-all          export all accessible blocks as {path: block}
 params-set [PATH] --file FILE  import an export, or write one block with PATH
 params-set --dir DIR    recursively import every *.json export in DIR
 params-watch PATH ...   watch updates; --count N stops after N values
+params-sync --dir DIR   synchronize JSONs; DIR is relative to the current terminal
 ose-env                 show these paths and shortcuts
 
 Application shortcuts use its Makefile targets. Recorder commands run from the
@@ -253,6 +300,7 @@ alias params-get='_ose_env_parameters get'
 alias params-get-all='_ose_env_parameters get'
 alias params-set='_ose_env_parameters set'
 alias params-watch='_ose_env_parameters watch'
+alias params-sync='_ose_env_parameters sync'
 alias ose-env='_ose_env_help'
 
 if [[ $- == *i* ]]; then

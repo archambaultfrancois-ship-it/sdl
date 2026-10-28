@@ -300,9 +300,13 @@ def on_tick(ctx):
             self.assertEqual(await call('set', 'machine/first', '--file', '-', data=b'{"threshold": 90.0}'),
                              {'updated': 'machine/first'})
             self.assertEqual(await call('get', 'machine/first'), {'threshold': 90.})
+            self.assertEqual(await call('set', 'machine/first', '--file', '-',
+                data=b' ' * (1024 * 1024) + b'{"threshold": 90.0}'), {'updated': 'machine/first'})
+            self.assertIn('exceeds 1024 bytes', await call('set', 'machine/first', '--file', '-',
+                '--max-json-size', '1024', data=b' ' * 1024 + b'{}', success=False))
             for data, error in ((b'', 'Expecting value'),
                                 (b'{"threshold": 1, "threshold": 2}', 'duplicate key'),
-                                (b' ' * (1024 * 1024 + 1), 'exceeds 1 MiB'),
+                                (b' ' * (16 * 1024 * 1024 + 1), 'exceeds 16777216 bytes'),
                                 (b'{"extra": 1}', 'unknown parameter fields')):
                 with self.subTest(error=error):
                     self.assertIn(error, await call('set', 'machine/first', '--file', '-', data=data, success=False))
@@ -431,8 +435,11 @@ def on_tick(ctx):
             hidden.write_text('{}')
             first.write_text(' ' * (600 * 1024) + '{"machine/first": {"threshold": 95.0}}')
             last.write_text(' ' * (600 * 1024) + '{}')
-            self.assertIn('directory JSON exceeds 1 MiB in total',
-                          await self.parameter_cli(port, 'set', '--dir', directory, success=False))
+            self.assertEqual(await self.parameter_cli(port, 'set', '--dir', directory), {'updated': ['machine/first']})
+            await self.parameter_cli(port, 'set', 'machine/first', '--file', '-', data=b'{"threshold": 80.0}')
+            self.assertIn('directory JSON exceeds 1048576 bytes in total',
+                          await self.parameter_cli(port, 'set', '--dir', directory,
+                                                   '--max-total-json-size', str(1024 * 1024), success=False))
             self.assertEqual(await self.parameter_cli(port, 'get', 'machine/first'), {'threshold': 80.})
         finally:
             await broker.close()

@@ -101,6 +101,10 @@ between callbacks. Several components may share a block; the last complete write
 replaces its value. CLI and external clients can read, write and watch selected
 blocks locally or through the distributed coordinator. See the runnable
 [two-detector example](examples/shared_parameters/README.md).
+On Linux/Termux, `pip install '.[sync]'` enables
+`ose-ctl parameters sync --dir parameters --client operator` to synchronize
+unit JSON files with the running application using inotify and OSE subscriptions.
+JSON imports allow 16 MiB per input and 64 MiB per directory by default.
 
 See [architecture](docs/architecture.md) for document fields and process layout,
 [runtime execution](docs/runtime.md) for ticks, message flow and acknowledgements,

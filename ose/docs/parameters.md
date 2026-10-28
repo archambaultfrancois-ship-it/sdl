@@ -130,6 +130,7 @@ params-get
 params-set --file parameters.json
 params-set machines/press_1/detection --file detection.json
 params-watch machines/press_1/detection --count 3
+params-sync --dir ./parameters
 ```
 
 They run from `OSE_APP_ROOT` and default to client `operator`. Set
@@ -143,7 +144,10 @@ automatically loaded value, including when switching applications or clients.
 Set `OSE_PARAMETER_CLIENT` before sourcing when selecting another client's token;
 an explicit `--client` alone does not select a different token automatically.
 `--token-env` still selects a manually managed environment variable.
-Relative filenames resolve from the application directory.
+Relative filenames resolve from the application directory, except the sync
+directory: `params-sync --dir DIR` and `params sync --dir DIR` resolve `DIR`
+from the caller's current directory. The default plan and endpoint still resolve
+from the application directory.
 All CLI options pass through; `params` shows help and `params ACTION ...` is
 the general shortcut.
 
@@ -204,7 +208,8 @@ Malformed files and duplicate JSON keys are also errors. The whole tree is loade
 and all blocks are validated before the first write.
 
 `--dir` is mutually exclusive with `--file` and a positional parameter path.
-`--exact` remains an option for `get` only. The ordinary CLI also supports
+`--exact` is a selection option for `get` and `sync`, not an import option for `set`.
+The ordinary CLI also supports
 `ose-ctl parameters set --dir parameters --client operator`.
 
 Imports describe and validate every block before the first write; empty imports
@@ -213,8 +218,12 @@ Reads do not form an atomic snapshot; writes are sequential, not transactional.
 A service or network failure can leave a partially applied import. The error
 names the failed block and lists acknowledged writes; a lost reply can leave the
 failed block's state uncertain, so read current values before retrying. Grouped
-imports have the same total 1 MiB JSON input limit as single-block writes; for a
-directory this limit applies to the sum of all selected file contents.
+imports use a 16 MiB limit per JSON input (including a grouped export or stdin).
+Directory imports additionally limit the sum of selected file contents to 64 MiB.
+Use `--max-json-size BYTES` and `--max-total-json-size BYTES` to override these
+positive limits on `set`. All blocks are still validated before the first write.
+These limits concern JSON text, not the encoded SDL frame size; the existing
+transport/CH/1 frame limits and service storage budget remain in effect.
 
 For `set`, `--file -` reads a complete JSON block from stdin instead of a file:
 
@@ -227,7 +236,7 @@ cat detection.json | params-set machines/press_1/detection --file -
 ```
 
 The ordinary `ose-ctl parameters set ... --client operator --file -` command
-supports the same input. File and stdin reads are bounded to 1 MiB and reject
+supports the same input. File and stdin reads are bounded to 16 MiB by default and reject
 duplicate JSON keys; the service applies the same SDL validation to both.
 
 The CLI reads `build/endpoint.json` and finds SDL through `build/plan.json`,
@@ -236,6 +245,66 @@ for explicit endpoints. `--token-env NAME` selects another token environment
 variable. Distributed access uses `--distributed --tls-ca ... --tls-cert ...
 --tls-key ...`; the certificate CN must match `--client`. Explicit loopback
 development may use `--distributed --insecure` with a configured token.
+
+### Synchronize a tree of unit parameter files
+
+On Linux/Termux, install the optional file watcher from the OSE project root:
+
+```sh
+python3 -m pip install '.[sync]'
+ose-ctl parameters sync --dir ./parameters --client operator
+ose-ctl parameters sync '^machines/press_1/' --dir ./parameters --client operator
+ose-ctl parameters sync --exact machines/press_1/detection --dir ./parameters --client operator
+```
+
+After sourcing `setenv.sh`, use `params-sync --dir ./parameters` or
+`params sync --dir ./parameters`. Both run in the application directory and use
+the loaded token and default client (`operator` or `OSE_PARAMETER_CLIENT`).
+The sync directory is resolved before changing directory, so `params-sync --dir .`
+uses the terminal's current directory even when it is outside the application.
+Run the process in its own terminal or under a supervisor; Ctrl+C and SIGTERM
+close its watchers and connections.
+
+Each path maps to one file: `machines/press_1/detection` becomes
+`parameters/machines/press_1/detection.json`. The file must contain exactly one
+path-keyed export, and the embedded path must match the filename. Complete SDL
+blocks and the usual duplicate-key validation apply. Symlinks are not followed.
+Unknown files are reported; files outside the selection are left alone.
+
+By default (`--initial files`), every connection applies valid existing files
+to OSE and creates missing files from OSE. This includes reconnecting after a
+service restart, restoring the file configuration. `--initial app` explicitly
+replaces the selected files with the application's current values on every
+connection instead. The client needs read and write rights on the selected paths.
+
+File changes are detected with inotify; events for a path are grouped for 150 ms
+by default (`--debounce SECONDS`). A different `st_mtime_ns` triggers validation
+and publication. OSE subscriptions supply initial values and later changes to
+update files. Cached timestamps and decoded values prevent echo loops. Watching
+directories handles editor saves by rename, newly created subdirectories and
+directory move-ins. A deleted managed file is recreated from OSE.
+
+There is no periodic tree scan or per-block `get` loop. A tree scan runs at
+startup, on directory changes and after an inotify queue overflow. Subscriptions
+use the existing 250 ms long polls and split selections into groups of at most
+256 paths. One control connection is separate from the subscription connections.
+
+Invalid files remain untouched until corrected; other paths continue to sync.
+Transient file errors are retried, and disconnected sessions reconnect after
+2 seconds. JSON files are limited to 16 MiB, adjustable with `--max-json-size`;
+there is no aggregate import limit for this block-by-block daemon. File writes
+use a temporary `.tmp` followed by replacement. Diagnostic logs go to stderr
+without parameter values or tokens.
+
+This simple service assumes one usual writer, without collision detection,
+revision checks or persistent metadata. A local edit awaiting publication has
+priority over an application notification. An edit preserving the exact previous
+mtime may be ignored; `touch FILE` forces publication. Runtime values reach the
+parameter service, without a guarantee that every component has consumed them or
+that file restoration precedes component `on_start`.
+
+See the [sync design](parameter-sync-design.md) for the event handling and
+implementation details.
 
 ## External SDKs
 

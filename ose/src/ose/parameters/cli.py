@@ -1,21 +1,21 @@
 """CLI for complete parameter blocks; all access goes through the service."""
 import asyncio
 import json
+import math
 import os
 import re
-import sys
 from pathlib import Path
 from ose.modeling.model import unique_pairs
 
-MAX_JSON_SIZE = 1024 * 1024
+from ose.parameters.files import (MAX_JSON_SIZE, MAX_TOTAL_JSON_SIZE, read_source, read_value, validate_import)
 
 
 def parser(commands):
     command = commands.add_parser('parameters', help='read, write or watch shared SDL parameter blocks')
     actions = command.add_subparsers(dest='parameter_action', required=True)
-    for name in ('list', 'get', 'set', 'watch'):
+    for name in ('list', 'get', 'set', 'watch', 'sync'):
         action = actions.add_parser(name)
-        if name in ('get', 'set'):
+        if name in ('get', 'set', 'sync'):
             action.add_argument('path', nargs='?')
         elif name == 'watch':
             action.add_argument('path')
@@ -28,6 +28,17 @@ def parser(commands):
             source.add_argument('--dir', help='recursively import all *.json exports in a directory; no PATH')
         if name == 'watch':
             action.add_argument('--count', type=int)
+        if name == 'sync':
+            action.add_argument('--dir', required=True, help='tree of unit {path: block} JSON files')
+            action.add_argument('--exact', action='store_true', help='select one literal path')
+            action.add_argument('--initial', choices=('files', 'app'), default='files')
+            action.add_argument('--debounce', type=float, default=.15, help='file event grouping seconds (default: 0.15)')
+        if name in ('set', 'sync'):
+            action.add_argument('--max-json-size', type=int, default=MAX_JSON_SIZE,
+                                help='maximum bytes per JSON input (default: 16777216 / 16 MiB)')
+        if name == 'set':
+            action.add_argument('--max-total-json-size', type=int, default=MAX_TOTAL_JSON_SIZE,
+                                help='maximum total JSON bytes for --dir (default: 67108864 / 64 MiB)')
         action.add_argument('--client', required=True)
         action.add_argument('--token-env', default='OSE_PARAMETER_TOKEN')
         action.add_argument('--endpoint', default='build/endpoint.json')
@@ -42,29 +53,7 @@ def parser(commands):
         action.add_argument('--insecure', action='store_true')
 
 
-def read_source(source):
-    if source == '-':
-        data = sys.stdin.buffer.read(MAX_JSON_SIZE + 1)
-    else:
-        with Path(source).open('rb') as stream:
-            data = stream.read(MAX_JSON_SIZE + 1)
-    if len(data) > MAX_JSON_SIZE:
-        raise ValueError('parameter JSON exceeds 1 MiB')
-    return data
-
-
-def read_value(source):
-    data = read_source(source)
-    return json.loads(data.decode('utf-8'), object_pairs_hook=unique_pairs)
-
-
-def validate_import(value):
-    if (not isinstance(value, dict) or len(value) > 4096 or
-            any(not path or not isinstance(block, dict) for path, block in value.items())):
-        raise ValueError('parameter import requires a JSON object {path: complete block}, at most 4096 blocks')
-
-
-def read_directory(directory):
+def read_directory(directory, max_size=MAX_JSON_SIZE, max_total=MAX_TOTAL_JSON_SIZE):
     root = Path(directory)
     if not root.is_dir():
         raise ValueError(f'parameter directory does not exist or is not a directory: {root}')
@@ -79,10 +68,10 @@ def read_directory(directory):
     merged, origins, total = {}, {}, 0
     for source in sorted(files, key=lambda path: path.relative_to(root).as_posix()):
         try:
-            data = read_source(source)
+            data = read_source(source, max_size)
             total += len(data)
-            if total > MAX_JSON_SIZE:
-                raise ValueError('parameter directory JSON exceeds 1 MiB in total')
+            if total > max_total:
+                raise ValueError(f'parameter directory JSON exceeds {max_total} bytes in total')
             value = json.loads(data.decode('utf-8'), object_pairs_hook=unique_pairs)
             validate_import(value)
         except (OSError, ValueError) as error:
@@ -95,31 +84,11 @@ def read_directory(directory):
     return merged
 
 
-async def run(options):
+def connection_factory(options):
+    """Resolve the endpoint on each connection, including after restart."""
     from ose.parameters.client import ParameterClient
     from ose.transport.secure import contexts
     from ose.codec.runtime import Runtime
-    value = None
-    if options.parameter_action == 'set':
-        if options.dir is not None:
-            if options.path is not None:
-                raise ValueError('--dir cannot be combined with a positional parameter path')
-            value = read_directory(options.dir)
-        else:
-            value = read_value(options.file)
-    pattern = None
-    if options.parameter_action == 'get':
-        if options.exact and options.path is None:
-            raise ValueError('get --exact requires PATH')
-        # Keep existing value-only CLI reads literal. Shell shortcuts select
-        # export mode, where a positional pattern (or all paths) is the default.
-        if not options.exact and (options.export or options.path is None):
-            try:
-                pattern = re.compile(options.path if options.path is not None else '.*')
-            except re.error as error:
-                raise ValueError(f'invalid parameter path regex: {error}') from error
-    if options.parameter_action == 'set' and options.path is None:
-        validate_import(value)
     if options.sdl_root:
         from ose.codec.sdl2 import SDL2
         runtime = SDL2(options.sdl_root)
@@ -133,19 +102,58 @@ async def run(options):
             if error.name != 'sdl_runtime':
                 raise
             raise ValueError('select --sdl-root, a compiled --plan, or install the SDL Python runtime') from error
-    endpoint = json.loads(Path(options.endpoint).read_text()) if options.host is None and Path(options.endpoint).is_file() else {}
-    host, port = options.host or endpoint.get('host', '127.0.0.1'), options.port or endpoint.get('port')
-    if type(port) is not int or not 0 < port < 65536:
-        raise ValueError('select a valid parameter service port or endpoint')
+    async def connect():
+        endpoint = json.loads(Path(options.endpoint).read_text()) if options.host is None and Path(options.endpoint).is_file() else {}
+        host, port = options.host or endpoint.get('host', '127.0.0.1'), options.port or endpoint.get('port')
+        if type(port) is not int or not 0 < port < 65536:
+            raise ValueError('select a valid parameter service port or endpoint')
+        context = None
+        if options.distributed:
+            _, context = contexts(options.tls_ca, options.tls_cert, options.tls_key, insecure=options.insecure, hosts=[host])
+        elif options.insecure or any((options.tls_ca, options.tls_cert, options.tls_key)):
+            raise ValueError('TLS options require --distributed')
+        return await ParameterClient.connect(host, port, options.client, token=os.environ.get(options.token_env),
+            context=context, distributed=options.distributed, runtime=runtime)
+    return connect
+
+
+async def run(options):
+    value = None
+    if options.parameter_action in ('set', 'sync') and options.max_json_size <= 0:
+        raise ValueError('--max-json-size must be positive')
+    if options.parameter_action == 'set':
+        if options.max_total_json_size <= 0:
+            raise ValueError('--max-total-json-size must be positive')
+        if options.dir is not None:
+            if options.path is not None:
+                raise ValueError('--dir cannot be combined with a positional parameter path')
+            value = read_directory(options.dir, options.max_json_size, options.max_total_json_size)
+        else:
+            value = read_value(options.file, options.max_json_size)
+    pattern = None
+    if options.parameter_action in ('get', 'sync'):
+        if options.exact and options.path is None:
+            raise ValueError(f'{options.parameter_action} --exact requires PATH')
+        # Keep existing value-only CLI reads literal. Shell shortcuts select
+        # export mode, where a positional pattern (or all paths) is the default.
+        if not options.exact and (options.parameter_action == 'sync' or options.export or options.path is None):
+            try:
+                pattern = re.compile(options.path if options.path is not None else '.*')
+            except re.error as error:
+                raise ValueError(f'invalid parameter path regex: {error}') from error
+    if options.parameter_action == 'set' and options.path is None:
+        validate_import(value)
     if options.parameter_action == 'watch' and options.count is not None and options.count <= 0:
         raise ValueError('watch count must be positive')
-    context = None
-    if options.distributed:
-        _, context = contexts(options.tls_ca, options.tls_cert, options.tls_key, insecure=options.insecure, hosts=[host])
-    elif options.insecure or any((options.tls_ca, options.tls_cert, options.tls_key)):
-        raise ValueError('TLS options require --distributed')
-    client = await ParameterClient.connect(host, port, options.client, token=os.environ.get(options.token_env),
-        context=context, distributed=options.distributed, runtime=runtime)
+    connect = connection_factory(options)
+    if options.parameter_action == 'sync':
+        if not math.isfinite(options.debounce) or options.debounce < 0:
+            raise ValueError('--debounce must be finite and nonnegative')
+        from ose.parameters.sync import DirectorySync
+        await DirectorySync(options.dir, connect, pattern=pattern, exact=options.path if options.exact else None,
+                            initial=options.initial, debounce=options.debounce, max_json_size=options.max_json_size).run()
+        return
+    client = await connect()
     async with client:
         if options.parameter_action == 'list':
             print(json.dumps(await client.list()), flush=True)
