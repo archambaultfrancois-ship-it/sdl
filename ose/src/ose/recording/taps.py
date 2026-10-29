@@ -101,19 +101,22 @@ class TapHub:
                     await asyncio.wait_for(session["changed"].wait(), .25)
                 except asyncio.TimeoutError:
                     pass
-            stats = self.stats(session)
             if not session["queue"]:
-                return {"empty": True, **stats}, None
+                return {"empty": True, **self.stats(session)}, None
             metadata, body = session["queue"].popleft()
             session["bytes"] -= len(body)
             session["counts"]["delivered"] += 1
-            return {"record": metadata, **self.stats(session)}, body
+            session["point_counts"][metadata["topic"]]["delivered"] += 1
+            return {"record": metadata, **self.stats(session, metadata["topic"])}, body
         finally:
             session["polling"] = False
 
     @staticmethod
-    def stats(session):
+    def stats(session, topic=None):
+        counters = session.get("point_counts", {})
+        points = counters.items() if topic is None else ((topic, counters.get(topic, {})),)
         return {"label": session["label"], "counts": dict(session["counts"]), "queued": len(session["queue"]),
+                "point_counts": {name: dict(counts) for name, counts in points},
                 "queued_bytes": session["bytes"], "stopped": not session["active"], "capture_error": session["error"]}
 
     @staticmethod
@@ -134,6 +137,7 @@ class TapHub:
             if not session["active"] or expected is None:
                 continue
             session["counts"]["observed"] += 1
+            session.setdefault("point_counts", {}).setdefault(topic, Counter())["observed"] += 1
             if (catalogue, root, generation) != (expected["catalogue"], expected["root"], expected["generation"]):
                 session["error"] = "recording point changed; stop and refresh discovery"
                 self.deactivate(session)
@@ -149,26 +153,31 @@ class TapHub:
                         raise ValueError(result.diagnostic)
                     if not result.matched:
                         session["counts"]["indeterminate" if result.status == 2 else "filtered"] += 1
+                        session["point_counts"][topic]["indeterminate" if result.status == 2 else "filtered"] += 1
                         continue
                 except Exception as error:
                     session["counts"]["filter_errors"] += 1
+                    session["point_counts"][topic]["filter_errors"] += 1
                     session["error"] = f"SDL source filter evaluation failed on {topic}: {error}"
                     self.deactivate(session)
                     continue
             try:
                 # Replies add control fields; reserve room for them before admission.
-                encode({"op": "result", "request": 2**63, "record": metadata,
-                        "label": session["label"], "counts": {}, "padding": " " * 512}, body, self.max_frame)
+                encode({**self.stats(session, topic), "op": "result", "request": 2**63,
+                        "record": metadata, "padding": " " * 128}, body, self.max_frame)
             except ValueError:
                 session["counts"]["oversize"] += 1
+                session["point_counts"][topic]["oversize"] += 1
                 continue
             if len(body) > session["budget"]:
                 session["counts"]["dropped"] += 1
+                session["point_counts"][topic]["dropped"] += 1
                 continue
             while session["queue"] and (len(session["queue"]) >= session["capacity"] or session["bytes"] + len(body) > session["budget"]):
-                _, old = session["queue"].popleft()
+                old_metadata, old = session["queue"].popleft()
                 session["bytes"] -= len(old)
                 session["counts"]["dropped"] += 1
+                session["point_counts"][old_metadata["topic"]]["dropped"] += 1
             session["queue"].append((metadata, body))
             session["bytes"] += len(body)
             session["changed"].set()
@@ -177,6 +186,17 @@ class TapHub:
         for token, session in list(self.sessions.items()):
             if session["peer"] is peer:
                 self.sessions.pop(token)
+                self.deactivate(session)
+
+    def active_points(self):
+        return {topic for session in self.sessions.values() if session["active"]
+                for topic in session["points"]}
+
+    def invalidate(self, topics):
+        topics = set(topics)
+        for session in self.sessions.values():
+            if session["active"] and topics.intersection(session["points"]):
+                session["error"] = "recording source disconnected; stop and refresh discovery"
                 self.deactivate(session)
 
     def close(self):

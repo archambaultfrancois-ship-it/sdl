@@ -49,6 +49,23 @@ fn named_send(op: u8, port: &str, payload: &[u8]) -> io::Result<()> {
     send(op, &data)
 }
 pub fn publish(port: &str, payload: &[u8]) -> io::Result<()> { named_send(b'P', port, payload) }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordResult { Queued, Disabled, Dropped }
+pub fn valid_recording_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 200 && name.split('.').all(|part| {
+        let mut bytes = part.bytes();
+        bytes.next().is_some_and(|b| b.is_ascii_alphabetic() || b == b'_') &&
+            bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    })
+}
+pub fn declare_recording_point(name: &str, root: &str, catalogue: &str, description: &str) -> io::Result<()> {
+    if !valid_recording_name(name) || root.is_empty() || description.len() > 1024 ||
+        [root, catalogue, description].iter().any(|s| s.contains('\0')) {
+        return Err(invalid("invalid recording declaration"));
+    }
+    named_send(b'N', name, format!("{root}\0{description}\0{catalogue}").as_bytes())
+}
+pub fn record(name: &str, payload: &[u8]) -> io::Result<()> { named_send(b'C', name, payload) }
 pub fn set_parameters(name: &str, payload: &[u8]) -> io::Result<()> {
     named_send(b'S', name, payload)?;
     let result = receive()?;

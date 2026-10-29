@@ -15,6 +15,7 @@ from ose.transport.protocol import encode
 from ose.parameters.service import ParameterEndpoint, OPERATIONS as PARAMETER_OPERATIONS
 from ose.recording.taps import TapHub, OPERATIONS as RECORDING_OPERATIONS
 from ose.execution.observation import describe
+from ose.recording.component import validate_name, MAX_POINTS
 
 
 class Broker(Sessions):
@@ -42,6 +43,8 @@ class Broker(Sessions):
         self.subscriptions = {sub["id"]: sub for sub in plan["subscriptions"]}
         self.init_sessions()
         self.recording = TapHub(self.recording_points, plan["max_frame"], codec=self.codec)
+        self.internal_points = {}
+        self.recording_sequence = 0
         for identity, sub in self.subscriptions.items():
             policy = SubscriptionPolicy.from_dict(sub["policy"])
             store = MemoryStore(policy.capacity)
@@ -58,10 +61,48 @@ class Broker(Sessions):
             engine.store.notify()
 
     def recording_points(self):
-        return {topic: dict(topic=topic, root=port["root"], catalogue=port["catalogue"],
+        outputs = {topic: dict(topic=topic, root=port["root"], catalogue=port["catalogue"], kind="output",
                     generation=self.publisher_owners.get(topic, self.epoch),
                     available=self.enabled and (topic in self.publisher_owners or topic.split(".")[0] in self.peers), endpoint=None)
                 for topic, port in self.topics.items()}
+        outputs.update({topic: dict(desc, topic=topic, kind="internal", endpoint=None,
+            generation=self.generations.get(desc["component"]),
+            available=self.enabled and desc["component"] in self.ready)
+            for topic, desc in self.internal_points.items()})
+        return outputs
+
+    def component_recording(self, node, op, header, body):
+        if node is None:
+            raise ValueError("recording component operations require an identified component")
+        prefix = f"{node}.record."
+        if op == "recording_component_state":
+            return {"active": [topic[len(prefix):] for topic in self.recording.active_points()
+                               if topic.startswith(prefix)]}
+        name = validate_name(header["name"])
+        topic = prefix + name
+        if op == "recording_declare":
+            if node in self.ready or topic in self.topics or topic in self.internal_points or sum(
+                    desc["component"] == node for desc in self.internal_points.values()) >= MAX_POINTS:
+                raise ValueError("recording declarations require initialization and unique names")
+            root, description, catalogue = header["root"], header.get("description", ""), body.decode()
+            if not isinstance(description, str) or len(description.encode()) > 1024 or "\0" in description:
+                raise ValueError("invalid recording description")
+            prepared = self.codec.api.prepare(catalogue)
+            if root not in self.codec.api.message_names(prepared):
+                raise ValueError("unknown recording root")
+            self.internal_points[topic] = dict(root=root, description=description, catalogue=catalogue,
+                                              component=node, name=name)
+            return {}
+        if op != "recording_emit" or node not in self.ready:
+            raise ValueError("invalid recording component operation")
+        desc = self.internal_points[topic]
+        if topic in self.recording.active_points():
+            envelope = self.codec.wrap(desc["catalogue"], body)
+            self.codec.validate(desc["catalogue"], desc["root"], envelope)
+            self.recording_sequence += 1
+            self.recording.observe(topic, envelope, generation=self.generations[node], sequence=self.recording_sequence,
+                                   catalogue=desc["catalogue"], root=desc["root"])
+        return {}
 
     def _notify_node(self, node):
         for identity, sub in self.subscriptions.items():
@@ -230,6 +271,8 @@ class Broker(Sessions):
                         if node is None:
                             raise ValueError("hello required")
                         self.ready.add(node)
+                    elif op in ("recording_declare", "recording_component_state", "recording_emit"):
+                        result = self.component_recording(node, op, header, body)
                     elif op == "status":
                         result = self.snapshot()
                     elif op == "state":
@@ -269,6 +312,10 @@ class Broker(Sessions):
             if session is not None:
                 await self.close_session(session)
             if node is not None and self.peers.get(node, (None,))[0] is peer:
+                topics = [topic for topic, desc in self.internal_points.items() if desc["component"] == node]
+                self.recording.invalidate(topics)
+                for topic in topics:
+                    del self.internal_points[topic]
                 self.peers.pop(node, None)
                 self.ready.discard(node)
                 self.dedicated_data.discard(node)

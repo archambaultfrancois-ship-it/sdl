@@ -91,6 +91,22 @@ class TapTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.hub.sessions[token]["counts"]["oversize"], 1)
         self.assertEqual(self.hub.sessions[token]["bytes"], 0)
 
+    async def test_point_counters_do_not_exceed_binary_reply_metadata_limit(self):
+        points = {"source.record." + "x" * 600 + str(i): dict(self.point,
+            topic="source.record." + "x" * 600 + str(i)) for i in range(128)}
+        self.hub.points = lambda: points
+        opened, _ = await self.hub.request(self.peer, dict(op="recording_open",
+            points={name: "first" for name in points}))
+        for sequence, (name, point) in enumerate(points.items()):
+            self.hub.observe(name, b"payload", generation="first", sequence=sequence,
+                             catalogue=point["catalogue"], root=point["root"])
+        result, body = await self.hub.request(self.peer, dict(op="recording_next", session=opened["session"]))
+        from ose.transport.protocol import encode
+        encode({"op": "result", "request": 1, **result}, body)
+        self.assertEqual(len(result["point_counts"]), 1)
+        stats, _ = await self.hub.request(self.peer, dict(op="recording_stop", session=opened["session"]))
+        self.assertEqual(len(stats["point_counts"]), 128)
+
     async def test_filter_configuration_is_atomic_and_validates_topics(self):
         for filters in ([], {"other": "x == 1"}, {"source.value": 1}, {"source.value": ""}):
             with self.subTest(filters=filters), self.assertRaisesRegex(ValueError, "filters"):

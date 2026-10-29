@@ -51,7 +51,8 @@ class Recorder:
 
     async def describe(self, topic):
         result, body = await self.client.request("recording_describe", topic=topic)
-        return {k: result[k] for k in ("topic", "root", "generation", "available", "endpoint")} | {"catalogue": body.decode()}
+        return {k: result[k] for k in ("topic", "root", "generation", "available", "endpoint",
+                "kind", "component", "name", "description") if k in result} | {"catalogue": body.decode()}
 
     def editable(self):
         if self.capture and not self.capture.task.done():
@@ -233,7 +234,9 @@ class Capture:
     async def pump(self, feed):
         while True:
             result, body = await feed["client"].request("recording_next", session=feed["session"])
+            point_counts = {**feed["stats"].get("point_counts", {}), **result.get("point_counts", {})}
             feed["stats"] = {k: result[k] for k in ("counts", "queued", "queued_bytes", "stopped", "capture_error")}
+            feed["stats"]["point_counts"] = point_counts
             if result["capture_error"]:
                 raise ValueError(result["capture_error"])
             if result.get("empty"):
@@ -312,8 +315,11 @@ class Capture:
 
     def status(self):
         remote = Counter()
+        point_counts = {}
         for feed in self.feeds:
             remote.update(feed["stats"].get("counts", {}))
+            for topic, counters in feed["stats"].get("point_counts", {}).items():
+                point_counts.setdefault(topic, Counter()).update(counters)
         counts = self.counts.copy()
         for key in ("filtered", "indeterminate", "filter_errors"):
             if key in remote:
@@ -323,4 +329,5 @@ class Capture:
                 **self.files.status(), "file_message_count": self.file_messages, "file_topics": dict(self.file_topics),
                 "counts": dict(counts), "topics": dict(self.topic_counts),
                 "capture_counts": dict(remote), "error": self.error,
+                "point_counts": {topic: dict(counts) for topic, counts in point_counts.items()},
                 "selected": dict(self.filters)}

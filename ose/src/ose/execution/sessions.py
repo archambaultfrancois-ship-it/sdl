@@ -65,7 +65,7 @@ class Sessions:
             raise ClientError("invalid_topic", "invalid topic or root")
         if topic in session.publishers:
             raise ClientError("ownership", "publisher already declared; release it first")
-        if topic in self.internal_topics:
+        if topic in self.internal_topics or any(topic.startswith(name + ".record.") for name in self.plan["components"]):
             raise ClientError("ownership", "topic belongs to an internal component")
         if topic in self.publisher_owners and self.publisher_owners[topic] != session.identity:
             raise ClientError("ownership", "topic already has an active publisher")

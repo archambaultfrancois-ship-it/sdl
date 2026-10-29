@@ -66,6 +66,21 @@ static int named_send(char op, const char *port, const void *payload, size_t siz
 int ose_publish(const char *port, const void *payload, size_t size) {
     return named_send('P', port, payload, size);
 }
+int ose_record_bytes(const char *name, const void *payload, size_t size) {
+    return named_send('C', name, payload, size);
+}
+int ose_declare_recording(const char *name, const char *root, const char *catalogue, const char *description) {
+    size_t r = strlen(root), c = strlen(catalogue), d = strlen(description);
+    char *body;
+    int ok;
+    if (r + c + d > MAX_SIZE - 3) return 0;
+    body = malloc(r + c + d + 2);
+    if (!body) return 0;
+    memcpy(body, root, r + 1); memcpy(body + r + 1, description, d + 1);
+    memcpy(body + r + d + 2, catalogue, c);
+    ok = named_send('N', name, body, r + c + d + 2);
+    free(body); return ok;
+}
 int ose_set_parameters(const char *name, const void *payload, size_t size) {
     OseEvent result;
     int ok;

@@ -6,6 +6,11 @@
 #include <string.h>
 
 typedef struct {
+    char *name, *root;
+    SdlContext *encoder;
+    int active;
+} RecordingPoint;
+typedef struct {
     SdlContext *codec;
     char *catalogue;
     size_t catalogue_size;
@@ -22,7 +27,104 @@ typedef struct {
     Input *parameter_values;
     SdlContext **parameter_codecs;
     int active, failed, parameter_writes;
+    RecordingPoint recording[256];
+    size_t recording_count, recording_bytes;
+    int ready;
 } Runtime;
+
+static RecordingPoint *recording_slot(Runtime *runtime, const char *name) {
+    uint32_t hash = 2166136261u;
+    const unsigned char *p = (const unsigned char *)name;
+    size_t index;
+    while (*p) { hash ^= *p++; hash *= 16777619u; }
+    index = hash % 256;
+    while (runtime->recording[index].name && strcmp(runtime->recording[index].name, name))
+        index = (index + 1) % 256;
+    return &runtime->recording[index];
+}
+static int recording_name(const char *name) {
+    const unsigned char *p = (const unsigned char *)name;
+    int first = 1;
+    if (!name || !*name || strlen(name) > 200) return 0;
+    for (; *p; ++p) {
+        if (*p == '.') { if (first) return 0; first = 1; continue; }
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || *p == '_' ||
+              (!first && *p >= '0' && *p <= '9'))) return 0;
+        first = 0;
+    }
+    return !first;
+}
+static char *recording_copy(const char *text) {
+    size_t size = strlen(text) + 1;
+    char *copy = malloc(size);
+    if (copy) memcpy(copy, text, size);
+    return copy;
+}
+int ose_declare_recording_value(OseContext *ctx, const char *name, const char *root,
+                               const char *catalogue, const char *description) {
+    Runtime *runtime = ctx->private_runtime;
+    RecordingPoint *point;
+    if (runtime->ready || !runtime->parameter_writes || !recording_name(name) || !root || !catalogue ||
+        !description || strlen(description) > 1024 || runtime->recording_count >= 128)
+        return ose_fail(ctx, "invalid recording declaration");
+    point = recording_slot(runtime, name);
+    if (point->name) return ose_fail(ctx, "duplicate recording point");
+    point->name = recording_copy(name); point->root = recording_copy(root);
+    point->encoder = type_prepare(catalogue, strlen(catalogue));
+    if (!point->name || !point->root || !point->encoder ||
+        !ose_declare_recording(name, root, catalogue, description))
+        return ose_fail(ctx, "recording declaration failed");
+    runtime->recording_count++;
+    return 1;
+}
+int ose_recording_enabled(OseContext *ctx, const char *name) {
+    RecordingPoint *point;
+    if (!recording_name(name)) return ose_fail(ctx, "invalid recording name");
+    point = recording_slot(ctx->private_runtime, name);
+    if (!point->name) return ose_fail(ctx, "unknown recording point");
+    return point->active;
+}
+OseRecordResult ose_record_value(OseContext *ctx, const char *name, const char *root, const void *value) {
+    Runtime *runtime = ctx->private_runtime;
+    RecordingPoint *point;
+    size_t size, overhead;
+    void *payload;
+    int ok;
+    if (!runtime->active || !recording_name(name) || !root || !value) goto invalid;
+    point = recording_slot(runtime, name);
+    if (!point->name || strcmp(point->root, root)) goto invalid;
+    if (!point->active) return OSE_RECORD_DISABLED;
+    overhead = strlen(name) + 2;
+    if (runtime->recording_bytes + overhead >= 256 * 1024) return OSE_RECORD_DROPPED;
+    payload = type_encode(point->encoder, root, value, &size);
+    if (!payload) goto invalid;
+    if (size > 256 * 1024 - runtime->recording_bytes - overhead) {
+        type_free(payload); return OSE_RECORD_DROPPED;
+    }
+    ok = ose_record_bytes(name, payload, size); type_free(payload);
+    if (!ok) goto invalid;
+    runtime->recording_bytes += size + overhead;
+    return OSE_RECORD_QUEUED;
+invalid:
+    ose_fail(ctx, "invalid recording emission"); return OSE_RECORD_ERROR;
+}
+static int recording_update(OseContext *ctx, const OseEvent *event) {
+    Runtime *runtime = ctx->private_runtime;
+    size_t i, offset = 0;
+    char name[201];
+    for (i = 0; i < 256; ++i) runtime->recording[i].active = 0;
+    while (offset < event->size) {
+        size_t end = offset;
+        RecordingPoint *point;
+        while (end < event->size && event->data[end]) ++end;
+        if (end == offset || end - offset > 200 || (end < event->size && end + 1 == event->size)) return 0;
+        memcpy(name, event->data + offset, end - offset); name[end - offset] = 0;
+        point = recording_slot(runtime, name);
+        if (!point->name || point->active) return 0;
+        point->active = 1; offset = end + 1;
+    }
+    return 1;
+}
 
 double ose_now(const OseContext *ctx) { return (double)ctx->time_ns / 1000000000.0; }
 uint64_t ose_time_ns(const OseContext *ctx) { return ctx->time_ns; }
@@ -189,12 +291,14 @@ int ose_run_callbacks_parameters(const char *name,
     initialized = 1; runtime.parameter_writes = 1;
     if ((start && !start(&ctx)) || runtime.failed) goto cleanup;
     runtime.parameter_writes = 0;
+    runtime.ready = 1;
     { const uint8_t capabilities = parameter_count ? 3 : 1;
       if (!ose_send('R', &capabilities, 1)) goto cleanup; }
     while (ose_read(&event)) {
         char op = event.op;
         int valid = 1;
-        if (op == 'U') valid = parameter_update(&ctx, &event, 0);
+        if (op == 'E') valid = recording_update(&ctx, &event);
+        else if (op == 'U') valid = parameter_update(&ctx, &event, 0);
         else if (op == 'D') valid = admit(&ctx, &event);
         else if (op == 'T') {
             if (!ose_tick(&event, &ctx.time_ns, &ctx.tick_index)) valid = ose_fail(&ctx, "invalid tick context");
@@ -209,6 +313,7 @@ int ose_run_callbacks_parameters(const char *name,
             }
         }
         runtime.active = 1; runtime.parameter_writes = 1;
+        runtime.recording_bytes = 0;
         valid = dispatch(&ctx);
         runtime.active = 0; runtime.parameter_writes = 0;
         if (!valid || runtime.failed || !ose_send('F', NULL, 0)) goto cleanup;
@@ -233,6 +338,10 @@ cleanup:
         if (runtime.parameter_codecs) type_context_free(runtime.parameter_codecs[index]);
     }
     free(runtime.parameter_values); free(runtime.parameter_codecs);
+    for (index = 0; index < 256; ++index) {
+        free(runtime.recording[index].name); free(runtime.recording[index].root);
+        type_context_free(runtime.recording[index].encoder);
+    }
     free(runtime.selected); free(runtime.encoders); free(config);
     return result;
 }

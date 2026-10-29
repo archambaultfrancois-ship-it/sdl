@@ -8,7 +8,7 @@ from ose.execution import ipc
 from ose.parameters.bindings import updates, write_reply
 
 
-async def start_component(node, parameters=None):
+async def start_component(node, parameters=None, recording=None):
     env = dict(os.environ, **node.get("env", {}))
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2]) + os.pathsep + env.get("PYTHONPATH", "")
     # Terminal Ctrl+C belongs to the supervisor. Components stop through IPC so
@@ -16,6 +16,10 @@ async def start_component(node, parameters=None):
     process = await asyncio.create_subprocess_exec(*node["command"], cwd=node["cwd"], env=env,
         start_new_session=True,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+    if recording is None:
+        from ose.recording.component import ComponentRecording
+        recording = ComponentRecording(None)
+    process.recording = recording
     try:
         async def initialize():
             await ipc.send(process.stdin, "I", json.dumps(node).encode())
@@ -24,8 +28,11 @@ async def start_component(node, parameters=None):
                     raise ValueError("shared parameter service is required")
                 await updates(process, node, parameters.initial)
             op, body = await ipc.receive(process.stdout)
-            while op == "S":
-                await write_reply(process, body, parameters)
+            while op in ("S", "N"):
+                if op == "N":
+                    await recording.declare(body)
+                else:
+                    await write_reply(process, body, parameters)
                 op, body = await ipc.receive(process.stdout)
             if op != "R" or body not in (b"", ipc.TICK_CONTEXT, b"\x03"):
                 raise ValueError("component did not send a supported READY")
@@ -43,10 +50,17 @@ async def tick_events(process, node, selected, time_ns=None, tick_index=1, param
     """Yield publications as they arrive; callers control their visibility."""
     if parameters is not None:
         await updates(process, node, parameters.drain())
+    recording = getattr(process, "recording", None)
+    if recording is not None and recording.points:
+        activation = recording.activation()
+        if activation != getattr(process, "recording_activation", None):
+            await ipc.send(process.stdin, "E", activation)
+            process.recording_activation = activation
     for port, record in selected.items():
         body = ipc.port_data(port, b"", "") if record is None else ipc.port_data(port, record["payload"], record["catalogue"])
         await ipc.send(process.stdin, "D", body)
     await ipc.send(process.stdin, "T", b"" if time_ns is None else struct.pack(">QQ", time_ns, tick_index))
+    recording_bytes = 0
     while True:
         op, body = await ipc.receive(process.stdout)
         if op == "S":
@@ -54,6 +68,14 @@ async def tick_events(process, node, selected, time_ns=None, tick_index=1, param
             continue
         if op == "F" and not body:
             return
+        if op == "C" and recording is not None:
+            from ose.recording.component import MAX_TICK_BYTES
+            recording_bytes += len(body)
+            if recording_bytes > MAX_TICK_BYTES:
+                raise ValueError("component exceeded recording tick budget")
+            name, payload = ipc.unpack_port(body)
+            recording.emit(name, payload)
+            continue
         if op != "P":
             raise ValueError("component must publish or finish a tick")
         port, payload = ipc.unpack_port(body)

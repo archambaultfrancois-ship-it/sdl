@@ -41,6 +41,8 @@ def validate_graph(model, deployment):
     components = model["components"]
     if not isinstance(components, dict) or not components:
         raise ValueError("components must be a nonempty object")
+    if any(topic.startswith(name + ".record.") for topic in external for name in components):
+        raise ValueError("external topic uses a component's reserved recording namespace")
     if set(deployment["components"]) != set(components):
         raise ValueError("deployment must cover exactly the model components")
     from ose.parameters.model import validate_parameters
@@ -48,7 +50,15 @@ def validate_graph(model, deployment):
     for name, node in components.items():
         if not name or "." in name:
             raise ValueError("component names must be nonempty and contain no dots")
-        fields(node, ("inputs", "outputs", "trigger", "parameters", "parameter_bindings"), ("inputs", "outputs", "trigger"))
+        fields(node, ("inputs", "outputs", "trigger", "parameters", "parameter_bindings", "recording_types"), ("inputs", "outputs", "trigger"))
+        if not isinstance(node.get("recording_types", {}), dict):
+            raise ValueError("recording_types must map aliases to SDL type descriptions")
+        for desc in node.get("recording_types", {}).values():
+            fields(desc, ("root", "schema"), ("root",))
+            if not isinstance(desc["root"], str) or not desc["root"]:
+                raise ValueError("invalid recording type root")
+            if "schema" in desc and (not isinstance(desc["schema"], str) or not desc["schema"]):
+                raise ValueError("invalid recording type schema")
         if not isinstance(node.get("parameters", {}), dict):
             raise ValueError("parameters must be an object")
         for direction in ("inputs", "outputs"):

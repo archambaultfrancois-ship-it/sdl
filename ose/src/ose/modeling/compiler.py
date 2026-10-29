@@ -29,7 +29,9 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
     parameter_defs = model.get("shared_parameters", {})
     for component, node in model["components"].items():
         language = deployment["components"][component].get("container", {}).get("language")
-        descriptions = [desc for direction in ("inputs", "outputs") for desc in node[direction].values()]
+        if language:
+            schema_languages.setdefault((model_path.parent / model["schemas"]).resolve(), set()).add(language)
+        descriptions = [desc for direction in ("inputs", "outputs", "recording_types") for desc in node.get(direction, {}).values()]
         descriptions += [parameter_defs[b["path"]] for b in node.get("parameter_bindings", {}).values()]
         for desc in descriptions:
             schema_path = (model_path.parent / desc.get("schema", model["schemas"])).resolve()
@@ -75,8 +77,8 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
 
     for name, original in model["components"].items():
         node = json.loads(json.dumps(original))
-        for direction in ("inputs", "outputs"):
-            for port in node[direction].values():
+        for direction in ("inputs", "outputs", "recording_types"):
+            for port in node.get(direction, {}).values():
                 port["catalogue"] = catalogue(port.get("schema", model["schemas"]))
                 port["catalogue_id"] = codec.identity(port["catalogue"])
                 if port["root"] not in codec.api.message_names(codec.api.prepare(port["catalogue"])):
@@ -89,9 +91,19 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
         if "container" in execution:
             handler = handlers[name]
             language = execution["container"]["language"]
-            paths = dict.fromkeys((model_path.parent / desc.get("schema", model["schemas"])).resolve()
-                                  for desc in [d for direction in ("inputs", "outputs") for d in node[direction].values()] +
-                                  [parameter_defs[b["path"]] for b in node.get("parameter_bindings", {}).values()])
+            paths = dict.fromkeys([(model_path.parent / desc.get("schema", model["schemas"])).resolve()
+                                  for desc in [d for direction in ("inputs", "outputs", "recording_types") for d in node.get(direction, {}).values()] +
+                                  [parameter_defs[b["path"]] for b in node.get("parameter_bindings", {}).values()]])
+            if not paths:
+                paths = {(model_path.parent / model["schemas"]).resolve(): None}
+            node["recording_catalogues"] = {}
+            for path in paths:
+                text = catalogue(str(path))
+                for root in codec.api.message_names(codec.api.prepare(text)):
+                    previous = node["recording_catalogues"].get(root)
+                    if previous is not None and previous != text:
+                        codec.compare(previous, text, root)
+                    node["recording_catalogues"][root] = text
             schemas = [(generated_paths[path] / language, codec.python_bindings(generated_paths[path]) if language == "python"
                         else codec.native_bindings(generated_paths[path], language)) for path in paths]
             component_dir = destination / "components" / name
@@ -111,6 +123,7 @@ def compile_plan(model_path, deployment_path, sdl_root, destination):
         node["env"] = {k: expand(v) for k, v in execution.get("env", {}).items()}
         if "placement" in execution:
             node["placement"] = execution["placement"]
+        node.pop("recording_catalogues", None)  # Generator-only descriptors; do not duplicate them in INIT.
         components[name] = node
     external_topics = {}
     for topic, desc in model.get("external_topics", {}).items():

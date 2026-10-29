@@ -2,6 +2,8 @@
 import json
 import struct
 import sys
+from enum import Enum
+from ose.recording.component import validate_name, MAX_POINTS, MAX_TICK_BYTES
 from ose.execution.ipc import MAX_SIZE, TICK_CONTEXT, frame, port_data, unpack_port, tick_context
 
 
@@ -13,6 +15,12 @@ def read_exact(stream, size):
             raise EOFError("adapter disconnected")
         result.extend(part)
     return bytes(result)
+
+
+class RecordResult(str, Enum):
+    QUEUED = "queued"
+    DISABLED = "disabled"
+    DROPPED = "dropped"
 
 
 class ComponentSession:
@@ -35,6 +43,9 @@ class ComponentSession:
                 raise ValueError('invalid initial shared parameter block')
             self.parameter_values[alias] = (catalogue, payload)
         self.is_ready = False
+        self.recording_points = {}
+        self._recording_bytes = 0
+        self._in_tick = False
         self.timed_ticks = timed_ticks
         self.time_ns, self.tick_index = 0, 0
         if auto_ready:
@@ -59,6 +70,32 @@ class ComponentSession:
     def publish(self, port, payload):
         self.send("P", port_data(port, payload))
 
+    def declare_recording_point(self, name, root, catalogue, description=""):
+        validate_name(name)
+        if self.is_ready or name in self.recording_points or len(self.recording_points) >= MAX_POINTS:
+            raise ValueError("recording declarations require initialization and unique names")
+        if not root or any("\0" in value for value in (root, catalogue, description)) or len(description.encode()) > 1024:
+            raise ValueError("invalid recording descriptor")
+        self.send("N", port_data(name, (root + "\0" + description + "\0" + catalogue).encode()))
+        self.recording_points[name] = False
+
+    def recording_enabled(self, name):
+        return self.recording_points[name]
+
+    def record(self, name, payload):
+        if not self._in_tick:
+            raise RuntimeError("recording requires an active tick")
+        if not self.recording_enabled(name):
+            return RecordResult.DISABLED
+        body_size = 2 + len(name.encode()) + len(payload)
+        if body_size > MAX_TICK_BYTES - self._recording_bytes:
+            return RecordResult.DROPPED
+        if not payload:
+            raise ValueError("empty recording payload")
+        self.send("C", port_data(name, payload))
+        self._recording_bytes += body_size
+        return RecordResult.QUEUED
+
     def set_parameters(self, alias, payload):
         binding = self.config.get('parameter_bindings', {}).get(alias)
         if binding is None or 'write' not in binding['access']:
@@ -74,7 +111,12 @@ class ComponentSession:
         inputs = {}
         while True:
             op, data = self.receive()
-            if op == 'U':
+            if op == 'E':
+                active = data.decode().split("\0") if data else []
+                if len(active) != len(set(active)) or set(active) - self.recording_points.keys():
+                    raise ValueError("unknown or duplicate active recording point")
+                self.recording_points.update((name, name in active) for name in self.recording_points)
+            elif op == 'U':
                 alias, catalogue, payload = unpack_port(data, True)
                 binding = self.config.get('parameter_bindings', {}).get(alias)
                 if binding is None or 'read' not in binding['access'] or catalogue != binding['catalogue'] or not payload:
@@ -87,7 +129,10 @@ class ComponentSession:
                 inputs[port] = None if not catalogue and not payload else (catalogue, payload)
             elif op == "T":
                 self.time_ns, self.tick_index = tick_context(data, self.tick_index)
+                self._in_tick = True
+                self._recording_bytes = 0
                 yield inputs
+                self._in_tick = False
                 self.send("F")
                 inputs = {}
             elif op == "X":

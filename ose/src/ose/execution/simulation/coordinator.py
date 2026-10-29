@@ -11,6 +11,7 @@ from ose.codec.sdl2 import SDL2
 from ose.parameters.service import ParameterService
 from ose.parameters.bindings import LocalBindings
 from ose.execution.process import start_component, tick_events, stop_component
+from ose.recording.component import ComponentRecording
 from ose.execution.scheduler import reserve_snapshot
 from ose.execution.simulation.clock import MAX_NS, VirtualClock, Schedule, seconds_ns
 from ose.execution.simulation.router import Router
@@ -103,7 +104,8 @@ class Simulation:
         self.parameter_scenario_events = 0
 
     async def _start(self, name):
-        process, capable = await start_component(self.plan["components"][name], self.parameter_bindings[name])
+        process, capable = await start_component(self.plan["components"][name], self.parameter_bindings[name],
+                                                 ComponentRecording(self.codec))
         self.processes[name] = process
         if not capable:
             raise ValueError(f"{name}: simulated execution requires timestamped ticks; rebuild the container or update its SDK")

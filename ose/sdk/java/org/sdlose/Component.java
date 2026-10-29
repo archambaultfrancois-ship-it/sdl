@@ -80,6 +80,10 @@ public final class Component {
         private Thread owner;
         private final Port[] outputs;
         private final OutputStream stream;
+        private final Map<String, Port> recordingPoints = new HashMap<>();
+        private final Set<String> recordingActive = new HashSet<>();
+        private boolean initializing;
+        private int recordingBytes;
         private InputStream inputStream;
         private Port[] parameters = new Port[0];
         private boolean[] parameterRead = new boolean[0], parameterWrite = new boolean[0];
@@ -133,6 +137,48 @@ public final class Component {
         public BigInteger timeNs() { return time; }
         public BigInteger tickIndex() { return index; }
         public double now() { return time.doubleValue() / 1000000000.0; }
+        public final <T extends SdlCodec.Message> void declareRecordingPoint(
+                String name, Class<T> type, String description) throws IOException {
+            if (!initializing || owner != Thread.currentThread() || recordingPoints.containsKey(name) ||
+                recordingPoints.size() >= 128 || name == null || name.length() > 200 ||
+                !name.matches("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*"))
+                throw new IllegalArgumentException("recording declarations require initialization and unique valid names");
+            if (description == null || description.indexOf(0) >= 0 || utf8(description).length > 1024)
+                throw new IllegalArgumentException("invalid recording description");
+            String root = SdlCodec.messageName(type), catalogue = SdlCodec.description(type);
+            Port point = new Port(name, root, catalogue, type, false, false);
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream(); DataOutputStream out = new DataOutputStream(bytes);
+            byte[] local = utf8(name); out.writeShort(local.length); out.write(local);
+            out.write(utf8(root)); out.writeByte(0); out.write(utf8(description)); out.writeByte(0); out.write(utf8(catalogue));
+            send(stream, 'N', bytes.toByteArray()); recordingPoints.put(name, point);
+        }
+        public final boolean recordingEnabled(String name) {
+            if (!recordingPoints.containsKey(name)) throw new IllegalArgumentException("unknown recording point");
+            return recordingActive.contains(name);
+        }
+        public final RecordResult record(String name, SdlCodec.Message value) throws IOException {
+            if (initializing || owner != Thread.currentThread())
+                throw new IllegalStateException("recording requires the active tick callback");
+            Port point = recordingPoints.get(name);
+            if (point == null || !point.type.isInstance(value)) throw new IllegalArgumentException("unknown point or wrong recording type");
+            if (!recordingActive.contains(name)) return RecordResult.DISABLED;
+            if (recordingBytes + name.length() + 2 >= 256 * 1024) return RecordResult.DROPPED;
+            byte[] payload = SdlCodec.encode(point.encoder, value), local = utf8(name);
+            int size = local.length + 2 + payload.length;
+            if (size > 256 * 1024 - recordingBytes) return RecordResult.DROPPED;
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream(); DataOutputStream out = new DataOutputStream(bytes);
+            out.writeShort(local.length); out.write(local); out.write(payload);
+            send(stream, 'C', bytes.toByteArray()); recordingBytes += size;
+            return RecordResult.QUEUED;
+        }
+        private void recordingUpdate(byte[] data) throws IOException {
+            recordingActive.clear();
+            if (data.length == 0) return;
+            for (String name : text(data).split(String.valueOf((char)0), -1)) {
+                if (!recordingPoints.containsKey(name) || !recordingActive.add(name))
+                    throw new IOException("unknown or duplicate active recording point");
+            }
+        }
         protected final void publish(int index, SdlCodec.Message message) throws IOException {
             if (owner != Thread.currentThread()) throw new IllegalStateException("publication requires the active tick callback");
             Port port = outputs[index];
@@ -152,6 +198,7 @@ public final class Component {
             if (index.signum() == 0 || index.compareTo(MAX_U64) > 0) throw new IOException("invalid tick index");
         }
     }
+    public enum RecordResult { QUEUED, DISABLED, DROPPED }
     public interface Callbacks {
         void start() throws Exception;
         void tick(Object[] inputs) throws Exception;
@@ -172,13 +219,16 @@ public final class Component {
             for (int i = 0; i < ctx.parameters.length; ++i)
                 if (ctx.parameterRead[i]) ctx.parameterUpdate(read(stream), true);
             started = true; ctx.owner = Thread.currentThread();
+            ctx.initializing = true;
             try { callbacks.start(); } finally { ctx.owner = null; }
+            ctx.initializing = false;
             send(ctx.stream, 'R', new byte[]{(byte)(ctx.parameters.length == 0 ? 1 : 3)});
             Object[] selected = new Object[inputs.length]; boolean[] present = new boolean[inputs.length];
             for (;;) {
                 Frame event = read(stream);
                 if (event.op == 'X') { if (event.body.length != 0) throw new IOException("invalid STOP"); break; }
                 if (event.op == 'U') { ctx.parameterUpdate(event, false); continue; }
+                if (event.op == 'E') { ctx.recordingUpdate(event.body); continue; }
                 if (event.op == 'D') {
                     DataInputStream data = new DataInputStream(new ByteArrayInputStream(event.body));
                     int size = data.readUnsignedShort();
@@ -203,6 +253,7 @@ public final class Component {
                     for (int i = 0; i < inputs.length; ++i)
                         if (inputs[i].required && !present[i]) throw new IOException("missing required input " + inputs[i].name);
                     ctx.tick(event.body); ctx.owner = Thread.currentThread();
+                    ctx.recordingBytes = 0;
                     try { callbacks.tick(selected); } finally { ctx.owner = null; }
                     Arrays.fill(selected, null); Arrays.fill(present, false); send(ctx.stream, 'F', new byte[0]);
                 } else throw new IOException("unexpected CH/1 opcode");

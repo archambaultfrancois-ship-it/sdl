@@ -25,13 +25,13 @@ def generate(name, node, handler, sdl_root, schemas, destination, identity):
     destination = Path(destination); sdl_root = Path(sdl_root)
     types = merge_schemas(name, 'ada', schemas, destination / 'types')
     api = 'Ose_' + name; stem = api.lower(); packages = sorted({p for p, _ in types.values()})
-    if any(p.lower() in (api.lower(), identity.lower(), 'ose_component') for p in packages):
+    if any(p.lower() in (api.lower(), identity.lower(), 'ose_component', 'ose_recording') for p in packages):
         raise ValueError('Ada schema package conflicts with component API')
     if handler.name.lower() != identity.lower().replace('.', '-') + '.adb':
         raise ValueError('Ada handler filename must follow GNAT unit naming')
     def typ(desc): return '.'.join(types[desc['root']])
     spec = ['-- Generated typed component API.', 'with Ada.Strings.Unbounded;', 'with Ada.Task_Identification;',
-            'with Interfaces;', 'with SDL_Runtime;', *(f'with {p};' for p in packages), f'package {api} is',
+            'with Interfaces;', 'with SDL_Runtime;', 'with Ose_Recording;', *(f'with {p};' for p in packages), f'package {api} is',
             '   type Context is limited private;', '   function Name (Ctx : Context) return String;',
             '   function Config_JSON (Ctx : Context) return String;',
             '   function Time_Ns (Ctx : Context) return Interfaces.Unsigned_64;',
@@ -52,6 +52,15 @@ def generate(name, node, handler, sdl_root, schemas, destination, identity):
         spec += [f'   procedure On_{port} (Self : in out Handler; Ctx : in out Context; Message : {nullable}Input_{port});']
     for port, desc in node['outputs'].items():
         spec += [f'   procedure Publish_{port} (Ctx : in out Context; Message : {typ(desc)});']
+    recording_symbols = {}
+    for root in node.get('recording_catalogues', {}):
+        symbol = types[root][1].removeprefix('T_')
+        if symbol.lower() in {value.lower() for value in recording_symbols.values()}:
+            raise ValueError('Ada recording helper name collision')
+        recording_symbols[root] = symbol
+        spec += [f'   procedure Declare_Recording_{symbol} (Ctx : in out Context; Name : String; Description : String := "");',
+                 f'   function Record_{symbol} (Ctx : in out Context; Name : String; Value : {".".join(types[root])}) return Ose_Recording.Emit_Result;']
+    spec += ['   function Recording_Enabled (Ctx : Context; Name : String) return Boolean;']
     for alias, desc in node.get('parameter_bindings', {}).items():
         if 'read' in desc['access']:
             spec += [f'   function Parameters_{alias} (Ctx : Context) return {typ(desc)};']
@@ -59,6 +68,7 @@ def generate(name, node, handler, sdl_root, schemas, destination, identity):
             spec += [f'   procedure Set_Parameters_{alias} (Ctx : in out Context; Value : {typ(desc)});']
     spec += ['   procedure Run (Self : in out Handler\'Class);', 'private', '   type Context is limited record',
              '      Config : Ada.Strings.Unbounded.Unbounded_String;',
+             '      Recordings : Ose_Recording.Registry;',
              '      Time, Index : Interfaces.Unsigned_64 := 0;',
              '      Active : Boolean := False;', '      Owner : Ada.Task_Identification.Task_Id := Ada.Task_Identification.Null_Task_Id;']
     for port in node['outputs']:
@@ -73,7 +83,11 @@ def generate(name, node, handler, sdl_root, schemas, destination, identity):
     (destination / (stem + '.ads')).write_text('\n'.join(spec))
     body = ['with Ada.Unchecked_Deallocation;', 'with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;',
             'with Ose_Component; use Ose_Component;', f'package body {api} is',
-            '   use type Ada.Task_Identification.Task_Id;',
+            '   use type Ada.Task_Identification.Task_Id;']
+    recording_catalogues = {text: index for index, text in enumerate(dict.fromkeys(node.get('recording_catalogues', {}).values()))}
+    for text, index in recording_catalogues.items():
+        body += [f'   Recording_Catalogue_{index} : constant String := {literal(text)};']
+    body += [
             f'   function Name (Ctx : Context) return String is ({literal(name)});',
             '   function Config_JSON (Ctx : Context) return String is (To_String (Ctx.Config));',
             '   function Time_Ns (Ctx : Context) return Interfaces.Unsigned_64 is (Ctx.Time);',
@@ -98,6 +112,24 @@ def generate(name, node, handler, sdl_root, schemas, destination, identity):
                  '      if not Ctx.Active or else Ctx.Owner /= Ada.Task_Identification.Current_Task then',
                  '         raise Program_Error with "publication requires the active tick callback";', '      end if;',
                  f'      Publish ({literal(port)}, {package}.Encode (Ctx.Output_{port}, Message));', '   end;']
+    body += ['   function Recording_Enabled (Ctx : Context; Name : String) return Boolean is',
+             '     (Ose_Recording.Is_Enabled (Ctx.Recordings, Name));']
+    for root, symbol in recording_symbols.items():
+        package, value_type = types[root]
+        text = node['recording_catalogues'][root]
+        body += [f'   procedure Declare_Recording_{symbol} (Ctx : in out Context; Name : String; Description : String := "") is',
+                 '   begin',
+                 '      if Ctx.Owner /= Ada.Task_Identification.Current_Task then raise Program_Error with "recording declaration requires on_start"; end if;',
+                 f'      Ose_Recording.Declare_Point (Ctx.Recordings, Name, {literal(root)}, Recording_Catalogue_{recording_catalogues[text]}, Description);',
+                 '   end;',
+                 f'   function Record_{symbol} (Ctx : in out Context; Name : String; Value : {package}.{value_type}) return Ose_Recording.Emit_Result is',
+                 '   begin',
+                 '      if not Ctx.Active or else Ctx.Owner /= Ada.Task_Identification.Current_Task then raise Program_Error with "recording requires the active tick callback"; end if;',
+                 f'      Ose_Recording.Check_Type (Ctx.Recordings, Name, {literal(root)});',
+                 '      if not Recording_Enabled (Ctx, Name) then return Ose_Recording.Disabled; end if;',
+                 "      if Ctx.Recordings.Tick_Bytes + Name'Length + 2 >= 256 * 1024 then return Ose_Recording.Dropped; end if;",
+                 f'      return Ose_Recording.Emit (Ctx.Recordings, Name, {package}.Encode (Ctx.Recordings.Points.Constant_Reference (Name).Encoder, Value));',
+                 '   end;']
     for alias, desc in node.get('parameter_bindings', {}).items():
         package = types[desc['root']][0]
         if 'read' in desc['access']:
@@ -143,11 +175,14 @@ def generate(name, node, handler, sdl_root, schemas, destination, identity):
         if 'read' in desc['access']:
             body += ['      Read_Event (E); Parameter_Update (E, True);']
     if node.get('parameter_bindings'): body += ['      Ctx.Parameter_Writes := True; Ctx.Owner := Ada.Task_Identification.Current_Task;']
-    body += ['      Started := True; On_Start (Self, Ctx);']
+    body += ['      Ctx.Owner := Ada.Task_Identification.Current_Task;',
+             '      Started := True; On_Start (Self, Ctx);',
+             '      Ctx.Recordings.Frozen := True; Ctx.Owner := Ada.Task_Identification.Null_Task_Id;']
     if node.get('parameter_bindings'): body += ['      Ctx.Parameter_Writes := False;']
     body += ['      Ready (' + ('True' if node.get('parameter_bindings') else 'False') + ');' , '      loop', '         Read_Event (E);', '         case Op (E) is',
              "         when 'X' =>", '            if Body_Size (E) /= 0 then raise Protocol_Error with "invalid STOP"; end if;', '            exit;',
              *(["         when 'U' => Parameter_Update (E);"] if node.get('parameter_bindings') else []),
+             "         when 'E' => Ose_Recording.Update (Ctx.Recordings, Body_Text (E));",
              "         when 'D' =>", '            declare', '               Port, Cat : Unbounded_String;', '               Data : SDL_Runtime.Buffer;',
              '            begin', '               Input (E, Port, Cat, Data);']
     for i, (port, desc) in enumerate(node['inputs'].items()):
@@ -171,12 +206,13 @@ def generate(name, node, handler, sdl_root, schemas, destination, identity):
         if desc.get('required', True): body += [f'            if not Present_{port} then raise Protocol_Error with "missing required input"; end if;']
     if node.get('parameter_bindings'): body += ['            Ctx.Parameter_Writes := True;']
     body += ['            Tick (E, Ctx.Time, Ctx.Index); Ctx.Active := True; Ctx.Owner := Ada.Task_Identification.Current_Task;',
+             '            Ctx.Recordings.Tick_Bytes := 0;',
              '            On_Tick (Self, Ctx, Selected); Ctx.Active := False;',
              *(['            Ctx.Parameter_Writes := False;'] if node.get('parameter_bindings') else []),
              '            Clear; Finish;',
              '         when others => raise Protocol_Error with "unexpected opcode";', '         end case;', '      end loop;',
              '      Clear; Started := False; On_Stop (Self, Ctx);', '   exception when others =>',
-             '      Ctx.Active := False; Clear;', *(['      Ctx.Parameter_Writes := False;'] if node.get('parameter_bindings') else []), '      if Started then',
+             '      Ctx.Active := False; Ctx.Recordings.Frozen := True; Clear;', *(['      Ctx.Parameter_Writes := False;'] if node.get('parameter_bindings') else []), '      if Started then',
              '         begin On_Stop (Self, Ctx); exception when others => null; end;', '      end if;', '      raise;',
              '   end Run;', f'end {api};', '']
     (destination / (stem + '.adb')).write_text('\n'.join(body))

@@ -18,6 +18,8 @@ package Ose_Component is
    procedure Set_Parameters (Name : String; Payload : SDL_Runtime.Bytes);
    procedure Finish;
    procedure Publish (Port : String; Payload : SDL_Runtime.Bytes);
+   procedure Declare_Recording (Name, Root, Catalogue, Description : String);
+   procedure Record_Bytes (Name : String; Payload : SDL_Runtime.Bytes);
    overriding procedure Finalize (E : in out Event);
 private
    type Raw_Event is record

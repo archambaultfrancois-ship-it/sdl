@@ -14,7 +14,7 @@ from ose.recording.rotation import parse_size
 from ose.transport.secure import contexts
 
 
-HELP = """list [PATTERN]                discover/refresh recording points
+HELP = """list [PATTERN] [--kind internal|output]  discover/refresh recording points
 reconnect                     reconnect after an application/coordinator restart
 select POINT_OR_PATTERN ...    select by point name, message type, number, or glob
 select all                    select all discovered recording points
@@ -103,6 +103,9 @@ class Console:
             if "file" in status:
                 lines.append(f"    Written: {status['topics'].get(name, 0)}; "
                              f"in current file: {status['file_topics'].get(name, 0)}")
+                counts = status.get("point_counts", {}).get(name, {})
+                lines.append(f"    Observed: {counts.get('observed', 0)}; filtered: {counts.get('filtered', 0)}; "
+                             f"dropped: {counts.get('dropped', 0)}")
         lines.append(f"Error: {status.get('error') or 'none'}")
         self.print("\n".join(lines))
 
@@ -121,12 +124,23 @@ class Console:
             await self.execute("list")
         elif command in ("list", "refresh"):
             await self.recorder.refresh()
-            pattern = rest.strip() or "*"
+            values = shlex.split(rest)
+            kind = None
+            if "--kind" in values:
+                position = values.index("--kind")
+                if position + 1 >= len(values) or values[position + 1] not in ("internal", "output"):
+                    raise ValueError("list [PATTERN] [--kind internal|output]")
+                kind = values[position + 1]
+                del values[position:position + 2]
+            if len(values) > 1 or any(value.startswith("--") for value in values):
+                raise ValueError("list [PATTERN] [--kind internal|output]")
+            pattern = values[0] if values else "*"
             for number, (name, point) in enumerate(sorted(self.recorder.points.items()), 1):
-                if fnmatch.fnmatchcase(name, pattern):
+                nature = point.get("kind", "output")
+                if fnmatch.fnmatchcase(name, pattern) and (kind is None or kind == nature):
                     mark = "*" if name in self.recorder.selected else " "
                     state = "available" if point["available"] else "unavailable"
-                    self.print(f"{number:3} {mark} {name}  {point['root']}  {state}")
+                    self.print(f"{number:3} {mark} {name}  {nature}  {point['root']}  {state}")
         elif command in ("select", "unselect"):
             self.recorder.editable()
             patterns = shlex.split(rest)
@@ -163,7 +177,11 @@ class Console:
             names = self.names([rest.strip()])
             for name in names:
                 desc = await self.recorder.describe(name)
-                self.print(f"{name}: {desc['root']}\n{desc['catalogue']}")
+                self.print(f"{name}: {desc['root']}\nKind: {desc.get('kind', 'output')}\n"
+                           f"Component: {desc.get('component', name.split('.')[0])}\n"
+                           f"Description: {desc.get('description', '')}\n"
+                           f"Available: {desc['available']}\nSelected: {name in self.recorder.selected}\n"
+                           f"Filter: {self.recorder.selected.get(name) or 'off'}\n{desc['catalogue']}")
         elif command == "filter":
             point, separator, expression = rest.strip().partition(" ")
             if not separator or not expression.strip():

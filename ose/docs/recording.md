@@ -1,8 +1,8 @@
 # Interactive live recording
 
 `ose-ctl record` is a generic external console included in OSE. It discovers
-the outputs of a running application and records selected publications through
-SDL's recording service. It needs no model, generated application classes or
+the outputs and declared internal points of a running application and records
+selected samples through SDL's recording service. It needs no model, generated application classes or
 recorder component in the graph. Start and stop files repeatedly in one session.
 It supports the local broker and distributed workers, including direct routes.
 Simulation has no live network endpoint; use [recording replay](replay.md) to
@@ -66,10 +66,16 @@ python3 -m ose.cli record --host 127.0.0.1 --port 7000
 
 With no connection options, the console uses `build/endpoint.json` when present,
 otherwise `127.0.0.1:7000`. All points are listed on connection. `list` refreshes
-the directory; `list sensor_*` narrows the display. Points are output topics
+the directory; `list sensor_*` narrows the display. Output points are topics
 such as `sensor_1.signal`, including outputs with no model subscriber. The local
 broker also exposes externally declared topics. An unavailable point can be
 selected for later use, but cannot be recorded until its producer is available.
+
+`list` includes both output and internal points and displays their `output` or
+`internal` kind. `list --kind internal` and `list --kind output` narrow the view;
+an optional glob may be combined with either. List numbers keep their positions
+in the complete directory even in a filtered view. `show` includes kind, component,
+description, availability, selection and filter before the complete SDL catalogue.
 
 At the interactive `record>` prompt, use Up/Down to recall commands from the
 current console session (up to 1,000 entries). Recalled commands can be edited
@@ -129,6 +135,122 @@ current directory. Paths are local to the recorder process, even for a remote
 application. Quote paths containing spaces. Files are created exclusively;
 existing files are never overwritten at startup. The parent directory must already exist.
 The filename extension does not select the format: pass `mcap` explicitly.
+
+## Component-owned internal points
+
+Components may declare diagnostic points during `on_start`, before READY. They
+need no output ports or graph subscriptions. The component uses a local name
+such as `dsp.fft.intermediaire`; the console discovers it as
+`analyseur.record.dsp.fft.intermediaire` for an instance named `analyseur`.
+Namespaces are dot-separated ASCII identifiers (`[A-Za-z_][A-Za-z0-9_]*`), with
+nonempty segments and at most 200 bytes in the complete local name. Duplicate
+local names fail initialization; different instances may use the same names.
+Up to 128 points per instance are supported, with descriptions of at most 1024
+UTF-8 bytes. The `.record.` namespace under a graph component is reserved.
+
+Python callback context:
+
+```python
+def on_start(ctx):
+    ctx.declare_recording_point("dsp.fft.intermediaire", Spectre,
+                                description="Spectrum before filtering")
+
+def on_tick(ctx, inputs):
+    if ctx.recording_enabled("dsp.fft.intermediaire"):
+        value = build_diagnostic(inputs)
+        result = ctx.record("dsp.fft.intermediaire", value)
+```
+
+Equivalent typed APIs are available in all generated component containers:
+
+```c
+/* on_start: 1 = success, 0 = initialization failure */
+ose_declare_recording_Spectre(ctx, "dsp.fft.intermediaire", "Spectrum before filtering");
+/* on_tick */
+if (ose_recording_enabled(ctx, "dsp.fft.intermediaire"))
+    result = ose_record_Spectre(ctx, "dsp.fft.intermediaire", &value);
+```
+
+```rust
+// on_start
+ctx.declare_recording_point::<Spectre>("dsp.fft.intermediaire", "Spectrum before filtering")?;
+// on_tick
+if ctx.recording_enabled("dsp.fft.intermediaire")? {
+    let result = ctx.record("dsp.fft.intermediaire", &value)?;
+}
+```
+
+```java
+// onStart
+ctx.declareRecordingPoint("dsp.fft.intermediaire", Spectre.class, "Spectrum before filtering");
+// onTick
+if (ctx.recordingEnabled("dsp.fft.intermediaire"))
+    result = ctx.record("dsp.fft.intermediaire", value);
+```
+
+```ada
+-- On_Start, through the generated Ose_analyseur package
+Declare_Recording_Spectre (Ctx, "dsp.fft.intermediaire", "Spectrum before filtering");
+-- On_Tick
+if Recording_Enabled (Ctx, "dsp.fft.intermediaire") then
+   Result := Record_Spectre (Ctx, "dsp.fft.intermediaire", Value);
+end if;
+```
+
+C helper suffixes use the generated SDL C symbol; Ada suffixes use the generated
+Ada type name without its `T_` prefix. Qualified SDL roots therefore retain their
+generated language-specific spelling. Python, Rust and Java derive the descriptor
+from the supplied message type. C and Ada receive it from their generated helpers.
+Each context owns a hash registry and prepared encoders; application code stores
+no handles. Unknown names, wrong message types and calls outside their lifecycle
+are programming errors. Declarations are fixed until component restart.
+
+All message types from the schemas already used by the component are available.
+A component without ports receives bindings for the model's default schema.
+To include an additional diagnostic-only schema, add the optional component field:
+
+```json
+"recording_types": {
+  "spectrum": {"schema": "diagnostics.sdl", "root": "Spectre"}
+}
+```
+
+This field selects types for generation, not recording point names. Names and
+descriptions remain declared by the component code.
+
+```text
+record> list --kind internal
+record> select analyseur.record.dsp.*
+record> filter analyseur.record.dsp.fft.intermediaire amplitude > 10
+record> start diagnostic.pcapng
+record> stop
+```
+
+All points start disabled. At least one active capture must select a point to
+enable it. In local execution the adapter refreshes activation every 50 ms; in
+distributed execution the worker reads its local taps. Changes reach callbacks
+between ticks, so activation remains fixed during each callback. Stopping one of
+several captures leaves a point enabled for the others. `recording_enabled` can
+also avoid constructing costly diagnostic values; `record` itself skips encoding
+when disabled. Filters are independent for each capture and run before tap queue
+admission, even if another capture selects the same point without a filter.
+
+Emission results are `RecordResult.QUEUED/DISABLED/DROPPED` in Python,
+`OSE_RECORD_QUEUED/DISABLED/DROPPED` in C (`OSE_RECORD_ERROR` also reports errors),
+`RecordResult::Queued/Disabled/Dropped` in Rust,
+`Component.RecordResult.QUEUED/DISABLED/DROPPED` in Java, and
+`Ose_Recording.Queued/Disabled/Dropped` in Ada. `queued` acknowledges local IPC,
+not disk persistence. Messages are borrowed only for the duration of the call.
+
+Diagnostic IPC is limited to 256 KiB per tick. Excess samples return `dropped`.
+The local adapter additionally bounds its independent transfer queue to 64 waiting
+samples and 1 MiB including in-flight bytes; overflow drops new diagnostics and is
+reported in component metrics as `recording.dropped`. Disk/network transfer does
+not run inside component emission; normal component pipe flow control still
+applies. Capture `status` shows per-point observed, filtered and dropped counts
+for the source taps. SDK budget drops and adapter transfer drops occur upstream
+of these counters. Component disconnect invalidates its active captures; refresh
+discovery after restart. Simulation leaves all internal points disabled.
 
 ## File rotation and cyclic retention
 
@@ -288,8 +410,10 @@ does not silently reconnect across an unknown gap.
 Log and publish timestamps both use the recorder's Unix arrival time, since OSE's
 publication protocol does not provide a Unix production timestamp. Model clock
 fields such as `time_ns` stay untouched inside payloads. A channel's metadata
-records its source generation; the container sequence is the OSE publication
-counter modulo 2^32, independently of any application counter in the payload.
+records its source generation. Output channels use the OSE publication counter
+modulo 2^32; internal points use a separate source counter, so their capture does
+not advance business publication sequences. Both are independent of any
+application counter in the payload.
 Cross-producer file order is recorder write order, not a global causal ordering.
 
 ## Scripted sessions and reading files

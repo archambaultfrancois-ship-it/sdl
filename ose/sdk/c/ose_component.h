@@ -8,6 +8,8 @@ int ose_read(OseEvent *event);
 void ose_release(OseEvent *event);
 int ose_send(char op, const void *data, size_t size);
 int ose_publish(const char *port, const void *payload, size_t size);
+int ose_record_bytes(const char *name, const void *payload, size_t size);
+int ose_declare_recording(const char *name, const char *root, const char *catalogue, const char *description);
 int ose_set_parameters(const char *name, const void *payload, size_t size);
 /* Opt in to timestamped ticks. Historical ose_send('R', NULL, 0) stays valid. */
 int ose_ready(void);

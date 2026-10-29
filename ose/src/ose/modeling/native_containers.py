@@ -69,7 +69,11 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
     types = merge_schemas(name, "c", schemas, bindings)
     reserved = {"OseContext", "OsePortSpec", "OseHook", "ComponentCallbacks", "main", "dispatch", "inputs", "outputs",
                 "ose_now", "ose_time_ns", "ose_tick_index", "parameters", "OseParameterSpec",
-                "ose_parameter_value", "ose_set_parameter_value", "ose_run_callbacks_parameters"}
+                "ose_parameter_value", "ose_set_parameter_value", "ose_run_callbacks_parameters",
+                "OseRecordResult", "ose_declare_recording_value", "ose_recording_enabled", "ose_record_value"}
+    reserved.update("ose_declare_recording_" + symbol for _, symbol in types.values())
+    reserved.update("ose_record_" + symbol for _, symbol in types.values())
+    reserved.update("recording_catalogue_" + str(index) for index in range(len(set(node.get("recording_catalogues", {}).values()))))
     if node["inputs"]:
         reserved.add("ComponentInputs")
     reserved.update('parameters_' + alias for alias in node.get('parameter_bindings', {}))
@@ -97,6 +101,10 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
     header += ["} ComponentCallbacks;", "extern const ComponentCallbacks component_callbacks;"]
     for port, desc in node["outputs"].items():
         header.append(f"int publish_{port}(OseContext *, const {types[desc['root']][1]} *);")
+    for root in node.get("recording_catalogues", {}):
+        symbol = types[root][1]
+        header += [f"int ose_declare_recording_{symbol}(OseContext *, const char *name, const char *description);",
+                   f"OseRecordResult ose_record_{symbol}(OseContext *, const char *name, const {symbol} *);"]
     for alias, desc in node.get('parameter_bindings', {}).items():
         typ = types[desc['root']][1]
         if 'read' in desc['access']:
@@ -106,6 +114,15 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
     header += ["#endif", ""]
     (destination / "component.h").write_text("\n".join(header))
     source = ['/* Generated from the component model. */', '#include "component.h"', '#include <stdio.h>']
+    recording_catalogues = {text: index for index, text in enumerate(dict.fromkeys(node.get("recording_catalogues", {}).values()))}
+    for text, index in recording_catalogues.items():
+        source.append(f"static const char recording_catalogue_{index}[] = {c_string(text)};")
+    for root, text in node.get("recording_catalogues", {}).items():
+        symbol = types[root][1]
+        source += [f"int ose_declare_recording_{symbol}(OseContext *ctx, const char *name, const char *description) {{",
+                   f"    return ose_declare_recording_value(ctx, name, {c_string(root)}, recording_catalogue_{recording_catalogues[text]}, description);", "}",
+                   f"OseRecordResult ose_record_{symbol}(OseContext *ctx, const char *name, const {symbol} *value) {{",
+                   f"    return ose_record_value(ctx, name, {c_string(root)}, value);", "}"]
     registrations = set()
     for path in sorted(bindings.rglob("*.h")):
         source.append(f'#include "types/{path.relative_to(bindings).as_posix()}"')
@@ -173,7 +190,9 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
              "fn codec<T>(value: std::result::Result<T, sdl_runtime::CodecError>) -> Result<T> {",
              '    value.map_err(|error| format!("SDL codec: {error:?}").into())', "}",
              "pub struct Context {", "    pub name: &'static str,", "    pub config_json: String,", "    active: bool,",
-             "    tick: sdl_ose_component::TickContext,", "    parameter_writes: bool,"]
+             "    tick: sdl_ose_component::TickContext,", "    parameter_writes: bool,",
+             "    recording: std::collections::HashMap<String, (std::any::TypeId, sdl_runtime::Context, bool)>,",
+             "    recording_ready: bool, recording_bytes: usize,"]
     for port in node["outputs"]:
         lines.append(f"    output_{port}: sdl_runtime::Context,")
     for alias, desc in node.get('parameter_bindings', {}).items():
@@ -185,6 +204,47 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
               "    pub fn time_ns(&self) -> u64 { self.tick.time_ns }",
               "    pub fn tick_index(&self) -> u64 { self.tick.tick_index }",
               "    pub fn now(&self) -> f64 { self.time_ns() as f64 / 1_000_000_000.0 }"]
+    lines += r'''
+    pub fn declare_recording_point<T: SdlMessage>(&mut self, name: &str, description: &str) -> Result {
+        if self.recording_ready || self.recording.contains_key(name) || self.recording.len() >= 128 {
+            return Err("recording declarations require initialization and unique names".into());
+        }
+        let catalogue = codec(sdl_runtime::description(&[T::type_info()]))?;
+        let encoder = codec(sdl_runtime::prepare(&catalogue, &[T::type_info()]))?;
+        let root = T::type_info().name;
+        sdl_ose_component::declare_recording_point(name, root, &catalogue, description)?;
+        self.recording.insert(name.to_owned(), (std::any::TypeId::of::<T>(), encoder, false));
+        Ok(())
+    }
+    pub fn recording_enabled(&self, name: &str) -> Result<bool> {
+        Ok(self.recording.get(name).ok_or("unknown recording point")?.2)
+    }
+    pub fn record<T: SdlMessage>(&mut self, name: &str, value: &T) -> Result<sdl_ose_component::RecordResult> {
+        use sdl_ose_component::RecordResult;
+        if !self.active { return Err("recording requires an active tick callback".into()); }
+        let (typ, encoder, enabled) = self.recording.get(name).ok_or("unknown recording point")?;
+        if *typ != std::any::TypeId::of::<T>() { return Err("wrong recording message type".into()); }
+        if !enabled { return Ok(RecordResult::Disabled); }
+        if self.recording_bytes + name.len() + 2 >= 256 * 1024 { return Ok(RecordResult::Dropped); }
+        let payload = codec(sdl_runtime::encode(encoder, value))?;
+        let size = name.len() + 2 + payload.len();
+        if size > 256 * 1024 - self.recording_bytes { return Ok(RecordResult::Dropped); }
+        sdl_ose_component::record(name, &payload)?;
+        self.recording_bytes += size;
+        Ok(RecordResult::Queued)
+    }
+    fn recording_update(&mut self, data: &[u8]) -> Result {
+        for point in self.recording.values_mut() { point.2 = false; }
+        if !data.is_empty() {
+            for name in std::str::from_utf8(data)?.split('\0') {
+                let point = self.recording.get_mut(name).ok_or("unknown active recording point")?;
+                if point.2 { return Err("duplicate active recording point".into()); }
+                point.2 = true;
+            }
+        }
+        Ok(())
+    }
+'''.splitlines()
     for port, desc in node["outputs"].items():
         module, symbol = types[desc["root"]]
         lines += [f"    pub fn publish_{port}(&mut self, message: &crate::types::{module}::{symbol}) -> Result {{",
@@ -238,7 +298,8 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
         lines += ["    fn on_tick(&mut self, _ctx: &mut Context) -> Result {", '        Err("implement on_tick".into())']
     lines += ["    }", "}", "pub fn run<H: Callbacks>(mut handler: H) -> Result {", "    let init = receive()?;",
               '    if init.op != b\'I\' { return Err("expected INIT".into()); }', "    let mut ctx = Context {",
-              f"        name: {rust_string(name)}, config_json: String::from_utf8(init.data)?, active: false, tick: Default::default(), parameter_writes: true,"]
+              f"        name: {rust_string(name)}, config_json: String::from_utf8(init.data)?, active: false, tick: Default::default(), parameter_writes: true,",
+              "        recording: Default::default(), recording_ready: false, recording_bytes: 0,"]
     for port, desc in node["outputs"].items():
         module, symbol = types[desc["root"]]
         lines.append(f"        output_{port}: codec(sdl_runtime::prepare({rust_string(desc['catalogue'])}, &[crate::types::{module}::{symbol}::type_info()]))?,")
@@ -256,8 +317,8 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
     for alias, desc in node.get('parameter_bindings', {}).items():
         if 'read' in desc['access']:
             lines += ['        ctx.parameter_update(&receive()?, true)?;']
-    lines += ["        handler.on_start(&mut ctx)?;", "        ctx.parameter_writes = false;", "        send(b'R', &[3])?;" if node.get("parameter_bindings") else "        send(b'R', sdl_ose_component::TICK_CONTEXT)?;", "        loop {", "            let event = receive()?;",
-              "            match event.op {", *(["                b'U' => ctx.parameter_update(&event, false)?,"] if node.get('parameter_bindings') else []), "                b'D' => {", "                    let data = input(&event)?;",
+    lines += ["        handler.on_start(&mut ctx)?;", "        ctx.parameter_writes = false; ctx.recording_ready = true;", "        send(b'R', &[3])?;" if node.get("parameter_bindings") else "        send(b'R', sdl_ose_component::TICK_CONTEXT)?;", "        loop {", "            let event = receive()?;",
+              "            match event.op {", "                b'E' => ctx.recording_update(&event.data)?,", *(["                b'U' => ctx.parameter_update(&event, false)?,"] if node.get('parameter_bindings') else []), "                b'D' => {", "                    let data = input(&event)?;",
               "                    match data.port {"]
     for port, desc in node["inputs"].items():
         module, symbol = types[desc["root"]]
@@ -282,7 +343,7 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
     for port, desc in node["inputs"].items():
         if desc.get("required", True):
             lines.append(f'                    if !received_{port} {{ return Err("missing required input: {port}".into()); }}')
-    lines.append("                    ctx.active = true; ctx.parameter_writes = true;")
+    lines.append("                    ctx.active = true; ctx.parameter_writes = true; ctx.recording_bytes = 0;")
     if node["inputs"]:
         fields = ", ".join(f"{port}: selected_{port}.as_ref()" for port in node["inputs"])
         lines.append(f"                    handler.on_tick(&mut ctx, &Inputs {{ {fields} }})?;")
@@ -294,7 +355,7 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
         lines.append(f"                    received_{port} = false;")
     lines += ["                }", "                b'X' if event.data.is_empty() => return Ok(()),",
               '                _ => return Err("unexpected component event".into()),', "            }", "        }", "    }));",
-              "    ctx.active = false; ctx.parameter_writes = false;", "    let stop = handler.on_stop(&mut ctx);", "    match execution {",
+              "    ctx.active = false; ctx.parameter_writes = false; ctx.recording_ready = true;", "    let stop = handler.on_stop(&mut ctx);", "    match execution {",
               "        Ok(result) => result.and(stop),", "        Err(panic) => std::panic::resume_unwind(panic),", "    }", "}", ""]
     (source / "container.rs").write_text("\n".join(lines))
     (source / "main.rs").write_text("// Generated component entry point.\npub mod types;\npub mod container;\n" +

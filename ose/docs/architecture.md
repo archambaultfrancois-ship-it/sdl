@@ -108,6 +108,10 @@ delivery policy stays in the common delivery engine. The
 TCP routes and Kubernetes export; the ordinary supervisor remains local.
 
 The optional [interactive recorder](recording.md) discovers live publication
-points through read-only RPCs. Bounded taps observe broker or worker publications;
+points and component-owned internal points through read-only RPCs. Components
+declare typed, namespaced diagnostic points before READY; their contexts own
+hash registries and receive activation updates between ticks. Internal samples
+use a dedicated CH/1 path and never enter application subscriptions. Bounded
+taps observe broker/worker publications and diagnostics;
 the external console selects filters and writes SDL recordings on its own disk.
 It has no model component, input reservation or role in the startup barrier.

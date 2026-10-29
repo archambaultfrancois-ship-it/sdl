@@ -17,6 +17,10 @@ package body Ose_Component is
      with Import, Convention => C, External_Name => "ose_tick";
    function C_Publish (Port : Interfaces.C.char_array; Data : System.Address; Size : Interfaces.C.size_t) return Interfaces.C.int
      with Import, Convention => C, External_Name => "ose_publish";
+   function C_Record (Name : Interfaces.C.char_array; Data : System.Address; Size : Interfaces.C.size_t) return Interfaces.C.int
+     with Import, Convention => C, External_Name => "ose_record_bytes";
+   function C_Declare_Recording (Name, Root, Catalogue, Description : Interfaces.C.char_array) return Interfaces.C.int
+     with Import, Convention => C, External_Name => "ose_declare_recording";
    function C_Input (E : access constant Raw_Event; Port : access System.Address; Port_Size : access Interfaces.C.size_t;
                      Catalogue : access System.Address; Catalogue_Size : access Interfaces.C.size_t;
                      Payload : access System.Address; Payload_Size : access Interfaces.C.size_t) return Interfaces.C.int
@@ -81,4 +85,13 @@ package body Ose_Component is
    begin
       Check (C_Publish (Interfaces.C.To_C (Port), Payload'Address, Interfaces.C.size_t (Payload'Length)));
    end Publish;
+   procedure Declare_Recording (Name, Root, Catalogue, Description : String) is
+   begin
+      Check (C_Declare_Recording (Interfaces.C.To_C (Name), Interfaces.C.To_C (Root),
+        Interfaces.C.To_C (Catalogue), Interfaces.C.To_C (Description)));
+   end Declare_Recording;
+   procedure Record_Bytes (Name : String; Payload : SDL_Runtime.Bytes) is
+   begin
+      Check (C_Record (Interfaces.C.To_C (Name), Payload'Address, Interfaces.C.size_t (Payload'Length)));
+   end Record_Bytes;
 end Ose_Component;

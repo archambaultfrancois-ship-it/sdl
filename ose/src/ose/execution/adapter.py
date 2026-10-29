@@ -14,6 +14,7 @@ from ose.execution.scheduler import Scheduler, reserve_snapshot
 from ose.execution.observation import TickTimings
 from ose.transport.tcp import Client
 from ose.transport.udp import UDP
+from ose.recording.component import RemoteRecording
 
 
 class Adapter:
@@ -116,6 +117,8 @@ class Adapter:
                 "ticks_hz": self.metrics.get("ticks", 0) / elapsed,
                 "publications_hz": self.metrics.get("publications", 0) / elapsed,
                 "running": bool(self.activated_at_ns), **self.metrics, **self.timings.snapshot(self.scheduler)}
+            if hasattr(self, "component_recording"):
+                metrics["recording"] = dict(self.component_recording.counts)
             await self.client.request("metrics", json.dumps(metrics).encode())
             await asyncio.sleep(.1)
 
@@ -167,7 +170,8 @@ class Adapter:
                     self.data_clients[identity] = client
                     await client.request("attach", node=self.name, subscription=identity)
             self.parameters = await RemoteBindings(self.node, self.client.request, self.activity).open()
-            self.process, self.timed_ticks = await start_component(self.node, self.parameters)
+            self.component_recording = RemoteRecording(self.name, self.codec, self.client.request)
+            self.process, self.timed_ticks = await start_component(self.node, self.parameters, self.component_recording.endpoint)
             await self.client.request("ready")
             # Supervisor activates delivery only after every component is ready.
             while True:
@@ -182,6 +186,9 @@ class Adapter:
                      *(client.task for client in self.data_clients.values()), asyncio.create_task(self.process.wait())]
             if self.parameters.task:
                 tasks.append(self.parameters.task)
+            if self.component_recording.endpoint.points:
+                tasks.extend([asyncio.create_task(self.component_recording.poll()),
+                              asyncio.create_task(self.component_recording.send())])
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 task.result()

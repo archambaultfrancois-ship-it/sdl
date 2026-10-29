@@ -5,7 +5,7 @@ import inspect
 from pathlib import Path
 import sys
 from ose.codec.sdl2 import SDL2
-from ose.execution.component import ComponentSession
+from ose.execution.component import ComponentSession, RecordResult
 
 
 class CallbackContext:
@@ -32,6 +32,7 @@ class CallbackContext:
                 raise ValueError('generated parameter root differs from INIT')
             self._parameter_codecs[alias] = codec.api.prepare(binding['catalogue'], [cls])
         self._active = False
+        self._recording_types = {}
         self._decoders = OrderedDict()
         self._encoders = {port: codec.api.prepare(self.config["outputs"][port]["catalogue"], [cls])
                           for port, cls in output_types.items()}
@@ -55,6 +56,28 @@ class CallbackContext:
         if not isinstance(message, self.output_types[port]):
             raise TypeError(f"output {port} expects {self.output_types[port].__name__}")
         self.session.publish(port, self.codec.api.encode(self._encoders[port], message))
+
+    def declare_recording_point(self, name, message_type, description=""):
+        if self.session.is_ready or not self._parameter_writes:
+            raise RuntimeError("recording declarations require on_start")
+        root = self.codec.api.message_name(message_type)
+        catalogue = self.codec.api.description([message_type])
+        encoder = self.codec.api.prepare(catalogue, [message_type])
+        self.session.declare_recording_point(name, root, catalogue, description)
+        self._recording_types[name] = (message_type, encoder)
+
+    def recording_enabled(self, name):
+        return self.session.recording_enabled(name)
+
+    def record(self, name, message):
+        if not self._active:
+            raise RuntimeError("recording requires an active tick callback")
+        message_type, encoder = self._recording_types[name]
+        if not isinstance(message, message_type):
+            raise TypeError(f"recording {name} expects {message_type.__name__}")
+        if not self.recording_enabled(name):
+            return RecordResult.DISABLED
+        return self.session.record(name, self.codec.api.encode(encoder, message))
 
     def parameter(self, alias):
         binding = self.config.get('parameter_bindings', {}).get(alias)

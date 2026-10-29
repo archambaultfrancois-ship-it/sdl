@@ -18,6 +18,31 @@ catalogue-relative message ID, without S2PS/2 (the adapter adds/removes it).
 | `U` PARAMETER UPDATE | Adapter → component | Alias/catalogue/SDL payload, same layout as INPUT |
 | `S` PARAMETER SET | Component → adapter | Alias/SDL payload, same layout as PUBLISH |
 | `A` PARAMETER RESULT | Adapter → component | Byte 1, or byte 0 followed by a UTF-8 error |
+| `N` RECORDING DECLARE | Component → engine, before READY | u16 local-name length, name, root, NUL, description, NUL, catalogue (UTF-8) |
+| `E` RECORDING ENABLE | Engine → component, between ticks | NUL-separated active local names; empty disables all |
+| `C` RECORDING SAMPLE | Component → engine, during TICK | u16 local-name length, name, SDL2 payload |
+
+Internal recording declarations are scoped to one component generation and are
+fixed before READY. Names are dot-separated ASCII identifiers, at most 200 bytes;
+descriptions are at most 1024 UTF-8 bytes. NUL is forbidden in declaration fields.
+Up to 128 points may be declared. The engine validates the catalogue and root,
+and exposes `<instance>.record.<local-name>` only through the recording service.
+Samples never enter application subscriptions. An engine sends ENABLE frames
+only to components that declared points; activation is applied before the next
+TICK and stays fixed throughout the callback. Components start with all points
+disabled. Existing READY capability bytes remain valid.
+
+The typed contexts own hash maps containing the points, prepared encoders and
+activation state. They skip encoding disabled points. Each tick may emit at most
+256 KiB of SAMPLE bodies, including the encoded local names. SDK emission returns
+`queued`, `disabled` or `dropped`; `queued` means handed to local IPC, not persisted.
+The local adapter drains samples into an independent bounded queue (64 waiting
+samples, 1 MiB including its in-flight sample) and transfers them to the broker
+separately from application processing. Its overflow count is included in component
+metrics. Workers feed their local recording taps directly. Both retain normal
+CH/1 pipe flow control: capture is best effort, not a hard real-time guarantee.
+Simulation accepts declarations with every point disabled. See
+[component recording APIs](../docs/recording.md#component-owned-internal-points).
 
 Timestamp fields are unsigned and big endian. An extended TICK has exactly 16
 body bytes and a positive component-local tick index, starting at one. A component

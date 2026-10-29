@@ -50,7 +50,8 @@
 
 ## External integration and inspection
 
-- **[Interactive recording](recording.md)**: select live outputs by topic or message type and record labeled PCAPNG/MCAP sessions without adding a model component.
+- **[Interactive recording](recording.md)**: select live outputs and component-owned internal points by name or message type and record labeled PCAPNG/MCAP sessions without adding a model component.
+- **[Internal diagnostic points](recording.md#component-owned-internal-points)**: declare namespaced SDL points in Python, C, Rust, Java or Ada; context-owned hash registries cache encoders and skip serialization while disabled.
 - **[Source content filters](recording.md#content-filters)**: filter publications at the broker or producer worker before transfer to the recorder.
 - **[File rotation and retention](recording.md#file-rotation-and-cyclic-retention)**: split captures by size and optionally retain only the latest files.
 - **[Recording replay](replay.md)**: feed PCAPNG/MCAP topics into simulation or live local/distributed inputs with looping, speed and pause controls.

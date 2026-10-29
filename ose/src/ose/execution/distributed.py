@@ -28,6 +28,7 @@ from ose.execution.observation import TickTimings, describe
 from ose.transport.protocol import encode
 from ose.transport.secure import RPCServer, connect, finish_cleanup, identity, loopback
 from ose.recording.taps import TapHub, OPERATIONS as RECORDING_OPERATIONS
+from ose.recording.component import ComponentRecording, validate_name, MAX_POINTS
 
 
 def fingerprint(plan):
@@ -152,12 +153,19 @@ class Coordinator:
 
     def recording_points(self):
         nodes = self.directory()["nodes"]
-        return {f"{name}.{port}": dict(topic=f"{name}.{port}", root=desc["root"], catalogue=desc["catalogue"],
+        points = {f"{name}.{port}": dict(topic=f"{name}.{port}", root=desc["root"], catalogue=desc["catalogue"], kind="output",
                     available=self.activated and name in nodes,
                     generation=nodes.get(name, {}).get("token"),
                     endpoint={"host": nodes[name]["host"], "port": nodes[name]["port"], "identity": name}
                              if name in nodes else None)
                 for name, node in self.plan["components"].items() for port, desc in node["outputs"].items()}
+        for name, session in self.sessions.items():
+            for local, desc in session.get("recording_points", {}).items():
+                topic = f"{name}.record.{local}"
+                points[topic] = dict(desc, topic=topic, kind="internal", component=name, name=local,
+                    available=self.activated and name in nodes, generation=session["token"],
+                    endpoint={"host": session["host"], "port": session["port"], "identity": name})
+        return points
 
     def authorize(self, sub, source_token, target_token):
         if not self.activated:
@@ -313,6 +321,18 @@ class Coordinator:
             if not self.activated:
                 raise ValueError("graph is not activated")
             return {}, None
+        if op == "recording_declare":
+            local = validate_name(header["name"])
+            points = session.setdefault("recording_points", {})
+            if session["ready"] or local in points or f"{name}.record.{local}" in self.plan.get("external_topics", {}) or len(points) >= MAX_POINTS:
+                raise ValueError("recording declarations require initialization and unique names")
+            root, description, catalogue = header["root"], header.get("description", ""), body.decode()
+            if not isinstance(description, str) or len(description.encode()) > 1024 or "\0" in description:
+                raise ValueError("invalid recording description")
+            if root not in self.codec.api.message_names(self.codec.api.prepare(catalogue)):
+                raise ValueError("unknown recording root")
+            points[local] = dict(root=root, description=description, catalogue=catalogue)
+            return {}, None
         if op == "heartbeat":
             session["seen"] = lease_clock()
             return self.directory(), None
@@ -438,6 +458,9 @@ class Worker:
         self.scheduler = Scheduler(self.node, self.buffers)
         self.timings = TickTimings()
         self.recording = TapHub(self.recording_points, plan["max_frame"], codec=self.codec)
+        self.internal_recording = ComponentRecording(self.codec, declare=self._declare_recording,
+            active=self._active_recording, emit=self._emit_recording)
+        self.recording_sequence = 0
         self.rpc = RPCServer(plan["max_frame"], self.receive, server_context, self.recording.disconnected)
         self.metrics = Counter()
         self.directory = {"nodes": {}, "enabled": False}
@@ -448,9 +471,32 @@ class Worker:
         self.closing = False
 
     def recording_points(self):
-        return {f"{self.name}.{port}": dict(topic=f"{self.name}.{port}", root=desc["root"], catalogue=desc["catalogue"],
+        points = {f"{self.name}.{port}": dict(topic=f"{self.name}.{port}", root=desc["root"], catalogue=desc["catalogue"], kind="output",
                     generation=getattr(self, "token", None), available=self.started.is_set(), endpoint=None)
                 for port, desc in self.node["outputs"].items()}
+        for local, desc in self.internal_recording.points.items():
+            topic = f"{self.name}.record.{local}"
+            points[topic] = dict(desc, topic=topic, kind="internal", component=self.name, name=local,
+                generation=getattr(self, "token", None), available=self.started.is_set(), endpoint=None)
+        return points
+
+    async def _declare_recording(self, name, desc):
+        await self.control("recording_declare", desc["catalogue"].encode(), name=name,
+                           root=desc["root"], description=desc["description"])
+
+    def _active_recording(self):
+        prefix = f"{self.name}.record."
+        return [topic[len(prefix):] for topic in self.recording.active_points() if topic.startswith(prefix)]
+
+    def _emit_recording(self, name, desc, payload):
+        topic = f"{self.name}.record.{name}"
+        if topic not in self.recording.active_points():
+            return
+        envelope = self.codec.wrap(desc["catalogue"], payload)
+        self.codec.validate(desc["catalogue"], desc["root"], envelope)
+        self.recording_sequence += 1
+        self.recording.observe(topic, envelope, generation=self.token, sequence=self.recording_sequence,
+                               catalogue=desc["catalogue"], root=desc["root"])
 
     async def control(self, op, body=b"", **kwargs):
         return await self.client.request(op, body, node=self.name, token=self.token, **kwargs)
@@ -470,7 +516,7 @@ class Worker:
             self.parameters = await RemoteBindings(self.node, self.control, self.activity).open()
             if self.parameters.task:
                 tasks.append(self.parameters.task)
-            initialization = asyncio.create_task(start_component(self.node, self.parameters))
+            initialization = asyncio.create_task(start_component(self.node, self.parameters, self.internal_recording))
             tasks.append(initialization)
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             if initialization not in done:
