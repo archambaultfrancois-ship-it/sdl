@@ -39,19 +39,19 @@ def on_tick(ctx, inputs):
     ctx.publish_result(Measurement(sequence=0, value=(a.value if a else -1.0) + (b.value if b else -2.0)))
 '''
 C_NAMED = '''#include "component.h"
-static int on_input(ChainContext *ctx, const Measurement *message) {
+static int on_input(OseContext *ctx, const Measurement *message) {
     Measurement result = {0};
     result.sequence = message ? message->sequence : 0;
     result.value = message ? message->value * 2 : -1.0;
     return publish_result(ctx, &result);
 }
-static int on_optional(ChainContext *ctx, const Measurement *message) {
-    (void)message; return chain_fail(ctx, "absent optional input was dispatched");
+static int on_optional(OseContext *ctx, const Measurement *message) {
+    (void)message; return ose_fail(ctx, "absent optional input was dispatched");
 }
 const ComponentCallbacks component_callbacks = { .on_input = on_input, .on_optional = on_optional };
 '''
 C_PAIR = '''#include "component.h"
-static int on_tick(ChainContext *ctx, const ComponentInputs *inputs) {
+static int on_tick(OseContext *ctx, const ComponentInputs *inputs) {
     Measurement result = {0};
     if (inputs->optional) return 0;
     result.value = (inputs->a ? inputs->a->value : -1.0) + (inputs->b ? inputs->b->value : -2.0);

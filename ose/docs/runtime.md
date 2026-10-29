@@ -147,7 +147,7 @@ and still need an explicit producer binding in the model. A timeout does not
 replace that binding requirement.
 
 Each required input's deadline is armed when the adapter starts execution after
-the chain's READY barrier. At selection time, an available record is used even
+the OSE's READY barrier. At selection time, an available record is used even
 if the deadline has already passed. An empty input whose deadline has expired
 contributes a null value. A tick becomes eligible once every required input has
 a value or an expired timeout. Other required inputs and a periodic trigger can

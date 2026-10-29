@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := all
 SDL_ROOT ?= $(abspath $(CURDIR)/sdl)
 
-.PHONY: all check test check-sdl check-ose check-chain test-sdl test-ose test-chain clean help
+.PHONY: all check test check-sdl check-ose test-sdl test-ose clean help
 all:
 	+$(MAKE) -C sdl all
 check: check-sdl check-ose
@@ -11,12 +11,10 @@ check-sdl:
 	+$(MAKE) -C sdl check
 check-ose:
 	+$(MAKE) -C ose check SDL_ROOT="$(SDL_ROOT)"
-check-chain: check-ose
 test-sdl:
 	+$(MAKE) -C sdl test
 test-ose:
 	+$(MAKE) -C ose test SDL_ROOT="$(SDL_ROOT)"
-test-chain: test-ose
 clean:
 	+$(MAKE) -C sdl clean
 help:

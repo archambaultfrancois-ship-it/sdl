@@ -27,9 +27,9 @@ commands and executable command in the resolved plan:
 | --- | --- | --- |
 | Python | `build/components/<name>/container.py`, `types/` | Python wrapper |
 | C | `build/components/<name>/component.h`, `container.c`, `types/` | `build/components/<name>/component` |
-| Rust | `build/components/<name>/src/container.rs`, `src/types/`, `Cargo.toml` | `build/rust-target/release/chain-component-<name>` |
-| Java | `org.sdlchain.generated.<name>.API`, `Main`, typed bindings | JVM with generated classes |
-| Ada | `Chain_<name>`, typed bindings, generated main | `build/components/<name>/component` |
+| Rust | `build/components/<name>/src/container.rs`, `src/types/`, `Cargo.toml` | `build/rust-target/release/ose-component-<name>` |
+| Java | `org.sdlose.generated.<name>.API`, `Main`, typed bindings | JVM with generated classes |
+| Ada | `Ose_<name>`, typed bindings, generated main | `build/components/<name>/component` |
 
 C uses the compiler from `CC` (default `cc`), C99 and the SDL C runtime.
 Rust builds offline with local paths to the SDK and SDL runtime; components
@@ -41,7 +41,7 @@ Only generated files are replaced on rebuild. A missing handler receives
 an initial callback skeleton; an existing handler is never overwritten. Handlers
 must be outside the build directory. `validate` checks and generates temporary
 artefacts without creating or changing handler files. Implement the generated
-callback placeholders before running the chain.
+callback placeholders before running OSE.
 
 ## Python callbacks
 
@@ -69,7 +69,7 @@ handler, checks callback signatures, and calls optional `on_start(ctx)` before
 sending READY. Optional `on_stop(ctx)` runs after STOP or an execution error once
 initialization has reached `on_start`. Publication is allowed only from tick or
 input callbacks, when the adapter is prepared to receive outputs. Exceptions
-escape with a nonzero process status and stop the chain; failed ticks do not
+escape with a nonzero process status and stop OSE; failed ticks do not
 send FINISHED. Publications already emitted before an exception are not rolled
 back.
 
@@ -116,7 +116,7 @@ callbacks.
 
 Both execution engines expose a time value frozen during the callback:
 Python `ctx.now()`/`ctx.time_ns`/`ctx.tick_index`, C
-`chain_now(ctx)`/`chain_time_ns(ctx)`/`chain_tick_index(ctx)`, and Rust
+`ose_now(ctx)`/`ose_time_ns(ctx)`/`ose_tick_index(ctx)`, and Rust
 `ctx.now()`/`ctx.time_ns()`/`ctx.tick_index()`. Seconds are floating point;
 nanoseconds and tick indices are integers. Simulation uses virtual time starting
 at zero; real-time adapters provide elapsed monotonic time since activation.
@@ -137,7 +137,7 @@ def on_input(ctx, message: Measurement | None):
 ```
 
 ```c
-static int on_input(ChainContext *ctx, const Measurement *message) {
+static int on_input(OseContext *ctx, const Measurement *message) {
     if (!message) return 1;
     return publish_result(ctx, message);
 }
@@ -166,7 +166,7 @@ functions and a `ComponentCallbacks` table. Port aliases `Input_<port>` and
 ```c
 #include "component.h"
 
-static int on_input(ChainContext *ctx, const Measurement *message) {
+static int on_input(OseContext *ctx, const Measurement *message) {
     Measurement result = *message;
     result.value *= 2.0;
     return publish_result(ctx, &result);
@@ -176,12 +176,12 @@ const ComponentCallbacks component_callbacks = { .on_input = on_input };
 ```
 
 Callbacks return **1 for success, 0 for failure**. Publication returns the same
-status; propagate it, or use `chain_fail(ctx, "reason")` to report a failure.
-Optional `.on_start` and `.on_stop` hooks accept `ChainContext *`. A source sets
-`.on_tick` with signature `int callback(ChainContext *)`.
+status; propagate it, or use `ose_fail(ctx, "reason")` to report a failure.
+Optional `.on_start` and `.on_stop` hooks accept `OseContext *`. A source sets
+`.on_tick` with signature `int callback(OseContext *)`.
 
 For a component with inputs, `.on_tick` has signature
-`int callback(ChainContext *, const ComponentInputs *)` and replaces named input
+`int callback(OseContext *, const ComponentInputs *)` and replaces named input
 dispatch when supplied. Each snapshot field is a `const MessageType *`; absent
 optional inputs and timed-out required inputs are `NULL`. Without `.on_tick`, every input requires a named
 callback; missing callback pointers are refused before READY.

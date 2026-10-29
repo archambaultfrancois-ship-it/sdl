@@ -4,7 +4,7 @@ generic
    Root, Catalogue : String;
    with function Encode (Ctx : SDL_Runtime.Context; Message : Message_Type) return SDL_Runtime.Bytes;
    with function Decode (Ctx : SDL_Runtime.Context; Data : SDL_Runtime.Bytes) return Message_Type;
-package Chain_Client.Typed is
+package Ose_Client.Typed is
    type Publisher is new Ada.Finalization.Limited_Controlled with private;
    procedure Open (Self : in out Publisher; Owner : Client; Topic : String);
    function Publish (Self : Publisher; Message : Message_Type) return String;
@@ -30,4 +30,4 @@ private
    type Subscription is new Ada.Finalization.Limited_Controlled with record
       Native, State : System.Address := System.Null_Address;
    end record;
-end Chain_Client.Typed;
+end Ose_Client.Typed;

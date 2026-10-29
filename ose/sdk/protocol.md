@@ -30,8 +30,8 @@ initial UPDATE frames before user initialization, typed APIs and snapshot rules.
 
 Updated generated containers advertise the capability automatically and accept
 empty historical ticks too, using time zero and the next local index. Raw Python
-components use `ComponentSession(timed_ticks=True)`; C uses `chain_ready()` and
-`chain_tick()`; Rust uses `send(b'R', TICK_CONTEXT)` and `tick()`. The raw Rust
+components use `ComponentSession(timed_ticks=True)`; C uses `ose_ready()` and
+`ose_tick()`; Rust uses `send(b'R', TICK_CONTEXT)` and `tick()`. The raw Rust
 `initialize()` convenience function retains the legacy empty READY. Lifecycle
 ordering and callback signatures are unchanged. The [simulation guide](../docs/simulation.md)
 documents the clock context in all five languages. Java uses unsigned `BigInteger`
@@ -65,12 +65,12 @@ methods on top of the binary SDK. They defer READY until codec and handler initi
 succeed, and send FINISHED only after callbacks return successfully. Their
 callbacks run at TICK, never directly on a network receive; see
 [callback containers](../docs/callbacks.md).
-C: `ChainEvent.data` owns the body and must be released; `chain_input()` returns
+C: `OseEvent.data` owns the body and must be released; `ose_input()` returns
 borrowed fields, with catalogues explicitly sized rather than NUL terminated.
 Rust: `initialize()` returns INIT JSON bytes; `input()` borrows the decoded
 fields from its event and `Input::is_null()` recognizes an explicit null frame.
 Python `ComponentSession.ticks()` maps that frame to a `None` entry; normal entries
-remain `(catalogue, payload)` pairs. In C, `chain_input()` returns zero catalogue
+remain `(catalogue, payload)` pairs. In C, `ose_input()` returns zero catalogue
 and payload sizes for an explicit null. Raw SDK users must handle this value when
 enabling input timeouts. The C and Rust stdio SDKs do not depend on a JSON parser
 or SDL. The optional C callback runner and generated Rust container use the

@@ -1,9 +1,9 @@
-package org.sdlchain.client;
+package org.sdlose.client;
 
 import java.io.IOException;
 import java.util.Map;
-import org.sdlchain.Component;
-import org.sdlchain.Json;
+import org.sdlose.Component;
+import org.sdlose.Json;
 import sdl.runtime.SdlCodec;
 
 /** Parameter-only TCP/mTLS client backed by the shared native SDK. */
@@ -11,7 +11,7 @@ public final class ParameterClient implements AutoCloseable {
     private static final byte[] EMPTY = new byte[0];
     private long handle;
     private static class Native {
-        static { System.loadLibrary("sdl_chain_jni"); }
+        static { System.loadLibrary("sdl_ose_jni"); }
         static native long connect(byte[][] options, int port) throws IOException;
         static native byte[][] request(long handle, byte[] operation, byte[] arguments, byte[] payload) throws IOException;
         static native void free(long handle);

@@ -1,6 +1,6 @@
-#ifndef CENV_CHAIN_CLIENT_RAW_H
-#define CENV_CHAIN_CLIENT_RAW_H
-#include "chain_client.h"
+#ifndef CENV_OSE_CLIENT_RAW_H
+#define CENV_OSE_CLIENT_RAW_H
+#include "ose_client.h"
 /* Low-level ABI for additional codecs. subscribe_raw takes ownership of hooks.user
  * immediately, including on failure. destroy runs after all worker uses finish. */
 typedef struct {

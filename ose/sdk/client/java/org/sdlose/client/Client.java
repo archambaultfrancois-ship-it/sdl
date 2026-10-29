@@ -1,9 +1,9 @@
-package org.sdlchain.client;
+package org.sdlose.client;
 
 import java.io.IOException;
 import java.math.BigInteger;
-import org.sdlchain.Component;
-import org.sdlchain.Json;
+import org.sdlose.Component;
+import org.sdlose.Json;
 import sdl.runtime.SdlCodec;
 
 /** Typed external CENV client. Network delivery is implemented by the shared Rust SDK. */
@@ -13,7 +13,7 @@ public final class Client implements AutoCloseable {
     private volatile Throwable callbackFailure;
     private static final ThreadLocal<State<?>> ACTIVE = new ThreadLocal<State<?>>();
     private static class Native {
-        static { System.loadLibrary("sdl_chain_jni"); }
+        static { System.loadLibrary("sdl_ose_jni"); }
         static native long connect(byte[] host, int port, byte[] id) throws IOException;
         static native byte[] call(long handle, int op, byte[] a, byte[] b, byte[] c) throws IOException;
         static native long subscribe(long handle, byte[] topic, byte[] root, byte[] catalogue, byte[] options, State<?> state) throws IOException;

@@ -35,7 +35,7 @@ def validate_names(language, name, node, container):
         raise ValueError('Ada identity conflicts with runtime units or reserved callbacks')
     if language == 'java' and identity.startswith(('java.', 'sun.', 'jdk.')):
         raise ValueError('Java handler package is reserved by the JVM')
-    if identity.lower().startswith(('org.sdlchain.', 'sdl.', 'sdl_', 'chain_')):
+    if identity.lower().startswith(('org.sdlose.', 'sdl.', 'sdl_', 'ose_')):
         raise ValueError('handler identity conflicts with a reserved SDK namespace')
     for names in ([name], list(node['inputs']), list(node['outputs'])):
         if not all(valid(part) for part in names):
@@ -95,14 +95,14 @@ def generate_java(name, node, handler, sdl_root, schemas, destination, identity)
     if not runtime.exists():
         runtime.parent.mkdir(parents=True, exist_ok=True)
         runtime.write_bytes((Path(sdl_root) / 'runtime/java/SdlCodec.java').read_bytes())
-    package = 'org.sdlchain.generated.' + name
+    package = 'org.sdlose.generated.' + name
     source = destination / 'src' / Path(package.replace('.', '/'))
     source.mkdir(parents=True, exist_ok=True)
     classes = destination / 'classes'
     if classes.exists():
         shutil.rmtree(classes)
     classes.mkdir(parents=True, exist_ok=True)
-    reserved = {'org.sdlchain.Component', 'org.sdlchain.Json', package + '.API', package + '.Main', identity}
+    reserved = {'org.sdlose.Component', 'org.sdlose.Json', package + '.API', package + '.Main', identity}
     if any(wrapper in reserved for wrapper, _ in types.values()):
         raise ValueError('Java schema wrapper conflicts with the generated component API or handler')
     if handler.stem != identity.rsplit('.', 1)[-1]:
@@ -125,7 +125,7 @@ def generate_java(name, node, handler, sdl_root, schemas, destination, identity)
         methods += [f'        ports[{i}] = {direction}_{i}();' for i in range(len(expressions))]
         methods += ['        return ports;', '    }']
         return methods
-    lines = [f'package {package};', 'import org.sdlchain.Component;', 'public final class API {'] + ports('inputs') + ports('outputs') + ports('parameter_bindings')
+    lines = [f'package {package};', 'import org.sdlose.Component;', 'public final class API {'] + ports('inputs') + ports('outputs') + ports('parameter_bindings')
     lines += ['    public static final class Context extends Component.Context {',
               f'        public Context() throws Exception {{ super({java_string(name)}, outputs()); }}']
     if node.get('parameter_bindings'):
@@ -158,7 +158,7 @@ def generate_java(name, node, handler, sdl_root, schemas, destination, identity)
     lines += ['        }', '    }', '}']
     (source / 'API.java').write_text('\n'.join(lines) + '\n')
     (source / 'Main.java').write_text(f'''package {package};
-import org.sdlchain.Component;
+import org.sdlose.Component;
 public final class Main {{
     public static void main(String[] args) {{
         int status = 0;
@@ -194,7 +194,7 @@ def scaffold_managed(node, container):
         return
     identity = container['class']; package, _, simple = identity.rpartition('.')
     name = next(part for part in node['command'] if part.endswith('.Main')).split('.')[-2]
-    lines = ([f'package {package};'] if package else []) + [f'import org.sdlchain.generated.{name}.API;', f'public final class {simple} extends API.Handler {{']
+    lines = ([f'package {package};'] if package else []) + [f'import org.sdlose.generated.{name}.API;', f'public final class {simple} extends API.Handler {{']
     for port, desc in node['inputs'].items():
         typ = '.'.join(container['types'][desc['root']])
         lines += [f'    @Override public void on_{port}(API.Context ctx, {typ} message) throws Exception {{', '        // Implement message processing here.', '    }']

@@ -1,5 +1,5 @@
-#ifndef CENV_CHAIN_PARAMETERS_H
-#define CENV_CHAIN_PARAMETERS_H
+#ifndef CENV_OSE_PARAMETERS_H
+#define CENV_OSE_PARAMETERS_H
 #include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
@@ -24,9 +24,9 @@ const char *cenv_parameter_packet_header(const CenvParameterPacket *);
 const uint8_t *cenv_parameter_packet_data(const CenvParameterPacket *);
 size_t cenv_parameter_packet_size(const CenvParameterPacket *);
 void cenv_parameter_packet_free(CenvParameterPacket *);
-/* Owned UTF-8 field; release using cenv_string_free (chain_client.h). */
+/* Owned UTF-8 field; release using cenv_string_free (ose_client.h). */
 char *cenv_parameter_packet_text(const CenvParameterPacket *, const char *key);
-/* Typed SDL helpers, linked from chain_client.c. Register generated SDL types
+/* Typed SDL helpers, linked from ose_client.c. Register generated SDL types
  * first. Blocks borrow the client; free blocks before freeing their client.
  * get/decode return owned SDL messages, released with type_free. */
 CenvParameterBlock *cenv_parameter_block(CenvParameterClient *, const char *path, const char *root);

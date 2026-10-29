@@ -1,5 +1,5 @@
-#include "chain_callbacks.h"
-#include "chain_component.h"
+#include "ose_callbacks.h"
+#include "ose_component.h"
 #include "type_engine.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,53 +13,53 @@ typedef struct {
     int present;
 } Input;
 typedef struct {
-    const ChainPortSpec *inputs, *outputs;
+    const OsePortSpec *inputs, *outputs;
     size_t input_count, output_count;
     Input *selected;
     SdlContext **encoders;
-    const ChainParameterSpec *parameters;
+    const OseParameterSpec *parameters;
     size_t parameter_count;
     Input *parameter_values;
     SdlContext **parameter_codecs;
     int active, failed, parameter_writes;
 } Runtime;
 
-double chain_now(const ChainContext *ctx) { return (double)ctx->time_ns / 1000000000.0; }
-uint64_t chain_time_ns(const ChainContext *ctx) { return ctx->time_ns; }
-uint64_t chain_tick_index(const ChainContext *ctx) { return ctx->tick_index; }
+double ose_now(const OseContext *ctx) { return (double)ctx->time_ns / 1000000000.0; }
+uint64_t ose_time_ns(const OseContext *ctx) { return ctx->time_ns; }
+uint64_t ose_tick_index(const OseContext *ctx) { return ctx->tick_index; }
 
-int chain_fail(ChainContext *ctx, const char *message) {
+int ose_fail(OseContext *ctx, const char *message) {
     Runtime *runtime = ctx->private_runtime;
     runtime->failed = 1;
     fprintf(stderr, "%s: %s\n", ctx->name, message);
     return 0;
 }
 
-const void *chain_input_value(ChainContext *ctx, size_t index) {
+const void *ose_input_value(OseContext *ctx, size_t index) {
     Runtime *runtime = ctx->private_runtime;
     return index < runtime->input_count ? runtime->selected[index].message : NULL;
 }
 
-int chain_publish_value(ChainContext *ctx, size_t index, const void *value) {
+int ose_publish_value(OseContext *ctx, size_t index, const void *value) {
     Runtime *runtime = ctx->private_runtime;
     size_t size;
     void *payload;
     int result;
     if (!runtime->active || index >= runtime->output_count || !value)
-        return chain_fail(ctx, "invalid publication outside a tick or output port");
+        return ose_fail(ctx, "invalid publication outside a tick or output port");
     payload = type_encode(runtime->encoders[index], runtime->outputs[index].root, value, &size);
-    if (!payload) return chain_fail(ctx, "SDL output encoding failed");
-    result = chain_publish(runtime->outputs[index].name, payload, size);
+    if (!payload) return ose_fail(ctx, "SDL output encoding failed");
+    result = ose_publish(runtime->outputs[index].name, payload, size);
     type_free(payload);
-    return result ? 1 : chain_fail(ctx, "output IPC failed");
+    return result ? 1 : ose_fail(ctx, "output IPC failed");
 }
 
-const void *chain_parameter_value(const ChainContext *ctx, size_t index) {
+const void *ose_parameter_value(const OseContext *ctx, size_t index) {
     Runtime *runtime = ctx->private_runtime;
     return index < runtime->parameter_count && runtime->parameters[index].readable
         ? runtime->parameter_values[index].message : NULL;
 }
-int chain_set_parameter_value(ChainContext *ctx, size_t index, const void *value) {
+int ose_set_parameter_value(OseContext *ctx, size_t index, const void *value) {
     Runtime *runtime = ctx->private_runtime;
     void *payload;
     size_t size;
@@ -67,17 +67,17 @@ int chain_set_parameter_value(ChainContext *ctx, size_t index, const void *value
     if (!runtime->parameter_writes || index >= runtime->parameter_count || !runtime->parameters[index].writable || !value) return 0;
     payload = type_encode(runtime->parameter_codecs[index], runtime->parameters[index].root, value, &size);
     if (!payload) return 0;
-    ok = chain_set_parameters(runtime->parameters[index].name, payload, size);
+    ok = ose_set_parameters(runtime->parameters[index].name, payload, size);
     type_free(payload);
     return ok;
 }
-static int parameter_update(ChainContext *ctx, const ChainEvent *event, int initial) {
+static int parameter_update(OseContext *ctx, const OseEvent *event, int initial) {
     Runtime *runtime = ctx->private_runtime;
     const uint8_t *name, *text, *payload;
     const char *root;
     size_t n, text_size, payload_size, i;
     void *value;
-    if (event->op != 'U' || !chain_input(event, &name, &n, &text, &text_size, &payload, &payload_size)) return 0;
+    if (event->op != 'U' || !ose_input(event, &name, &n, &text, &text_size, &payload, &payload_size)) return 0;
     for (i = 0; i < runtime->parameter_count; ++i)
         if (strlen(runtime->parameters[i].name) == n && !memcmp(runtime->parameters[i].name, name, n)) break;
     if (i == runtime->parameter_count || !runtime->parameters[i].readable ||
@@ -94,26 +94,26 @@ static int parameter_update(ChainContext *ctx, const ChainEvent *event, int init
     return 1;
 }
 
-static int admit(ChainContext *ctx, const ChainEvent *event) {
+static int admit(OseContext *ctx, const OseEvent *event) {
     Runtime *runtime = ctx->private_runtime;
     const uint8_t *port, *text, *payload;
     size_t n, text_size, payload_size, index;
     Input *input;
-    const ChainPortSpec *spec;
+    const OsePortSpec *spec;
     const char *root;
-    if (!chain_input(event, &port, &n, &text, &text_size, &payload, &payload_size))
-        return chain_fail(ctx, "invalid INPUT frame");
+    if (!ose_input(event, &port, &n, &text, &text_size, &payload, &payload_size))
+        return ose_fail(ctx, "invalid INPUT frame");
     for (index = 0; index < runtime->input_count; ++index) {
         const char *name = runtime->inputs[index].name;
         if (strlen(name) == n && !memcmp(name, port, n)) break;
     }
-    if (index == runtime->input_count) return chain_fail(ctx, "unknown input port");
+    if (index == runtime->input_count) return ose_fail(ctx, "unknown input port");
     input = &runtime->selected[index];
     spec = &runtime->inputs[index];
-    if (input->present) return chain_fail(ctx, "duplicate input in tick");
+    if (input->present) return ose_fail(ctx, "duplicate input in tick");
     if (!text_size && !payload_size) {
         if (!spec->required || spec->timeout <= 0)
-            return chain_fail(ctx, "null input requires a timeout");
+            return ose_fail(ctx, "null input requires a timeout");
         input->present = 1;
         return 1;
     }
@@ -124,32 +124,32 @@ static int admit(ChainContext *ctx, const ChainEvent *event) {
         char *catalogue;
         int compatible = check && check->code == SDL_COMPAT_COMPATIBLE;
         type_compatibility_free(check);
-        if (!compatible) return chain_fail(ctx, "incompatible input catalogue");
+        if (!compatible) return ose_fail(ctx, "incompatible input catalogue");
         codec = type_prepare(text, text_size);
         catalogue = malloc(text_size ? text_size : 1);
         if (!codec || !catalogue) {
             type_context_free(codec); free(catalogue);
-            return chain_fail(ctx, "input codec initialization failed");
+            return ose_fail(ctx, "input codec initialization failed");
         }
         memcpy(catalogue, text, text_size);
         type_context_free(input->codec); free(input->catalogue);
         input->codec = codec; input->catalogue = catalogue; input->catalogue_size = text_size;
     }
     root = type_message_name(input->codec, payload, payload_size);
-    if (!root || strcmp(root, spec->root)) return chain_fail(ctx, "wrong input message type");
+    if (!root || strcmp(root, spec->root)) return ose_fail(ctx, "wrong input message type");
     input->message = type_decode(input->codec, payload, payload_size);
     input->present = input->message != NULL;
-    return input->message ? 1 : chain_fail(ctx, "SDL input decoding failed");
+    return input->message ? 1 : ose_fail(ctx, "SDL input decoding failed");
 }
 
-int chain_run_callbacks_parameters(const char *name,
-    const ChainPortSpec *inputs, size_t input_count,
-    const ChainPortSpec *outputs, size_t output_count,
-    const ChainParameterSpec *parameters, size_t parameter_count,
-    ChainHook start, ChainHook dispatch, ChainHook stop) {
+int ose_run_callbacks_parameters(const char *name,
+    const OsePortSpec *inputs, size_t input_count,
+    const OsePortSpec *outputs, size_t output_count,
+    const OseParameterSpec *parameters, size_t parameter_count,
+    OseHook start, OseHook dispatch, OseHook stop) {
     Runtime runtime;
-    ChainContext ctx;
-    ChainEvent event;
+    OseContext ctx;
+    OseEvent event;
     char *config = NULL;
     size_t index;
     int result = 1, initialized = 0;
@@ -164,12 +164,12 @@ int chain_run_callbacks_parameters(const char *name,
     runtime.selected = calloc(input_count ? input_count : 1, sizeof(Input));
     runtime.encoders = calloc(output_count ? output_count : 1, sizeof(SdlContext *));
     if (!runtime.selected || !runtime.encoders || !runtime.parameter_values || !runtime.parameter_codecs) goto cleanup;
-    if (!chain_read(&event)) goto cleanup;
-    if (event.op != 'I' || memchr(event.data, 0, event.size)) { chain_release(&event); goto cleanup; }
+    if (!ose_read(&event)) goto cleanup;
+    if (event.op != 'I' || memchr(event.data, 0, event.size)) { ose_release(&event); goto cleanup; }
     config = malloc(event.size + 1);
-    if (!config) { chain_release(&event); goto cleanup; }
+    if (!config) { ose_release(&event); goto cleanup; }
     memcpy(config, event.data, event.size); config[event.size] = 0;
-    chain_release(&event); ctx.config_json = config;
+    ose_release(&event); ctx.config_json = config;
     for (index = 0; index < output_count; ++index) {
         runtime.encoders[index] = type_prepare(outputs[index].catalogue, strlen(outputs[index].catalogue));
         if (!runtime.encoders[index]) goto cleanup;
@@ -181,37 +181,37 @@ int chain_run_callbacks_parameters(const char *name,
     for (index = 0; index < parameter_count; ++index) {
         int valid;
         if (!parameters[index].readable) continue;
-        if (!chain_read(&event)) goto cleanup;
+        if (!ose_read(&event)) goto cleanup;
         valid = parameter_update(&ctx, &event, 1);
-        chain_release(&event);
+        ose_release(&event);
         if (!valid) goto cleanup;
     }
     initialized = 1; runtime.parameter_writes = 1;
     if ((start && !start(&ctx)) || runtime.failed) goto cleanup;
     runtime.parameter_writes = 0;
     { const uint8_t capabilities = parameter_count ? 3 : 1;
-      if (!chain_send('R', &capabilities, 1)) goto cleanup; }
-    while (chain_read(&event)) {
+      if (!ose_send('R', &capabilities, 1)) goto cleanup; }
+    while (ose_read(&event)) {
         char op = event.op;
         int valid = 1;
         if (op == 'U') valid = parameter_update(&ctx, &event, 0);
         else if (op == 'D') valid = admit(&ctx, &event);
         else if (op == 'T') {
-            if (!chain_tick(&event, &ctx.time_ns, &ctx.tick_index)) valid = chain_fail(&ctx, "invalid tick context");
-        } else if (event.size || op != 'X') valid = chain_fail(&ctx, "unexpected component event");
-        chain_release(&event);
+            if (!ose_tick(&event, &ctx.time_ns, &ctx.tick_index)) valid = ose_fail(&ctx, "invalid tick context");
+        } else if (event.size || op != 'X') valid = ose_fail(&ctx, "unexpected component event");
+        ose_release(&event);
         if (!valid) goto cleanup;
         if (op == 'X') { result = 0; break; }
         if (op != 'T') continue;
         for (index = 0; index < input_count; ++index) {
             if (inputs[index].required && !runtime.selected[index].present) {
-                chain_fail(&ctx, "missing required input"); goto cleanup;
+                ose_fail(&ctx, "missing required input"); goto cleanup;
             }
         }
         runtime.active = 1; runtime.parameter_writes = 1;
         valid = dispatch(&ctx);
         runtime.active = 0; runtime.parameter_writes = 0;
-        if (!valid || runtime.failed || !chain_send('F', NULL, 0)) goto cleanup;
+        if (!valid || runtime.failed || !ose_send('F', NULL, 0)) goto cleanup;
         for (index = 0; index < input_count; ++index) {
             type_free(runtime.selected[index].message); runtime.selected[index].message = NULL;
             runtime.selected[index].present = 0;
@@ -237,10 +237,10 @@ cleanup:
     return result;
 }
 
-int chain_run_callbacks(const char *name,
-    const ChainPortSpec *inputs, size_t input_count,
-    const ChainPortSpec *outputs, size_t output_count,
-    ChainHook start, ChainHook dispatch, ChainHook stop) {
-    return chain_run_callbacks_parameters(name, inputs, input_count, outputs, output_count,
+int ose_run_callbacks(const char *name,
+    const OsePortSpec *inputs, size_t input_count,
+    const OsePortSpec *outputs, size_t output_count,
+    OseHook start, OseHook dispatch, OseHook stop) {
+    return ose_run_callbacks_parameters(name, inputs, input_count, outputs, output_count,
         NULL, 0, start, dispatch, stop);
 }

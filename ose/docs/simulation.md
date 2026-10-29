@@ -81,7 +81,7 @@ Use the framework clock for time-dependent application logic:
 | Language | Seconds | Exact nanoseconds | Component-local tick index |
 | --- | --- | --- | --- |
 | Python | `ctx.now()` | `ctx.time_ns` | `ctx.tick_index` |
-| C | `chain_now(ctx)` | `chain_time_ns(ctx)` | `chain_tick_index(ctx)` |
+| C | `ose_now(ctx)` | `ose_time_ns(ctx)` | `ose_tick_index(ctx)` |
 | Rust | `ctx.now()` | `ctx.time_ns()` | `ctx.tick_index()` |
 
 The timestamp is frozen throughout a callback and its publication calls. Tick
@@ -98,9 +98,9 @@ The updated containers also accept historical empty TICKs in protocol-level test
 these carry time zero and increment the local tick index.
 
 Raw Python components opt in with `ComponentSession(timed_ticks=True)`. Raw C
-components call `chain_ready()` and decode ticks with `chain_tick()`. Raw Rust
-components send `R` with `sdl_chain_component::TICK_CONTEXT` after initialization
-and decode ticks with `sdl_chain_component::tick()`. The historical Rust
+components call `ose_ready()` and decode ticks with `ose_tick()`. Raw Rust
+components send `R` with `sdl_ose_component::TICK_CONTEXT` after initialization
+and decode ticks with `sdl_ose_component::tick()`. The historical Rust
 `initialize()` convenience function retains its empty READY behavior.
 
 ## External scenarios

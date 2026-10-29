@@ -1,9 +1,9 @@
-with Chain_Text;
+with Ose_Text;
 -- The native client bridge registers foreign threads with the GNAT task runtime.
 with GNAT.Threads;
 with Interfaces.C;
 with Interfaces.C.Strings;
-package body Chain_Parameters is
+package body Ose_Parameters is
    use Ada.Strings.Unbounded;
    use type System.Address;
    use type Interfaces.C.Strings.chars_ptr;
@@ -23,7 +23,7 @@ package body Chain_Parameters is
    function C_Error return CS.chars_ptr with Import, Convention => C, External_Name => "cenv_last_error";
    function Checked (Text : String) return Interfaces.C.char_array is
    begin
-      if not Chain_Text.Valid_UTF8 (Text) then raise Parameter_Error with "invalid UTF-8"; end if;
+      if not Ose_Text.Valid_UTF8 (Text) then raise Parameter_Error with "invalid UTF-8"; end if;
       for C of Text loop if C = Character'Val (0) then raise Parameter_Error with "NUL in string"; end if; end loop;
       return Interfaces.C.To_C (Text);
    end Checked;
@@ -104,4 +104,4 @@ package body Chain_Parameters is
       Reply : constant Packet := Request (Self, "parameters_unsubscribe");
       pragma Unreferenced (Reply);
    begin null; end Unsubscribe;
-end Chain_Parameters;
+end Ose_Parameters;

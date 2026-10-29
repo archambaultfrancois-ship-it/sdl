@@ -1,28 +1,28 @@
 with Ada.Unchecked_Conversion;
-with Chain_Text;
+with Ose_Text;
 with Interfaces.C.Strings;
-package body Chain_Component is
+package body Ose_Component is
    use type Interfaces.C.int;
    use type Interfaces.C.size_t;
    use type Interfaces.Unsigned_64;
    function C_Read (E : access Raw_Event) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "chain_read";
+     with Import, Convention => C, External_Name => "ose_read";
    procedure C_Release (E : access Raw_Event)
-     with Import, Convention => C, External_Name => "chain_release";
+     with Import, Convention => C, External_Name => "ose_release";
    function C_Send (Code : Interfaces.C.char; Data : System.Address; Size : Interfaces.C.size_t) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "chain_send";
+     with Import, Convention => C, External_Name => "ose_send";
    function C_Ready return Interfaces.C.int
-     with Import, Convention => C, External_Name => "chain_ready";
+     with Import, Convention => C, External_Name => "ose_ready";
    function C_Tick (E : access constant Raw_Event; Time_Ns, Tick_Index : access Interfaces.Unsigned_64) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "chain_tick";
+     with Import, Convention => C, External_Name => "ose_tick";
    function C_Publish (Port : Interfaces.C.char_array; Data : System.Address; Size : Interfaces.C.size_t) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "chain_publish";
+     with Import, Convention => C, External_Name => "ose_publish";
    function C_Input (E : access constant Raw_Event; Port : access System.Address; Port_Size : access Interfaces.C.size_t;
                      Catalogue : access System.Address; Catalogue_Size : access Interfaces.C.size_t;
                      Payload : access System.Address; Payload_Size : access Interfaces.C.size_t) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "chain_input";
+     with Import, Convention => C, External_Name => "ose_input";
    function C_Set_Parameters (Name : Interfaces.C.char_array; Data : System.Address; Size : Interfaces.C.size_t) return Interfaces.C.int
-     with Import, Convention => C, External_Name => "chain_set_parameters";
+     with Import, Convention => C, External_Name => "ose_set_parameters";
    procedure Check (Result : Interfaces.C.int) is
    begin
       if Result = 0 then raise Protocol_Error with "invalid or incomplete CH/1 frame"; end if;
@@ -32,7 +32,7 @@ package body Chain_Component is
       Result : String (1 .. Natural (Size));
    begin
       for I in Result'Range loop Result (I) := Interfaces.C.To_Ada (Bytes (Interfaces.C.size_t (I - 1))); end loop;
-      if not Chain_Text.Valid_UTF8 (Result) then raise Protocol_Error with "invalid UTF-8"; end if;
+      if not Ose_Text.Valid_UTF8 (Result) then raise Protocol_Error with "invalid UTF-8"; end if;
       -- Strings are UTF-8 octets, as in the public SDL Ada codec.
       return Result;
    end Copy_Text;
@@ -81,4 +81,4 @@ package body Chain_Component is
    begin
       Check (C_Publish (Interfaces.C.To_C (Port), Payload'Address, Interfaces.C.size_t (Payload'Length)));
    end Publish;
-end Chain_Component;
+end Ose_Component;

@@ -2,7 +2,7 @@
 
 static uint64_t counter;
 
-static int on_tick(ChainContext *ctx) {
+static int on_tick(OseContext *ctx) {
     Measurement message = {0};
     message.sequence = ++counter;
     message.value = (double)counter;

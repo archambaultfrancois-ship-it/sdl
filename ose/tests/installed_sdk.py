@@ -26,18 +26,17 @@ distribution = importlib.metadata.distribution('ose')
 assert distribution.metadata['Name'] == 'ose'
 assert [(entry.name, entry.value) for entry in distribution.entry_points
         if entry.group == 'console_scripts'] == [('ose-ctl', 'ose.cli:main')]
-assert not any(str(path).startswith('chain_env/') for path in distribution.files)
 assert pathlib.Path(ose.__file__).resolve().is_relative_to(pathlib.Path(distribution.locate_file('')).resolve())
 root = pathlib.Path.cwd()
 sdk = sdk_root()
 assert 'share/ose/sdk' in str(sdk), sdk
-for asset in ('java/org/sdlchain/Component.java', 'ada/chain_component.ads',
-              'client/java/chain_jni.c', 'client/ada/chain_client-typed.adb',
-              'client/c/chain_parameters.h', 'client/rust/src/parameters.rs',
+for asset in ('java/org/sdlose/Component.java', 'ada/ose_component.ads',
+              'client/java/ose_jni.c', 'client/ada/ose_client-typed.adb',
+              'client/c/ose_parameters.h', 'client/rust/src/parameters.rs',
               'client/rust/src/parameters_tls.rs',
-              'client/java/org/sdlchain/client/ParameterClient.java',
-              'client/ada/chain_parameters.ads', 'client/ada/chain_parameters.adb',
-              'client/ada/chain_parameters-typed.ads', 'client/ada/chain_parameters-typed.adb'):
+              'client/java/org/sdlose/client/ParameterClient.java',
+              'client/ada/ose_parameters.ads', 'client/ada/ose_parameters.adb',
+              'client/ada/ose_parameters-typed.ads', 'client/ada/ose_parameters-typed.adb'):
     assert (sdk / asset).is_file(), asset
 (root / 'probe.sdl').write_text('message Empty {}')
 (root / 'settings.sdl').write_text('message Settings { uint32 limit; }')

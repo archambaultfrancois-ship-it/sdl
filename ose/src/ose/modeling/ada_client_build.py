@@ -15,7 +15,7 @@ def build_ada(sdl_root, destination, main=None, include_dirs=()):
     target = destination / 'rust'; objects = destination / 'obj'; objects.mkdir(exist_ok=True)
     subprocess.run(tool('CARGO', 'cargo') + ['build', '--offline', '--manifest-path', str(writable_manifest(sdk, destination))], env=dict(os.environ, CARGO_TARGET_DIR=str(target)), check=True)
     sources = [runtime / 'c' / (name + '.c') for name in ('type_engine', 'type_registry', 'type_codec', 'sdl_wire', 'sdl_dynamic', 'type_display')]
-    sources += [runtime / 'ada/sdl_ada_bridge.c', sdk / 'client/ada/chain_ada.c']
+    sources += [runtime / 'ada/sdl_ada_bridge.c', sdk / 'client/ada/ose_ada.c']
     linked = []
     for i, source in enumerate(sources):
         obj = objects / f'bridge_{i}.o'; linked.append(str(obj))
@@ -25,9 +25,9 @@ def build_ada(sdl_root, destination, main=None, include_dirs=()):
     if os.environ.get('ADA_RTS'): flags.append('--RTS=' + os.environ['ADA_RTS'])
     if main is None:
         main = destination / 'client_probe.adb'
-        main.write_text('with Chain_Client;\nprocedure Client_Probe is\n   C : Chain_Client.Client;\nbegin null; end Client_Probe;\n')
+        main.write_text('with Ose_Client;\nprocedure Client_Probe is\n   C : Ose_Client.Client;\nbegin null; end Client_Probe;\n')
     main = Path(main).resolve(); binary = destination / main.stem
-    subprocess.run(tool('GNATMAKE', 'gnatmake') + flags + ['-D', str(objects), *['-I' + str(p) for p in includes], '-I' + str(main.parent), str(main), '-o', str(binary), '-largs', *linked, str(target / 'debug/libsdl_chain_client.a'), '-ldl', '-lpthread', '-lm'], check=True)
+    subprocess.run(tool('GNATMAKE', 'gnatmake') + flags + ['-D', str(objects), *['-I' + str(p) for p in includes], '-I' + str(main.parent), str(main), '-o', str(binary), '-largs', *linked, str(target / 'debug/libsdl_ose_client.a'), '-ldl', '-lpthread', '-lm'], check=True)
     return binary
 
 

@@ -1,6 +1,6 @@
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import org.sdlchain.client.Client;
+import org.sdlose.client.Client;
 import sdl.globaltypes.measurement.Measurement;
 public class ExternalProbe {
  public static void main(String[] args) throws Exception {

@@ -13,7 +13,7 @@ def sdk_root():
     target = Path(__file__).resolve().parents[2] / "share/ose/sdk"
     installed = Path(sysconfig.get_path("data")) / "share/ose/sdk"
     for candidate in (target, source, installed):
-        if (candidate / "c/chain_callbacks.c").is_file() and (candidate / "rust/Cargo.toml").is_file():
+        if (candidate / "c/ose_callbacks.c").is_file() and (candidate / "rust/Cargo.toml").is_file():
             return candidate
     raise ValueError("native container SDK files are missing from this installation")
 
@@ -67,9 +67,9 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
     destination, sdl_root = Path(destination), Path(sdl_root)
     bindings = destination / "types"
     types = merge_schemas(name, "c", schemas, bindings)
-    reserved = {"ChainContext", "ChainPortSpec", "ChainHook", "ComponentCallbacks", "main", "dispatch", "inputs", "outputs",
-                "chain_now", "chain_time_ns", "chain_tick_index", "parameters", "ChainParameterSpec",
-                "chain_parameter_value", "chain_set_parameter_value", "chain_run_callbacks_parameters"}
+    reserved = {"OseContext", "OsePortSpec", "OseHook", "ComponentCallbacks", "main", "dispatch", "inputs", "outputs",
+                "ose_now", "ose_time_ns", "ose_tick_index", "parameters", "OseParameterSpec",
+                "ose_parameter_value", "ose_set_parameter_value", "ose_run_callbacks_parameters"}
     if node["inputs"]:
         reserved.add("ComponentInputs")
     reserved.update('parameters_' + alias for alias in node.get('parameter_bindings', {}))
@@ -82,27 +82,27 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
             raise ValueError(f"C container {name}: SDL type {symbol} conflicts with the generated component API")
     headers = sorted({binding[0] for binding in types.values()})
     header = ["/* Generated component API. Edit the handler, not this file. */",
-              "#ifndef CHAIN_GENERATED_COMPONENT_H", "#define CHAIN_GENERATED_COMPONENT_H",
-              '#include "chain_callbacks.h"', *(f'#include "{path}"' for path in headers)]
+              "#ifndef OSE_GENERATED_COMPONENT_H", "#define OSE_GENERATED_COMPONENT_H",
+              '#include "ose_callbacks.h"', *(f'#include "{path}"' for path in headers)]
     for direction, prefix in (("inputs", "Input"), ("outputs", "Output")):
         for port, desc in node[direction].items():
             header.append(f"typedef {types[desc['root']][1]} {prefix}_{port};")
     if node["inputs"]:
         header += ["typedef struct {"] + [f"    const {types[desc['root']][1]} *{port};" for port, desc in node["inputs"].items()]
         header += ["} ComponentInputs;"]
-    tick_args = "ChainContext *, const ComponentInputs *" if node["inputs"] else "ChainContext *"
-    header += ["typedef struct {", "    ChainHook on_start, on_stop;", f"    int (*on_tick)({tick_args});"]
+    tick_args = "OseContext *, const ComponentInputs *" if node["inputs"] else "OseContext *"
+    header += ["typedef struct {", "    OseHook on_start, on_stop;", f"    int (*on_tick)({tick_args});"]
     for port, desc in node["inputs"].items():
-        header.append(f"    int (*on_{port})(ChainContext *, const {types[desc['root']][1]} *);")
+        header.append(f"    int (*on_{port})(OseContext *, const {types[desc['root']][1]} *);")
     header += ["} ComponentCallbacks;", "extern const ComponentCallbacks component_callbacks;"]
     for port, desc in node["outputs"].items():
-        header.append(f"int publish_{port}(ChainContext *, const {types[desc['root']][1]} *);")
+        header.append(f"int publish_{port}(OseContext *, const {types[desc['root']][1]} *);")
     for alias, desc in node.get('parameter_bindings', {}).items():
         typ = types[desc['root']][1]
         if 'read' in desc['access']:
-            header.append(f"const {typ} *parameters_{alias}(const ChainContext *);")
+            header.append(f"const {typ} *parameters_{alias}(const OseContext *);")
         if 'write' in desc['access']:
-            header.append(f"int set_parameters_{alias}(ChainContext *, const {typ} *);")
+            header.append(f"int set_parameters_{alias}(OseContext *, const {typ} *);")
     header += ["#endif", ""]
     (destination / "component.h").write_text("\n".join(header))
     source = ['/* Generated from the component model. */', '#include "component.h"', '#include <stdio.h>']
@@ -111,16 +111,16 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
         source.append(f'#include "types/{path.relative_to(bindings).as_posix()}"')
         registrations.update(re.findall(r"bool (register_\w+_types)\(void\);", path.read_text()))
     for direction in ("inputs", "outputs"):
-        source.append(f"static const ChainPortSpec {direction}[] = {{")
+        source.append(f"static const OsePortSpec {direction}[] = {{")
         for port, desc in node[direction].items():
             source.append("    {" + ", ".join((c_string(port), c_string(desc["root"]), c_string(desc["catalogue"]),
                                                "1" if desc.get("required", True) else "0",
                                                repr(float(desc.get("timeout", 0))))) + "},")
         source += ["    {NULL, NULL, NULL, 0, 0}", "};"]
     for index, (port, desc) in enumerate(node["outputs"].items()):
-        source += [f"int publish_{port}(ChainContext *ctx, const {types[desc['root']][1]} *message) {{",
-                   f"    return chain_publish_value(ctx, {index}, message);", "}"]
-    source += ['static const ChainParameterSpec parameters[] = {']
+        source += [f"int publish_{port}(OseContext *ctx, const {types[desc['root']][1]} *message) {{",
+                   f"    return ose_publish_value(ctx, {index}, message);", "}"]
+    source += ['static const OseParameterSpec parameters[] = {']
     for alias, desc in node.get('parameter_bindings', {}).items():
         source.append('    {' + ', '.join((c_string(alias), c_string(desc['root']), c_string(desc['catalogue']),
             '1' if 'read' in desc['access'] else '0', '1' if 'write' in desc['access'] else '0')) + '},')
@@ -128,14 +128,14 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
     for index, (alias, desc) in enumerate(node.get('parameter_bindings', {}).items()):
         typ = types[desc['root']][1]
         if 'read' in desc['access']:
-            source += [f'const {typ} *parameters_{alias}(const ChainContext *ctx) {{ return chain_parameter_value(ctx, {index}); }}']
+            source += [f'const {typ} *parameters_{alias}(const OseContext *ctx) {{ return ose_parameter_value(ctx, {index}); }}']
         if 'write' in desc['access']:
-            source += [f'int set_parameters_{alias}(ChainContext *ctx, const {typ} *value) {{ return chain_set_parameter_value(ctx, {index}, value); }}']
-    source += ["static int dispatch(ChainContext *ctx) {"]
+            source += [f'int set_parameters_{alias}(OseContext *ctx, const {typ} *value) {{ return ose_set_parameter_value(ctx, {index}, value); }}']
+    source += ["static int dispatch(OseContext *ctx) {"]
     if node["inputs"]:
         source += ["    ComponentInputs selected;"]
         for index, port in enumerate(node["inputs"]):
-            source.append(f"    selected.{port} = chain_input_value(ctx, {index});")
+            source.append(f"    selected.{port} = ose_input_value(ctx, {index});")
         source.append("    if (component_callbacks.on_tick) return component_callbacks.on_tick(ctx, &selected);")
         for port, desc in node["inputs"].items():
             condition = "" if "timeout" in desc else f"selected.{port} && "
@@ -149,7 +149,7 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
     source += [f"    if ({condition}) {{", '        fputs("missing component callbacks\\n", stderr); return 1;', "    }"]
     for function in sorted(registrations):
         source.append(f"    if (!{function}()) return 1;")
-    source += [f"    return chain_run_callbacks_parameters({c_string(name)}, inputs, {len(node['inputs'])}, outputs, {len(node['outputs'])}, parameters, {len(node.get('parameter_bindings', {}))},",
+    source += [f"    return ose_run_callbacks_parameters({c_string(name)}, inputs, {len(node['inputs'])}, outputs, {len(node['outputs'])}, parameters, {len(node.get('parameter_bindings', {}))},",
                "        component_callbacks.on_start, dispatch, component_callbacks.on_stop);", "}", ""]
     (destination / "container.c").write_text("\n".join(source))
     sdk = sdk_root() / "c"
@@ -158,8 +158,8 @@ def generate_c(name, node, handler, sdl_root, schemas, destination):
     binary = destination / "component"
     command = [*shlex.split(os.environ.get("CC", "cc")), "-std=c99", "-Wall", "-Wextra", "-Werror", "-O2",
                "-I" + str(destination), "-I" + str(bindings), "-I" + str(runtime), "-I" + str(sdk),
-               *map(str, sources), *map(str, sorted(bindings.rglob("*.c"))), str(sdk / "chain_component.c"),
-               str(sdk / "chain_callbacks.c"), str(destination / "container.c"), str(handler), "-lm", "-o", str(binary)]
+               *map(str, sources), *map(str, sorted(bindings.rglob("*.c"))), str(sdk / "ose_component.c"),
+               str(sdk / "ose_callbacks.c"), str(destination / "container.c"), str(handler), "-lm", "-o", str(binary)]
     return {"types": types, "command": [str(binary)], "build": [command]}
 
 
@@ -168,12 +168,12 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
     source = destination / "src"
     types = merge_schemas(name, "rust", schemas, source / "types")
     lines = ["// Generated from the component model.", "#![allow(dead_code, non_snake_case)]",
-             "use sdl_runtime::SdlMessage;", "use sdl_chain_component::{receive, send, input, publish};",
+             "use sdl_runtime::SdlMessage;", "use sdl_ose_component::{receive, send, input, publish};",
              "pub type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;",
              "fn codec<T>(value: std::result::Result<T, sdl_runtime::CodecError>) -> Result<T> {",
              '    value.map_err(|error| format!("SDL codec: {error:?}").into())', "}",
              "pub struct Context {", "    pub name: &'static str,", "    pub config_json: String,", "    active: bool,",
-             "    tick: sdl_chain_component::TickContext,", "    parameter_writes: bool,"]
+             "    tick: sdl_ose_component::TickContext,", "    parameter_writes: bool,"]
     for port in node["outputs"]:
         lines.append(f"    output_{port}: sdl_runtime::Context,")
     for alias, desc in node.get('parameter_bindings', {}).items():
@@ -198,10 +198,10 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
         if 'write' in desc['access']:
             lines += [f'    pub fn set_parameters_{alias}(&mut self, value: &{typ}) -> Result {{',
                       '        if !self.parameter_writes { return Err("parameter writes require an active callback".into()); }',
-                      f'        sdl_chain_component::set_parameters({rust_string(alias)}, &codec(sdl_runtime::encode(&self.parameter_codec_{alias}, value))?)?;',
+                      f'        sdl_ose_component::set_parameters({rust_string(alias)}, &codec(sdl_runtime::encode(&self.parameter_codec_{alias}, value))?)?;',
                       '        Ok(())', '    }']
     if node.get('parameter_bindings'):
-        lines += ['    fn parameter_update(&mut self, event: &sdl_chain_component::Event, initial: bool) -> Result {',
+        lines += ['    fn parameter_update(&mut self, event: &sdl_ose_component::Event, initial: bool) -> Result {',
                   '        if event.op != b\'U\' { return Err("expected parameter update".into()); }',
                   '        let data = input(event)?;', '        match data.port {']
         for alias, desc in node['parameter_bindings'].items():
@@ -256,7 +256,7 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
     for alias, desc in node.get('parameter_bindings', {}).items():
         if 'read' in desc['access']:
             lines += ['        ctx.parameter_update(&receive()?, true)?;']
-    lines += ["        handler.on_start(&mut ctx)?;", "        ctx.parameter_writes = false;", "        send(b'R', &[3])?;" if node.get("parameter_bindings") else "        send(b'R', sdl_chain_component::TICK_CONTEXT)?;", "        loop {", "            let event = receive()?;",
+    lines += ["        handler.on_start(&mut ctx)?;", "        ctx.parameter_writes = false;", "        send(b'R', &[3])?;" if node.get("parameter_bindings") else "        send(b'R', sdl_ose_component::TICK_CONTEXT)?;", "        loop {", "            let event = receive()?;",
               "            match event.op {", *(["                b'U' => ctx.parameter_update(&event, false)?,"] if node.get('parameter_bindings') else []), "                b'D' => {", "                    let data = input(&event)?;",
               "                    match data.port {"]
     for port, desc in node["inputs"].items():
@@ -278,7 +278,7 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
             lines.append("                            }")
         lines.append("                        }")
     lines += ['                        _ => return Err("unknown input port".into()),', "                    }", "                }",
-              "                b'T' => {", "                    ctx.tick = sdl_chain_component::tick(&event, ctx.tick_index())?;"]
+              "                b'T' => {", "                    ctx.tick = sdl_ose_component::tick(&event, ctx.tick_index())?;"]
     for port, desc in node["inputs"].items():
         if desc.get("required", True):
             lines.append(f'                    if !received_{port} {{ return Err("missing required input: {port}".into()); }}')
@@ -302,11 +302,11 @@ def generate_rust(name, node, handler, sdl_root, schemas, destination):
         "fn main() -> container::Result { container::run(handler::Handler::default()) }\n")
     sdk = sdk_root()
     manifest = destination / "Cargo.toml"
-    binary = "chain-component-" + name
-    manifest.write_text('[package]\nname="chain-container"\nversion="0.1.0"\nedition="2021"\nautobins=false\n' +
+    binary = "ose-component-" + name
+    manifest.write_text('[package]\nname="ose-container"\nversion="0.1.0"\nedition="2021"\nautobins=false\n' +
         '[[bin]]\nname=' + json.dumps(binary) + '\npath="src/main.rs"\n[workspace]\n[dependencies]\n' +
         'sdl-runtime={path=' + json.dumps(str(sdl_root / 'runtime/rust')) + '}\n' +
-        'sdl-chain-component={path=' + json.dumps(str(sdk / 'rust')) + '}\n')
+        'sdl-ose-component={path=' + json.dumps(str(sdk / 'rust')) + '}\n')
     target = destination.parents[1] / "rust-target"
     command = ["cargo", "build", "--offline", "--release", "--manifest-path", str(manifest), "--target-dir", str(target)]
     return {"types": types, "command": [str(target / "release" / binary)], "build": [command]}
@@ -322,15 +322,15 @@ def scaffold_native(node, handler, types, language):
         lines = ['/* User callbacks. Never overwritten by the builder. */', '#include "component.h"']
         if len(node["inputs"]) == 1:
             port, desc = next(iter(node["inputs"].items()))
-            lines += [f"static int on_{port}(ChainContext *ctx, const Input_{port} *message) {{",
-                      "    (void)message;", '    return chain_fail(ctx, "implement the input callback");', "}",
+            lines += [f"static int on_{port}(OseContext *ctx, const Input_{port} *message) {{",
+                      "    (void)message;", '    return ose_fail(ctx, "implement the input callback");', "}",
                       f"const ComponentCallbacks component_callbacks = {{ .on_{port} = on_{port} }};", ""]
         else:
-            args = "ChainContext *ctx, const ComponentInputs *inputs" if node["inputs"] else "ChainContext *ctx"
+            args = "OseContext *ctx, const ComponentInputs *inputs" if node["inputs"] else "OseContext *ctx"
             lines += [f"static int on_tick({args}) {{"]
             if node["inputs"]:
                 lines.append("    (void)inputs;")
-            lines += ['    return chain_fail(ctx, "implement the tick callback");', "}",
+            lines += ['    return ose_fail(ctx, "implement the tick callback");', "}",
                       "const ComponentCallbacks component_callbacks = { .on_tick = on_tick };", ""]
     else:
         lines = ["// User callbacks. Never overwritten by the builder.", "use crate::container::{Callbacks, Context, Result};",

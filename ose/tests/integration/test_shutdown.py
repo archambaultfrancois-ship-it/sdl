@@ -100,7 +100,7 @@ def on_stop(ctx):
                 process.terminate()
                 await asyncio.wait_for(process.communicate(), 8)
 
-    async def test_ctrl_c_stops_running_chain_without_tracebacks(self):
+    async def test_ctrl_c_stops_running_ose_without_tracebacks(self):
         await self.interrupt()
 
     async def test_ctrl_c_during_initialization_runs_stop_callbacks_without_tracebacks(self):

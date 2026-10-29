@@ -1,4 +1,4 @@
-"""Build and run the real C -> Rust -> Python chain from an extracted project."""
+"""Build and run the real C -> Rust -> Python OSE example from an extracted project."""
 import json
 import os
 from pathlib import Path
@@ -12,7 +12,7 @@ SDL_ROOT = os.environ.get("SDL_ROOT")
 
 
 @unittest.skipUnless(SDL_ROOT, "set SDL_ROOT to an independent SDL checkout")
-class ChainTests(unittest.TestCase):
+class OseTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.directory = tempfile.TemporaryDirectory()
@@ -26,7 +26,7 @@ class ChainTests(unittest.TestCase):
         args = ["--model", "examples/acquisition/model.json", "--deployment", "examples/acquisition/deployment.json"]
         subprocess.run(cls.cli + ["build", *args], cwd=cls.project, env=cls.env, check=True, capture_output=True, timeout=120)
 
-    def test_multilanguage_chain_and_restart(self):
+    def test_multilanguage_ose_and_restart(self):
         run = subprocess.run(self.cli + ["run", "--duration", "1.2"], cwd=self.project, env=self.env, check=True, capture_output=True, timeout=30)
         observations = [json.loads(line) for line in run.stderr.decode().splitlines() if line.startswith('{"observer"')]
         values = [row for row in observations if row["observer"] == "observation"]
@@ -47,7 +47,7 @@ class ChainTests(unittest.TestCase):
         self.assertFalse(list(self.build.rglob("*.sqlite*")))
         self.assertFalse(list(self.build.glob("*.jsonl")))
 
-    def test_failure_stops_chain(self):
+    def test_failure_stops_ose(self):
         plan = json.loads((self.build / "plan.json").read_text())
         plan["components"]["acquisition"]["command"] = [sys.executable, "-c", "import sys;sys.exit(23)"]
         bad = self.build / "bad-plan.json"

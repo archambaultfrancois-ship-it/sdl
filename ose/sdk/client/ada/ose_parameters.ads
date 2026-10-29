@@ -3,7 +3,7 @@ with Ada.Strings.Unbounded;
 with Interfaces;
 with SDL_Runtime;
 with System;
-package Chain_Parameters is
+package Ose_Parameters is
    Parameter_Error : exception;
    type Client is new Ada.Finalization.Limited_Controlled with private;
    -- Supply Token for local TCP, or CA/Certificate/Key for distributed mTLS.
@@ -29,4 +29,4 @@ private
    type Client is new Ada.Finalization.Limited_Controlled with record
       Native : System.Address := System.Null_Address;
    end record;
-end Chain_Parameters;
+end Ose_Parameters;

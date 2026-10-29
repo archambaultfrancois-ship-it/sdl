@@ -20,25 +20,25 @@ C_SOURCE = r'''#include "component.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-static int start(ChainContext *ctx) {
+static int start(OseContext *ctx) {
     uint64_t *counter = malloc(sizeof(*counter));
     if (!counter) return 0;
     *counter = 6; ctx->user_data = counter;
-    if (strstr(ctx->config_json, "FAIL_INIT")) return chain_fail(ctx, "init failure");
+    if (strstr(ctx->config_json, "FAIL_INIT")) return ose_fail(ctx, "init failure");
     if (strstr(ctx->config_json, "OUTSIDE_TICK")) {
         Measurement value = {0};
         return publish_out(ctx, &value);
     }
     return 1;
 }
-static int tick(ChainContext *ctx) {
+static int tick(OseContext *ctx) {
     Measurement value = {0};
-    if (strstr(ctx->config_json, "FAIL_TICK")) return chain_fail(ctx, "user failure");
+    if (strstr(ctx->config_json, "FAIL_TICK")) return ose_fail(ctx, "user failure");
     value.sequence = ++*(uint64_t *)ctx->user_data;
     value.value = 3.5; value.extra = 9;
     return publish_out(ctx, &value);
 }
-static int stop(ChainContext *ctx) {
+static int stop(OseContext *ctx) {
     free(ctx->user_data);
     fprintf(stderr, "STOP %s\n", ctx->name);
     return 1;
@@ -47,24 +47,24 @@ const ComponentCallbacks component_callbacks = { .on_start = start, .on_stop = s
 '''
 C_ECHO = r'''#include "component.h"
 #include <stdio.h>
-static int on_input(ChainContext *ctx, const Measurement *message) {
+static int on_input(OseContext *ctx, const Measurement *message) {
     Measurement value = *message;
     value.value *= 2;
     return publish_result(ctx, &value);
 }
-static int stop(ChainContext *ctx) { fprintf(stderr, "STOP %s\n", ctx->name); return 1; }
+static int stop(OseContext *ctx) { fprintf(stderr, "STOP %s\n", ctx->name); return 1; }
 const ComponentCallbacks component_callbacks = { .on_input = on_input, .on_stop = stop };
 '''
 C_SNAPSHOT = r'''#include "component.h"
 #include <stdio.h>
-static int tick(ChainContext *ctx, const ComponentInputs *inputs) {
+static int tick(OseContext *ctx, const ComponentInputs *inputs) {
     Measurement value = {0};
     if (!inputs->first || !inputs->second || inputs->optional) return 0;
     value.sequence = inputs->first->sequence;
     value.value = inputs->first->value + inputs->second->value;
     return publish_result(ctx, &value);
 }
-static int stop(ChainContext *ctx) { fprintf(stderr, "STOP %s\n", ctx->name); return 1; }
+static int stop(OseContext *ctx) { fprintf(stderr, "STOP %s\n", ctx->name); return 1; }
 const ComponentCallbacks component_callbacks = { .on_tick = tick, .on_stop = stop };
 '''
 RUST_SOURCE = r'''use crate::container::{Callbacks, Context, Result};
@@ -269,8 +269,8 @@ class NativeContainerTests(unittest.TestCase):
                 deployment = {"version": 1, "components": {name: {"container": {"language": language, "handler": name + "-é" + suffix}}
                                                           for name in model["components"]}}
                 if language == "c":
-                    handlers = ['#include "component.h"\nstatic int tick(ChainContext *ctx) { Output_out value = {0}; value.point.x = 12; value.label = "native"; return publish_out(ctx, &value); }\nconst ComponentCallbacks component_callbacks = { .on_tick = tick };\n',
-                                '#include "component.h"\nstatic int on_input(ChainContext *ctx, const Input_input *value) { return publish_result(ctx, value); }\nconst ComponentCallbacks component_callbacks = { .on_input = on_input };\n']
+                    handlers = ['#include "component.h"\nstatic int tick(OseContext *ctx) { Output_out value = {0}; value.point.x = 12; value.label = "native"; return publish_out(ctx, &value); }\nconst ComponentCallbacks component_callbacks = { .on_tick = tick };\n',
+                                '#include "component.h"\nstatic int on_input(OseContext *ctx, const Input_input *value) { return publish_result(ctx, value); }\nconst ComponentCallbacks component_callbacks = { .on_input = on_input };\n']
                 else:
                     handlers = ['use crate::container::{Callbacks, Context, Result};\nuse crate::types::demo::packet::Packet;\n#[derive(Default)] pub struct Handler;\nimpl Callbacks for Handler { fn on_tick(&mut self, ctx: &mut Context) -> Result { let mut value = Packet::default(); value.point.x = 12; value.label = "native".into(); ctx.publish_out(&value) } }\n',
                                 'use crate::container::{Callbacks, Context, Result};\nuse crate::types::demo::packet::Packet;\n#[derive(Default)] pub struct Handler;\nimpl Callbacks for Handler { fn on_input(&mut self, ctx: &mut Context, value: &Packet) -> Result { ctx.publish_result(value) } }\n']

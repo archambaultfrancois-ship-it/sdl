@@ -85,7 +85,7 @@ walkthrough of startup, input selection, callbacks and delivery confirmations.
 The supervisor hosts the broker and launches a Python adapter process per
 component. Each adapter starts its component process. All components initialize
 and send READY before the supervisor enables publication and delivery. Startup
-has a 20-second readiness limit. A process failure stops the entire chain.
+has a 20-second readiness limit. A process failure stops OSE execution.
 SIGINT/SIGTERM stop adapters, their children, then the broker. Startup and run
 failures also clean up children. Infinite execution is the default; `--duration`
 supports demonstrations and integration tests.

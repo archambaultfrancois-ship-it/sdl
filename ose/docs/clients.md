@@ -58,10 +58,10 @@ clients do not embed a Python process. The Rust network engine has no external
 Cargo dependencies and uses IPv4.
 
 ```sh
-make client-native      # build/client-rust/debug/libsdl_chain_client.a
+make client-native      # build/client-rust/debug/libsdl_ose_client.a
 make external-native    # generated types and two example executables
 build/external-c 7000 tcp
-build/client-example/debug/chain-external-example 7000 udp
+build/client-example/debug/ose-external-example 7000 udp
 ```
 
 Both examples wait for `external.input`, then publish twice the received value
@@ -69,7 +69,7 @@ on `c.result` or `rust.result`. Declare `external.input` with a Python publisher
 before starting them. The Python example in `examples/external/client.py` can
 drive either executable.
 
-In C, include `chain_client.h`, call `register_all_types()` from the generated
+In C, include `ose_client.h`, call `register_all_types()` from the generated
 SDL code, then use `cenv_connect`, `cenv_publisher`, `cenv_publish`,
 `cenv_subscribe` and `cenv_run`. `cenv_fifo()` and `cenv_latest()` initialize
 the options. The callback receives a borrowed typed pointer and returns 1 on
@@ -77,7 +77,7 @@ success. The message and the strings in `CenvMessageInfo` are valid for that cal
 The caller owns returned JSON strings and frees them with `cenv_string_free`.
 `cenv_last_error()` returns the network error on the calling thread.
 
-Link `sdk/client/c/chain_client.c`, the Rust static library, the SDL C runtime and
+Link `sdk/client/c/ose_client.c`, the Rust static library, the SDL C runtime and
 the generated SDL sources. The `external-native` target shows the full command.
 The client must remain alive until its publishers have been freed. After
 `cenv_unsubscribe`, use `cenv_wait_closed` to wait for callbacks to finish before
@@ -85,11 +85,11 @@ freeing their user data. The SDK cannot interrupt a blocked callback.
 `cenv_subscription_free` and `cenv_client_free` release the handles; workers
 finish releasing their shared state when they exit.
 
-In Rust, add `sdl-chain-client` (`sdk/client/rust`) and the SDL runtime to the
+In Rust, add `sdl-ose-client` (`sdk/client/rust`) and the SDL runtime to the
 Cargo dependencies. After importing the generated local type:
 
 ```rust,ignore
-sdl_chain_client::sdl_message!(measurement::Measurement);
+sdl_ose_client::sdl_message!(measurement::Measurement);
 let client = Client::connect("127.0.0.1", 7000, "rust-tool")?;
 let publisher = client.publisher::<measurement::Measurement>("sensor.measurement")?;
 let subscription = client.subscribe::<measurement::Measurement>(

@@ -207,15 +207,13 @@ See each project's README for its toolchains and optional dependencies.
 OSE uses `sdl/` by default. Set `SDL_ROOT` or pass `--sdl-root` to select
 another SDL project directory containing `sdlc/` and `runtime/`.
 The root Makefile also accepts `SDL_ROOT=/absolute/path/to/sdl` for OSE targets.
-The former `check-chain` and `test-chain` targets remain aliases for
-`check-ose` and `test-ose`.
 
 ## Migration from the previous layout
 
 SDL's former root-level directories now live under `sdl/`. The schema directory
 was renamed from `sdl/` to `sdl/schemas/`, `tst/` to `sdl/tests/`, and `samples/`
 to `sdl/examples/`. The compiler lives in `sdl/sdlc/`.
-The former `chain-env/` project directory is now `ose/`.
+The OSE project lives in `ose/`.
 Run the commands in SDL documentation from `sdl/`.
 For example:
 

@@ -1,8 +1,8 @@
 [package]
-name = "sdl-chain-client"
+name = "sdl-ose-client"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "sdl_chain_client"
+name = "sdl_ose_client"
 crate-type = ["rlib", "staticlib"]

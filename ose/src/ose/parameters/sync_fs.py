@@ -31,7 +31,7 @@ class DirectoryEvents:
             self.watches[descriptor] = directory
 
     def ensure(self, directory):
-        """Watch only the parent chain created by an export, without a tree scan."""
+        """Watch only the parent directories created by an export, without a tree scan."""
         current = self.root
         self.add(current)
         for part in directory.relative_to(self.root).parts:

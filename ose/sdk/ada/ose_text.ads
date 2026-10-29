@@ -1,3 +1,3 @@
-package Chain_Text is
+package Ose_Text is
    function Valid_UTF8 (Text : String) return Boolean;
-end Chain_Text;
+end Ose_Text;

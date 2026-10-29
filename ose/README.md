@@ -84,7 +84,7 @@ python3 -m ose.cli top
 tick p95 and colored diagnostics locally or through the distributed coordinator.
 Use arrows/Enter for details, Space to freeze, or `--format jsonl` for collection.
 
-Ctrl+C stops the chain and its component processes. `run --duration 2` provides
+Ctrl+C stops OSE and its component processes. `run --duration 2` provides
 a finite execution; `inspect --last` reads the final saved counters after shutdown.
 Supervised adapters and components run in separate process sessions so terminal
 Ctrl+C is handled by the supervisor. Components receive the normal IPC stop
@@ -151,7 +151,7 @@ Choose `ose-ctl run --mode simulated --duration 60 --workers 4` to simulate
 `make test-integration` uses sockets, injects
 packet/ACK loss, tests RAM bounds, volatility and schema compatibility, and copies this
 entire project into a temporary standalone directory before building and running
-the C → Rust → Python chain. Integration tests require SDL_ROOT; invoking them
+the C → Rust → Python OSE example. Integration tests require SDL_ROOT; invoking them
 directly without it skips SDL-dependent tests.
 
 Backpressure regressions also cover 1100 queued TCP messages with a delayed

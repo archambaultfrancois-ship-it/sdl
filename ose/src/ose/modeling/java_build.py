@@ -13,8 +13,8 @@ def main():
     flags = ['-source', '7', '-target', '7'] if 'javac 1.7.' in version else ['--release', '7']
     # Explicit opt-in is useful for local smoke tests on JDKs that removed release 7.
     # Such a build is not a Java 7 compatibility check.
-    if os.environ.get('CHAIN_JAVA_LOCAL_RELEASE'):
-        flags = ['--release', os.environ['CHAIN_JAVA_LOCAL_RELEASE']]
+    if os.environ.get('OSE_JAVA_LOCAL_RELEASE'):
+        flags = ['--release', os.environ['OSE_JAVA_LOCAL_RELEASE']]
         print('LOCAL ONLY: Java 7 compatibility is not being verified', file=sys.stderr)
     Path(classes).mkdir(parents=True, exist_ok=True)
     subprocess.run(javac + flags + ['-encoding', 'UTF-8', '-d', classes] + sources, check=True)

@@ -1,4 +1,4 @@
-#include "chain_client_raw.h"
+#include "ose_client_raw.h"
 #include "type_engine.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -131,7 +131,7 @@ CenvSubscription *cenv_subscribe(CenvClient *client, const char *topic, const ch
     return cenv_subscribe_raw(client, topic, root, c->local, policy, hooks);
 }
 
-#include "chain_parameters.h"
+#include "ose_parameters.h"
 struct CenvParameterBlock {
     CenvParameterClient *client;
     SdlContext *codec;

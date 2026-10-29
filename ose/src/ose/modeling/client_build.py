@@ -21,15 +21,15 @@ def build_java(sdl_root, destination, extra_sources=()):
     if not (home / 'include/jni.h').is_file():
         raise ValueError('JAVA_HOME must name a JDK containing include/jni.h')
     platform = 'darwin' if sys.platform == 'darwin' else 'linux'
-    library = destination / ('libsdl_chain_jni.dylib' if platform == 'darwin' else 'libsdl_chain_jni.so')
+    library = destination / ('libsdl_ose_jni.dylib' if platform == 'darwin' else 'libsdl_ose_jni.so')
     subprocess.run(tool('CC', 'cc') + ['-shared', '-fPIC', '-O2', '-Wall', '-Wextra', '-Werror', '-I' + str(home / 'include'),
-        '-I' + str(home / 'include' / platform), '-I' + str(sdk / 'client/c'), str(sdk / 'client/java/chain_jni.c'),
-        str(target / 'debug/libsdl_chain_client.a'), '-lpthread', '-ldl', '-lm', '-o', str(library)], check=True)
+        '-I' + str(home / 'include' / platform), '-I' + str(sdk / 'client/c'), str(sdk / 'client/java/ose_jni.c'),
+        str(target / 'debug/libsdl_ose_client.a'), '-lpthread', '-ldl', '-lm', '-o', str(library)], check=True)
     sources = [sdl_root / 'runtime/java/SdlCodec.java', *sorted((sdk / 'java').rglob('*.java')),
                *sorted((sdk / 'client/java').rglob('*.java')), *map(Path, extra_sources)]
     classes = destination / 'classes'
     subprocess.run([sys.executable, '-m', 'ose.modeling.java_build', str(classes), *map(str, sources)], check=True)
-    subprocess.run(tool('JAR', 'jar') + ['cf', str(destination / 'sdl-chain-client.jar'), '-C', str(classes), '.'], check=True)
+    subprocess.run(tool('JAR', 'jar') + ['cf', str(destination / 'sdl-ose-client.jar'), '-C', str(classes), '.'], check=True)
     return classes, library
 
 

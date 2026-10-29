@@ -9,7 +9,7 @@ Delivery uses bounded RAM queues. No persistence is introduced.
 Java containers require a JDK for building and a JVM for execution. Use JDK 7
 itself or a JDK supporting `javac --release 7` (for example JDK 17). Compilation
 checks the Java 7 API and emits Java 7 bytecode. JDK 21 removed release 7 support.
-`CHAIN_JAVA_LOCAL_RELEASE=8` permits explicitly marked local smoke builds on
+`OSE_JAVA_LOCAL_RELEASE=8` permits explicitly marked local smoke builds on
 such a JDK; these builds do **not** establish Java 7 compatibility.
 
 Ada containers require GNAT with the full runtime, a C compiler, and the public
@@ -48,12 +48,12 @@ a dependency registry. `SDL_ROOT` selects the separate SDL checkout.
 ## Java callbacks
 
 For a component named `analyse`, the generated API is
-`org.sdlchain.generated.analyse.API`. Extend `API.Handler` with a public no-argument
+`org.sdlose.generated.analyse.API`. Extend `API.Handler` with a public no-argument
 constructor. Its fields hold application state.
 
 ```java
 package app;
-import org.sdlchain.generated.analyse.API;
+import org.sdlose.generated.analyse.API;
 import sdl.globaltypes.measurement.Measurement;
 
 public final class AnalyseHandler extends API.Handler {
@@ -88,18 +88,18 @@ responsibility; the generated launcher exits when component execution ends.
 
 ## Ada callbacks
 
-For a component named `analyse`, the generated package is `Chain_analyse`.
-The user unit defines `Object` derived from `Chain_analyse.Handler` and overrides
+For a component named `analyse`, the generated package is `Ose_analyse`.
+The user unit defines `Object` derived from `Ose_analyse.Handler` and overrides
 `On_Start`, `On_Stop`, `On_Tick`, or `On_<port>` as needed. Add fields to `Object`
 for application state. The default `On_Tick` dispatches the selected ports.
 
 ```ada
-with Chain_analyse;
+with Ose_analyse;
 package Analyse_Handler is
-   type Object is new Chain_analyse.Handler with null record;
+   type Object is new Ose_analyse.Handler with null record;
    overriding procedure On_input
-     (Self : in out Object; Ctx : in out Chain_analyse.Context;
-      Message : Chain_analyse.Input_input);
+     (Self : in out Object; Ctx : in out Ose_analyse.Context;
+      Message : Ose_analyse.Input_input);
 end Analyse_Handler;
 ```
 
@@ -141,7 +141,7 @@ cmp build/w1.jsonl build/w4.jsonl
 
 ## External Java client
 
-`make client-java` builds `build/client-java/sdl-chain-client.jar` and the JNI
+`make client-java` builds `build/client-java/sdl-ose-client.jar` and the JNI
 library. Add the JAR to the classpath and its directory to `java.library.path`.
 Generated SDL classes must also be on the classpath. The component SDK itself
 never loads JNI.
@@ -180,11 +180,11 @@ subscriptions and clients; garbage collection is not a shutdown mechanism.
 ## External Ada client
 
 `make client-ada` compiles the SDK and a link probe. Applications use
-`Chain_Client` and instantiate `Chain_Client.Typed` with their generated message
+`Ose_Client` and instantiate `Ose_Client.Typed` with their generated message
 package:
 
 ```ada
-package Messages is new Chain_Client.Typed
+package Messages is new Ose_Client.Typed
   (SDL_measurement.T_Measurement, "Measurement", SDL_measurement.Description,
    SDL_measurement.Encode, SDL_measurement.Decode);
 ```
@@ -224,7 +224,7 @@ subscribe to `external.input` and publish doubled measurements on `java.result`
 or `ada.result`. Declare the input topic before starting them, as for the C/Rust
 examples. Generate `-java` or `-ada` bindings for the acquisition schema first.
 Compile Java application sources with `javac --release 7 -cp
-build/client-java/sdl-chain-client.jar`, including those generated bindings, then
+build/client-java/sdl-ose-client.jar`, including those generated bindings, then
 run `ClientExample <port> tcp` with the JNI library directory configured.
 
 For an Ada application, the build helper accepts the main and generated units:

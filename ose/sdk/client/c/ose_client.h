@@ -1,5 +1,5 @@
-#ifndef CENV_CHAIN_CLIENT_H
-#define CENV_CHAIN_CLIENT_H
+#ifndef CENV_OSE_CLIENT_H
+#define CENV_OSE_CLIENT_H
 #include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus

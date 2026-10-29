@@ -29,7 +29,7 @@ class NativeExternalTests(external.ExternalTests):
                 _SDL_FIELDS=((1,'sequence','required','uint64',()),(2,'value','required','fl64',()),(3,'extra','required','uint32',()))
             message_type=Extended
         publisher=await asyncio.to_thread(c.publisher,'external.input',message_type)
-        executable=ROOT/'build'/('external-c' if language=='c' else 'client-example/debug/chain-external-example')
+        executable=ROOT/'build'/('external-c' if language=='c' else 'client-example/debug/ose-external-example')
         proc=await asyncio.create_subprocess_exec(str(executable),str(self.broker.port),transport,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
         try:
             line=await asyncio.wait_for(proc.stdout.readline(),5)

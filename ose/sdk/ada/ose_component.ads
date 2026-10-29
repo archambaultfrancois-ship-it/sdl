@@ -4,7 +4,7 @@ with Interfaces;
 with Interfaces.C;
 with SDL_Runtime;
 with System;
-package Chain_Component is
+package Ose_Component is
    Protocol_Error : exception;
    type Event is new Ada.Finalization.Limited_Controlled with private;
    procedure Read_Event (E : in out Event);
@@ -28,4 +28,4 @@ private
    type Event is new Ada.Finalization.Limited_Controlled with record
       Raw : aliased Raw_Event := (Interfaces.C.nul, System.Null_Address, 0);
    end record;
-end Chain_Component;
+end Ose_Component;

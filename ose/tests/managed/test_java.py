@@ -26,14 +26,14 @@ class JavaTests(unittest.TestCase):
             'subscriptions': [{'id': 'link', 'from': 'source.out', 'to': 'sink.input'}]}
         self.deployment = {'version': 1, 'components': {name: {'container': {'language': 'java', 'handler': name.title() + '.java', 'class': name.title()}} for name in self.model['components']}}
         (self.root / 'model.json').write_text(json.dumps(self.model)); (self.root / 'deployment.json').write_text(json.dumps(self.deployment))
-        (self.root / 'Source.java').write_text('''import org.sdlchain.generated.source.API;
+        (self.root / 'Source.java').write_text('''import org.sdlose.generated.source.API;
 public class Source extends API.Handler {
  public void onTick(API.Context ctx, API.Inputs inputs) throws Exception {
   sdl.globaltypes.measurement.Measurement m = new sdl.globaltypes.measurement.Measurement();
   m.sequence = ctx.tickIndex().longValue(); m.value = ctx.now(); ctx.publish_out(m);
  }
 }''')
-        (self.root / 'Sink.java').write_text('''import org.sdlchain.generated.sink.API;
+        (self.root / 'Sink.java').write_text('''import org.sdlose.generated.sink.API;
 public class Sink extends API.Handler {
  public void on_input(API.Context ctx, sdl.globaltypes.measurement.Measurement m) throws Exception {
   if (m == null) { m = new sdl.globaltypes.measurement.Measurement(); m.sequence = -1; m.value = -1; }
@@ -84,7 +84,7 @@ public class Sink extends API.Handler {
         sink['inputs'].update(second={'root': 'Measurement'}, optional={'root': 'Measurement', 'required': False})
         self.model['subscriptions'].append({'id': 'second', 'from': 'source.out', 'to': 'sink.second'})
         (self.root / 'model.json').write_text(json.dumps(self.model))
-        (self.root / 'Sink.java').write_text("""import org.sdlchain.generated.sink.API;
+        (self.root / 'Sink.java').write_text("""import org.sdlose.generated.sink.API;
 public class Sink extends API.Handler {
  public void onTick(API.Context ctx, API.Inputs inputs) throws Exception {
   if (inputs.optional != null || inputs.second == null) throw new AssertionError("invalid snapshot");

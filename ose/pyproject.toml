@@ -20,16 +20,16 @@ ose-ctl = "ose.cli:main"
 where = ["src"]
 
 [tool.setuptools.data-files]
-"share/ose/sdk/c" = ["sdk/c/chain_component.h", "sdk/c/chain_component.c", "sdk/c/chain_callbacks.h", "sdk/c/chain_callbacks.c"]
+"share/ose/sdk/c" = ["sdk/c/ose_component.h", "sdk/c/ose_component.c", "sdk/c/ose_callbacks.h", "sdk/c/ose_callbacks.c"]
 "share/ose/sdk/rust" = ["sdk/rust/Cargo.toml"]
 "share/ose/sdk/rust/src" = ["sdk/rust/src/lib.rs"]
 
-"share/ose/sdk/client/c" = ["sdk/client/c/chain_client.h", "sdk/client/c/chain_client_raw.h", "sdk/client/c/chain_client.c", "sdk/client/c/chain_parameters.h"]
+"share/ose/sdk/client/c" = ["sdk/client/c/ose_client.h", "sdk/client/c/ose_client_raw.h", "sdk/client/c/ose_client.c", "sdk/client/c/ose_parameters.h"]
 "share/ose/sdk/client/rust" = ["sdk/client/rust/Cargo.toml"]
 "share/ose/sdk/client/rust/src" = ["sdk/client/rust/src/*.rs"]
 
-"share/ose/sdk/java/org/sdlchain" = ["sdk/java/org/sdlchain/*.java"]
+"share/ose/sdk/java/org/sdlose" = ["sdk/java/org/sdlose/*.java"]
 "share/ose/sdk/ada" = ["sdk/ada/*.ads", "sdk/ada/*.adb"]
 "share/ose/sdk/client/java" = ["sdk/client/java/*.c"]
-"share/ose/sdk/client/java/org/sdlchain/client" = ["sdk/client/java/org/sdlchain/client/*.java"]
+"share/ose/sdk/client/java/org/sdlose/client" = ["sdk/client/java/org/sdlose/client/*.java"]
 "share/ose/sdk/client/ada" = ["sdk/client/ada/*.ads", "sdk/client/ada/*.adb", "sdk/client/ada/*.c"]

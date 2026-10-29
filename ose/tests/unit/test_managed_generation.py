@@ -16,7 +16,7 @@ class ManagedNamesTests(unittest.TestCase):
         for language, identity in [('java', {'class': 'app.class'}), ('ada', {'unit': 'App.BEGIN'}), ('ada', {'unit': 'App.Bad__Name'}), ('ada', {'unit': 'Main'}), ('ada', {'unit': 'GNAT.Handler'}), ('java', {'class': 'java.Handler'})]:
             with self.assertRaises(ValueError): validate_names(language, 'source', node, identity)
         with self.assertRaises(ValueError): validate_names('ada', 'source', {'inputs': {'Input': {}, 'input': {}}, 'outputs': {}}, {'unit': 'Handler'})
-        with self.assertRaises(ValueError): validate_names('java', 'source', node, {'class': 'org.sdlchain.Handler'})
+        with self.assertRaises(ValueError): validate_names('java', 'source', node, {'class': 'org.sdlose.Handler'})
 
 
 class ManagedBuildTests(unittest.TestCase):

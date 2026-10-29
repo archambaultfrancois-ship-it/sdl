@@ -1,4 +1,4 @@
-package body Chain_Text is
+package body Ose_Text is
    function Valid_UTF8 (Text : String) return Boolean is
       I : Integer := Text'First;
       C, N, Minimum : Natural;
@@ -23,4 +23,4 @@ package body Chain_Text is
       end loop;
       return True;
    end Valid_UTF8;
-end Chain_Text;
+end Ose_Text;

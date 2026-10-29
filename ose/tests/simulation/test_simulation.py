@@ -29,14 +29,14 @@ LEFT = '''#define _POSIX_C_SOURCE 200809L
 #include "component.h"
 #include <stdlib.h>
 #include <time.h>
-static int on_input(ChainContext *ctx, const Measurement *message) {
+static int on_input(OseContext *ctx, const Measurement *message) {
     const char *delay = getenv("TEST_DELAY_NS");
     if (delay) { struct timespec wait = {0, atol(delay)}; nanosleep(&wait, NULL); }
-    if (message->sequence != chain_tick_index(ctx)) return chain_fail(ctx, "wrong tick index");
-    if ((double)chain_time_ns(ctx) / 1e9 != chain_now(ctx)) return chain_fail(ctx, "wrong timestamp");
+    if (message->sequence != ose_tick_index(ctx)) return ose_fail(ctx, "wrong tick index");
+    if ((double)ose_time_ns(ctx) / 1e9 != ose_now(ctx)) return ose_fail(ctx, "wrong timestamp");
     Measurement result = {0};
-    result.sequence = chain_tick_index(ctx);
-    result.value = message->value + 1.0 + chain_now(ctx);
+    result.sequence = ose_tick_index(ctx);
+    result.value = message->value + 1.0 + ose_now(ctx);
     return publish_out(ctx, &result);
 }
 const ComponentCallbacks component_callbacks = { .on_input = on_input };

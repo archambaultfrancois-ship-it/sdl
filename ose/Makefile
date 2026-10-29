@@ -45,7 +45,7 @@ external-types:
 	$(PYTHON) "$(SDL_ROOT)/sdlc/generator.py" -python -c -rust examples/acquisition/schemas build/generated/shared
 external-native: external-types client-native
 	CARGO_TARGET_DIR=$(CURDIR)/build/client-example cargo build --offline --manifest-path examples/external/rust/Cargo.toml
-	$(CC) -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -O2 -Isdk/client/c -Ibuild/generated/shared/c -I"$(SDL_ROOT)/runtime/c" sdk/client/c/chain_client.c examples/external/client.c build/generated/shared/c/*.c "$(SDL_ROOT)/runtime/c/type_engine.c" "$(SDL_ROOT)/runtime/c/type_registry.c" "$(SDL_ROOT)/runtime/c/type_codec.c" "$(SDL_ROOT)/runtime/c/sdl_wire.c" "$(SDL_ROOT)/runtime/c/sdl_dynamic.c" "$(SDL_ROOT)/runtime/c/type_display.c" build/client-rust/debug/libsdl_chain_client.a -ldl -lm -lpthread -o build/external-c
+	$(CC) -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror -O2 -Isdk/client/c -Ibuild/generated/shared/c -I"$(SDL_ROOT)/runtime/c" sdk/client/c/ose_client.c examples/external/client.c build/generated/shared/c/*.c "$(SDL_ROOT)/runtime/c/type_engine.c" "$(SDL_ROOT)/runtime/c/type_registry.c" "$(SDL_ROOT)/runtime/c/type_codec.c" "$(SDL_ROOT)/runtime/c/sdl_wire.c" "$(SDL_ROOT)/runtime/c/sdl_dynamic.c" "$(SDL_ROOT)/runtime/c/type_display.c" build/client-rust/debug/libsdl_ose_client.a -ldl -lm -lpthread -o build/external-c
 
 # Dedicated targets are strict: missing toolchains are failures, never skips.
 export TEST_LANGUAGES

@@ -4,7 +4,7 @@ with Interfaces;
 with Interfaces.C;
 with Interfaces.C.Strings;
 with System;
-package Chain_Client is
+package Ose_Client is
    Client_Error : exception;
    type Client is new Ada.Finalization.Limited_Controlled with private;
    procedure Connect (Self : in out Client; Host : String; Port : Interfaces.Unsigned_16; Id : String);
@@ -39,15 +39,15 @@ private
    function C_String (Text : String) return Interfaces.C.char_array;
    function Take_String (Value : Interfaces.C.Strings.chars_ptr) return String;
    procedure Check (Result : Interfaces.C.int);
-   procedure Hold (Value : Handle) with Import, Convention => C, External_Name => "chain_ada_hold";
-   procedure Release (Value : Handle) with Import, Convention => C, External_Name => "chain_ada_release";
-   function Raw (Value : Handle) return System.Address with Import, Convention => C, External_Name => "chain_ada_raw";
+   procedure Hold (Value : Handle) with Import, Convention => C, External_Name => "ose_ada_hold";
+   procedure Release (Value : Handle) with Import, Convention => C, External_Name => "ose_ada_release";
+   function Raw (Value : Handle) return System.Address with Import, Convention => C, External_Name => "ose_ada_raw";
    function Wrap (Value : System.Address; Kind : Interfaces.C.int) return Handle
-     with Import, Convention => C, External_Name => "chain_ada_wrap";
-   procedure Enter_Ada with Import, Convention => C, External_Name => "chain_ada_enter";
-   procedure Leave_Ada with Import, Convention => C, External_Name => "chain_ada_leave";
+     with Import, Convention => C, External_Name => "ose_ada_wrap";
+   procedure Enter_Ada with Import, Convention => C, External_Name => "ose_ada_enter";
+   procedure Leave_Ada with Import, Convention => C, External_Name => "ose_ada_leave";
    procedure Set_Failure (Value : Handle; Text : Interfaces.C.char_array)
-     with Import, Convention => C, External_Name => "chain_ada_failure";
+     with Import, Convention => C, External_Name => "ose_ada_failure";
    function Failure (Value : Handle) return Interfaces.C.Strings.chars_ptr
-     with Import, Convention => C, External_Name => "chain_ada_failure_copy";
-end Chain_Client;
+     with Import, Convention => C, External_Name => "ose_ada_failure_copy";
+end Ose_Client;

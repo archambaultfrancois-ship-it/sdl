@@ -29,22 +29,22 @@ class AdaTests(unittest.TestCase):
         build(self.root / 'model.json', self.root / 'deployment.json', SDL, self.root / 'build')
         (self.root / 'source_handler.adb').write_text('''with SDL_measurement;
 package body Source_Handler is
- overriding procedure On_Tick (Self : in out Object; Ctx : in out Chain_source.Context; Selected : Chain_source.Inputs) is
+ overriding procedure On_Tick (Self : in out Object; Ctx : in out Ose_source.Context; Selected : Ose_source.Inputs) is
    M : SDL_measurement.T_Measurement;
  begin
-   M.F_sequence := Chain_source.Tick_Index (Ctx); M.F_value := SDL_Runtime.Float64 (Chain_source.Now (Ctx));
-   Chain_source.Publish_value (Ctx, M);
+   M.F_sequence := Ose_source.Tick_Index (Ctx); M.F_value := SDL_Runtime.Float64 (Ose_source.Now (Ctx));
+   Ose_source.Publish_value (Ctx, M);
  end;
 end Source_Handler;
 '''.replace('with SDL_measurement;', 'with SDL_measurement; with SDL_Runtime;'))
         (self.root / 'sink_handler.adb').write_text('''with SDL_measurement; with Ada.Text_IO;
 package body Sink_Handler is
- overriding procedure On_input (Self : in out Object; Ctx : in out Chain_sink.Context; Message : Chain_sink.Input_input) is
-   use type Chain_sink.Input_input;
+ overriding procedure On_input (Self : in out Object; Ctx : in out Ose_sink.Context; Message : Ose_sink.Input_input) is
+   use type Ose_sink.Input_input;
    M : SDL_measurement.T_Measurement;
  begin
    if Message /= null then M := Message.all; end if;
-   Chain_sink.Publish_result (Ctx, M);
+   Ose_sink.Publish_result (Ctx, M);
  end;
 end Sink_Handler;
 ''')
@@ -79,20 +79,20 @@ end Sink_Handler;
         model['components']['sink']['inputs'].update(second={'root': 'Measurement'}, optional={'root': 'Measurement', 'required': False})
         model['subscriptions'].append({'id': 'second', 'from': 'source.value', 'to': 'sink.second'})
         (self.root / 'model.json').write_text(json.dumps(model))
-        (self.root / 'sink_handler.ads').write_text("""with Chain_sink;
+        (self.root / 'sink_handler.ads').write_text("""with Ose_sink;
 package Sink_Handler is
- type Object is new Chain_sink.Handler with null record;
- overriding procedure On_Tick (Self : in out Object; Ctx : in out Chain_sink.Context; Selected : Chain_sink.Inputs);
+ type Object is new Ose_sink.Handler with null record;
+ overriding procedure On_Tick (Self : in out Object; Ctx : in out Ose_sink.Context; Selected : Ose_sink.Inputs);
 end Sink_Handler;
 """)
         (self.root / 'sink_handler.adb').write_text("""package body Sink_Handler is
- overriding procedure On_Tick (Self : in out Object; Ctx : in out Chain_sink.Context; Selected : Chain_sink.Inputs) is
-  use type Chain_sink.Input_input;
-  use type Chain_sink.Input_second;
-  use type Chain_sink.Input_optional;
+ overriding procedure On_Tick (Self : in out Object; Ctx : in out Ose_sink.Context; Selected : Ose_sink.Inputs) is
+  use type Ose_sink.Input_input;
+  use type Ose_sink.Input_second;
+  use type Ose_sink.Input_optional;
  begin
   if Selected.optional /= null or Selected.second = null then raise Program_Error with "invalid snapshot"; end if;
-  Chain_sink.Publish_result (Ctx, Selected.second.all);
+  Ose_sink.Publish_result (Ctx, Selected.second.all);
   if Selected.input = null then raise Program_Error with "expected callback failure"; end if;
  end;
 end Sink_Handler;

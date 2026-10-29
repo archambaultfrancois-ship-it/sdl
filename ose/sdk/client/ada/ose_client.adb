@@ -1,7 +1,7 @@
 with Ada.Strings.Fixed;
 with GNAT.Threads;
-with Chain_Text;
-package body Chain_Client is
+with Ose_Text;
+package body Ose_Client is
    use type Interfaces.C.int;
    use type Interfaces.C.Strings.chars_ptr;
    use type System.Address;
@@ -18,7 +18,7 @@ package body Chain_Client is
    end Check;
    function C_String (Text : String) return Interfaces.C.char_array is
    begin
-      if not Chain_Text.Valid_UTF8 (Text) then raise Client_Error with "invalid UTF-8"; end if;
+      if not Ose_Text.Valid_UTF8 (Text) then raise Client_Error with "invalid UTF-8"; end if;
       for C of Text loop if C = Character'Val (0) then raise Client_Error with "NUL in string"; end if; end loop;
       return Interfaces.C.To_C (Text);
    end C_String;
@@ -73,4 +73,4 @@ package body Chain_Client is
         ",""backoff_multiplier"":" & N (Value.Backoff_Multiplier) & ",""wait_timeout_ms"":" & N (Value.Wait_Timeout_Ms) &
         ",""transport"":""" & (if Value.UDP then "udp" else "tcp") & """}";
    end Policy;
-end Chain_Client;
+end Ose_Client;

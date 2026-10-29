@@ -1,4 +1,4 @@
-import org.sdlchain.client.Client;
+import org.sdlose.client.Client;
 import sdl.globaltypes.measurement.Measurement;
 
 /** Subscribe to external.input and publish doubled values on java.result. */

@@ -1,4 +1,4 @@
-#include "chain_client.h"
+#include "ose_client.h"
 #include "measurement.h"
 #include "sdl_registry.h"
 #include <stdio.h>

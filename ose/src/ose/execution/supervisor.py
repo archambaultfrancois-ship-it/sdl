@@ -46,7 +46,7 @@ async def run(plan_path, duration=None, port=0):
         deadline = time.monotonic() + duration if duration is not None else float("inf")
         while not stop.is_set() and time.monotonic() < deadline:
             if any(child.returncode is not None for child in children):
-                raise RuntimeError("component failed; stopping the chain")
+                raise RuntimeError("component failed; stopping OSE")
             await asyncio.sleep(.02)
     finally:
         broker.enabled = False

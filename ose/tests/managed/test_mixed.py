@@ -22,7 +22,7 @@ class MixedTests(unittest.IsolatedAsyncioTestCase):
             path = await asyncio.to_thread(build, ROOT / 'examples/multilingual/model.json', ROOT / 'examples/multilingual/deployment.json', SDL, root / 'build')
             original = json.loads(path.read_text()); traces = []
             for workers, slow in ((1, 'java_worker'), (2, 'ada_worker'), (8, 'java_worker')):
-                plan = copy.deepcopy(original); plan['components'][slow]['env']['CHAIN_TEST_DELAY_MS'] = '15'
+                plan = copy.deepcopy(original); plan['components'][slow]['env']['OSE_TEST_DELAY_MS'] = '15'
                 trace = root / ('trace-' + str(workers) + '.jsonl')
                 engine = Simulation(plan, .31, workers=workers, trace=trace)
                 summary = await engine.execute(); traces.append(trace.read_bytes())
@@ -41,7 +41,7 @@ class MixedTests(unittest.IsolatedAsyncioTestCase):
                 while True:
                     if supervisor.done():
                         await supervisor
-                        self.fail('chain stopped before producing a joined value')
+                        self.fail('OSE stopped before producing a joined value')
                     endpoint = root / 'build/endpoint.json'
                     if endpoint.exists():
                         address = json.loads(endpoint.read_text())

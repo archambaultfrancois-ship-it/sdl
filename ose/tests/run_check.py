@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the chain test suites with compact progress and full logs on failure."""
+"""Run the OSE test suites with compact progress and full logs on failure."""
 
 import os
 import shlex
@@ -53,7 +53,7 @@ def main():
                 sys.stdout.write("\n")
             return result.returncode
         progress(index + 1, "{} passed".format(suite))
-    sys.stdout.write("\nSelected chain checks passed.\n")
+    sys.stdout.write("\nSelected OSE checks passed.\n")
     omitted = {"java", "ada"} - LANGUAGES
     if omitted:
         print("Not verified: " + ", ".join(sorted(omitted)))

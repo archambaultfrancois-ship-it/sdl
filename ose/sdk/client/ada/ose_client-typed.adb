@@ -2,7 +2,7 @@ with Ada.Unchecked_Deallocation;
 with Ada.Unchecked_Conversion;
 with Ada.Exceptions;
 with Ada.Task_Attributes;
-package body Chain_Client.Typed is
+package body Ose_Client.Typed is
    use Ada.Strings.Unbounded;
    use type Interfaces.C.int;
    use type Interfaces.Unsigned_32;
@@ -73,7 +73,7 @@ package body Chain_Client.Typed is
       Destroy : Free_Hook;
    end record with Convention => C_Pass_By_Copy;
    function C_Subscribe (Owner : System.Address; Topic, Root, Cat, Policy : Interfaces.C.char_array; Hooks : Raw_Hooks) return System.Address
-     with Import, Convention => C, External_Name => "chain_ada_subscribe";
+     with Import, Convention => C, External_Name => "ose_ada_subscribe";
    function Decode_Message (User : System.Address; Cat : Interfaces.C.Strings.chars_ptr; Data : System.Address; Size : Interfaces.C.size_t) return System.Address with Convention => C;
    -- The outer handled sequence also catches failures while elaborating local
    -- strings/envelopes; Ada declarative-part exceptions bypass their own handler.
@@ -172,4 +172,4 @@ package body Chain_Client.Typed is
       end if;
       Release (Self.Native); Self.Native := System.Null_Address; Self.State := System.Null_Address;
    end Finalize;
-end Chain_Client.Typed;
+end Ose_Client.Typed;

@@ -33,13 +33,13 @@ def on_tick(ctx):
     ctx.set_parameters_detection(p)
 '''
 C = '''#include "component.h"
-static int on_start(ChainContext *ctx) {
+static int on_start(OseContext *ctx) {
     Settings p = *parameters_detection(ctx);
     if (p.threshold != 80.0) return 0;
     p.threshold = 81.0;
     return set_parameters_detection(ctx, &p);
 }
-static int on_tick(ChainContext *ctx) {
+static int on_tick(OseContext *ctx) {
     Settings p = *parameters_detection(ctx);
     if (!publish_result(ctx, &p)) return 0;
     p.threshold += 1.0;
@@ -64,7 +64,7 @@ impl Callbacks for Handler {
     }
 }
 '''
-JAVA = '''import org.sdlchain.generated.probe.API;
+JAVA = '''import org.sdlose.generated.probe.API;
 import sdl.globaltypes.settings.Settings;
 public class ParameterHandler extends API.Handler {
     public void onStart(API.Context ctx) throws Exception {
@@ -81,29 +81,29 @@ public class ParameterHandler extends API.Handler {
     }
 }
 '''
-ADA_SPEC = '''with Chain_probe;
+ADA_SPEC = '''with Ose_probe;
 package Parameter_Handler is
-    type Object is new Chain_probe.Handler with null record;
-    overriding procedure On_Start (Self : in out Object; Ctx : in out Chain_probe.Context);
-    overriding procedure On_Tick (Self : in out Object; Ctx : in out Chain_probe.Context; Selected : Chain_probe.Inputs);
+    type Object is new Ose_probe.Handler with null record;
+    overriding procedure On_Start (Self : in out Object; Ctx : in out Ose_probe.Context);
+    overriding procedure On_Tick (Self : in out Object; Ctx : in out Ose_probe.Context; Selected : Ose_probe.Inputs);
 end Parameter_Handler;
 '''
 ADA = '''with SDL_settings; with SDL_Runtime;
 package body Parameter_Handler is
     use type SDL_Runtime.Float64;
-    overriding procedure On_Start (Self : in out Object; Ctx : in out Chain_probe.Context) is
-        P : SDL_settings.T_Settings := Chain_probe.Parameters_detection (Ctx);
+    overriding procedure On_Start (Self : in out Object; Ctx : in out Ose_probe.Context) is
+        P : SDL_settings.T_Settings := Ose_probe.Parameters_detection (Ctx);
     begin
         if P.F_threshold /= 80.0 then raise Program_Error; end if;
         P.F_threshold := 81.0;
-        Chain_probe.Set_Parameters_detection (Ctx, P);
+        Ose_probe.Set_Parameters_detection (Ctx, P);
     end;
-    overriding procedure On_Tick (Self : in out Object; Ctx : in out Chain_probe.Context; Selected : Chain_probe.Inputs) is
-        P : SDL_settings.T_Settings := Chain_probe.Parameters_detection (Ctx);
+    overriding procedure On_Tick (Self : in out Object; Ctx : in out Ose_probe.Context; Selected : Ose_probe.Inputs) is
+        P : SDL_settings.T_Settings := Ose_probe.Parameters_detection (Ctx);
     begin
-        Chain_probe.Publish_result (Ctx, P);
+        Ose_probe.Publish_result (Ctx, P);
         P.F_threshold := P.F_threshold + 1.0;
-        Chain_probe.Set_Parameters_detection (Ctx, P);
+        Ose_probe.Set_Parameters_detection (Ctx, P);
     end;
 end Parameter_Handler;
 '''
@@ -489,8 +489,8 @@ def on_tick(ctx):
         await asyncio.to_thread(subprocess.run, ['cargo', 'build', '--offline', '--manifest-path', str(repository / 'sdk/client/rust/Cargo.toml')],
                                 env=dict(os.environ, CARGO_TARGET_DIR=str(target)), check=True, capture_output=True)
         source = self.root / 'native_parameters.c'
-        source.write_text('''#include "chain_client.h"
-#include "chain_parameters.h"
+        source.write_text('''#include "ose_client.h"
+#include "ose_parameters.h"
 #include "settings.h"
 #include "type_engine.h"
 #include <stdio.h>
@@ -531,7 +531,7 @@ error:
         command = [os.environ.get('CC', 'cc'), '-std=c99', '-Wall', '-Wextra', '-Werror', '-O1',
                    '-I' + str(runtime), '-I' + str(generated), '-I' + str(repository / 'sdk/client/c'), str(source),
                    *map(str, sorted(runtime.glob('*.c'))), *map(str, sorted(generated.glob('*.c'))),
-                   str(repository / 'sdk/client/c/chain_client.c'), str(target / 'debug/libsdl_chain_client.a'),
+                   str(repository / 'sdk/client/c/ose_client.c'), str(target / 'debug/libsdl_ose_client.a'),
                    '-ldl', '-lm', '-lpthread', '-o', str(binary)]
         await asyncio.to_thread(subprocess.run, command, check=True, capture_output=True)
         return binary
@@ -561,10 +561,10 @@ error:
         source = self.root / 'rust-client'
         source.mkdir()
         (source / 'Cargo.toml').write_text('[package]\nname="parameter-probe"\nversion="0.1.0"\nedition="2021"\n[workspace]\n' +
-            '[[bin]]\nname="parameter-probe"\npath="main.rs"\n[dependencies]\nsdl-chain-client={path=' +
+            '[[bin]]\nname="parameter-probe"\npath="main.rs"\n[dependencies]\nsdl-ose-client={path=' +
             json.dumps(str(repository / 'sdk/client/rust')) + '}\nsdl-runtime={path=' + json.dumps(str(self.codec.root / 'runtime/rust')) + '}\n')
         (source / 'main.rs').write_text('#[path=' + json.dumps(str(self.root / 'build/generated/shared/rust/settings.rs')) + '] mod settings;\n' + '''
-use sdl_chain_client::parameters::ParameterClient;
+use sdl_ose_client::parameters::ParameterClient;
 use sdl_runtime::SdlMessage;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -602,7 +602,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         from ose.modeling.managed_containers import tool
         await self.setup_plan()
         source = self.root / 'ParameterProbe.java'
-        source.write_text('''import org.sdlchain.client.ParameterClient;
+        source.write_text('''import org.sdlose.client.ParameterClient;
 import sdl.globaltypes.settings.Settings;
 public class ParameterProbe {
     public static void main(String[] args) throws Exception {
@@ -642,27 +642,27 @@ public class ParameterProbe {
         source = self.root / 'parameter_probe.adb'
         source.write_text('''with Ada.Command_Line; with Ada.Text_IO;
 with Interfaces; with SDL_Runtime; with SDL_settings;
-with Chain_Parameters; with Chain_Parameters.Typed;
+with Ose_Parameters; with Ose_Parameters.Typed;
 procedure Parameter_Probe is
     use type SDL_Runtime.Float64;
-    package Blocks is new Chain_Parameters.Typed
+    package Blocks is new Ose_Parameters.Typed
         (SDL_settings.T_Settings, "Settings", SDL_settings.Description, SDL_settings.Encode, SDL_settings.Decode);
-    C : Chain_Parameters.Client;
+    C : Ose_Parameters.Client;
     B : Blocks.Block;
     P : SDL_settings.T_Settings;
 begin
-    Chain_Parameters.Connect (C, Ada.Command_Line.Argument (1),
+    Ose_Parameters.Connect (C, Ada.Command_Line.Argument (1),
         Interfaces.Unsigned_16'Value (Ada.Command_Line.Argument (2)), "operator", Ada.Command_Line.Argument (3));
     Blocks.Open (B, C, "machine/first");
     P := Blocks.Get (B, C);
     if P.F_threshold /= 80.0 then raise Program_Error; end if;
     P.F_threshold := 85.0;
     Blocks.Set (B, C, P);
-    Chain_Parameters.Subscribe (C, "[""machine/first""]");
-    P := Blocks.Decode_Update (B, Chain_Parameters.Next (C));
+    Ose_Parameters.Subscribe (C, "[""machine/first""]");
+    P := Blocks.Decode_Update (B, Ose_Parameters.Next (C));
     if P.F_threshold /= 85.0 then raise Program_Error; end if;
-    Chain_Parameters.Unsubscribe (C);
-    Chain_Parameters.Close (C);
+    Ose_Parameters.Unsubscribe (C);
+    Ose_Parameters.Close (C);
     Ada.Text_IO.Put_Line ("parameters passed");
 end Parameter_Probe;
 ''')

@@ -110,7 +110,7 @@ class CallbackContext:
 def _load_handler(path):
     path = Path(path).resolve()
     sys.path.insert(0, str(path.parent))
-    spec = importlib.util.spec_from_file_location("_chain_component_handler", path)
+    spec = importlib.util.spec_from_file_location("_ose_component_handler", path)
     if spec is None or spec.loader is None:
         raise ValueError(f"cannot load Python handler: {path}")
     module = importlib.util.module_from_spec(spec)

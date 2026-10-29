@@ -327,29 +327,29 @@ Without `DetectionParams`, a Python block reads/writes JSON-shaped dictionaries.
 Distributed Python clients pass a client SSL context from `ose.transport.secure.contexts`
 and `distributed=True` to `connect`.
 
-Rust: `sdl_chain_client::parameters::ParameterClient` supplies `connect`,
+Rust: `sdl_ose_client::parameters::ParameterClient` supplies `connect`,
 `connect_tls`, `list`, `describe`, `get`, `set`, `subscribe`, `next` and `unsubscribe`.
 `describe` returns the root/catalogue; encode/decode raw SDL bytes with the
 application's generated SDL runtime. The crate keeps its dependency-free Cargo
 manifest. Native TLS loads OpenSSL 1.1/3 at runtime and verifies the CA and the
 single exact `coordinator` certificate CN.
 
-C: include `chain_parameters.h` and `chain_client.h`. Use
+C: include `ose_parameters.h` and `ose_client.h`. Use
 `cenv_parameters_connect` (NULL TLS paths for token-authenticated local TCP),
 `cenv_parameter_block`, `cenv_parameter_get` and `cenv_parameter_set` with registered
 SDL types. Release returned messages with `type_free`; free blocks before their
 borrowed client. `cenv_parameters_request` exposes subscriptions and other RPCs;
 `cenv_parameter_decode` decodes a returned update for its block. Packet strings and
 bytes remain borrowed until `cenv_parameter_packet_free`; extracted text fields
-are owned and use `cenv_string_free`. Link `chain_client.c` and the native Rust SDK.
+are owned and use `cenv_string_free`. Link `ose_client.c` and the native Rust SDK.
 
-Java: `org.sdlchain.client.ParameterClient` uses the existing `client-java` JNI
+Java: `org.sdlose.client.ParameterClient` uses the existing `client-java` JNI
 library. `client.block(path, DetectionParams.class)` provides typed `get`/`set`;
 `subscribe`/`next` deliver packets decoded with `block.decode(packet)`. The
 seven-argument `connect` accepts token and CA/certificate/key paths for native TLS.
 
-Ada: `Chain_Parameters` provides a controlled client, `Request`, `List`,
-`Subscribe`, `Next` and `Unsubscribe`. Instantiate `Chain_Parameters.Typed` with
+Ada: `Ose_Parameters` provides a controlled client, `Request`, `List`,
+`Subscribe`, `Next` and `Unsubscribe`. Instantiate `Ose_Parameters.Typed` with
 the SDL message type, root, catalogue and encode/decode functions to obtain typed
 `Open`, `Get`, `Set` and `Decode_Update`. An empty `Next` packet has an empty path.
 `client-ada` includes these units and the same native TCP/TLS engine.

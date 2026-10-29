@@ -29,7 +29,7 @@ def check_generation(case, root, sdl, language):
     destination = root / 'generated build'
     handler = root / container['handler']
     # Validation must not invoke a native toolchain or scaffold application code.
-    unavailable = {tool: '/unavailable/chain-test-' + tool.lower()
+    unavailable = {tool: '/unavailable/ose-test-' + tool.lower()
                    for tool in ('JAVA', 'JAVAC', 'GNATMAKE', 'CC', 'CARGO')}
     with patch.dict(os.environ, unavailable):
         plan = compile_plan(model_path, deployment_path, sdl, destination)

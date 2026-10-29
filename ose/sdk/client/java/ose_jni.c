@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include "chain_client_raw.h"
+#include "ose_client_raw.h"
 static JavaVM *vm;
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *jvm, void *reserved) {
     (void)reserved; vm = jvm; return JNI_VERSION_1_6;
@@ -44,7 +44,7 @@ static void error(JNIEnv *env) {
     jthrowable exception = (*env)->NewObject(env, ex, make, text);
     if (exception) (*env)->Throw(env, exception);
 }
-#define JNI_NAME(n) Java_org_sdlchain_client_Client_00024Native_##n
+#define JNI_NAME(n) Java_org_sdlose_client_Client_00024Native_##n
 JNIEXPORT jlong JNICALL JNI_NAME(connect)(JNIEnv *env, jclass cls, jbyteArray host, jint port, jbyteArray id) {
     (void)cls; char *h = copy(env, host), *i = copy(env, id); CenvClient *c = NULL;
     if (h && i) c = cenv_connect(h, (uint16_t)port, i);
@@ -138,8 +138,8 @@ JNIEXPORT jlong JNICALL JNI_NAME(subscribe)(JNIEnv *env, jclass cls, jlong clien
     free(t); free(r); free(c); free(o); if (!sub) error(env); return (jlong)(intptr_t)sub;
 }
 
-#include "chain_parameters.h"
-#define PARAM_JNI(n) Java_org_sdlchain_client_ParameterClient_00024Native_##n
+#include "ose_parameters.h"
+#define PARAM_JNI(n) Java_org_sdlose_client_ParameterClient_00024Native_##n
 JNIEXPORT jlong JNICALL PARAM_JNI(connect)(JNIEnv *env, jclass cls, jobjectArray options, jint port) {
     char *values[6] = {NULL, NULL, NULL, NULL, NULL, NULL};
     CenvParameterClient *client = NULL;

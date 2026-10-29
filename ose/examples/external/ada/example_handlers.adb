@@ -5,7 +5,7 @@ package body Example_Handlers is
    type Publisher_Access is access all Messages.Publisher;
    function Publisher_Ptr is new Ada.Unchecked_Conversion (System.Address, Publisher_Access);
    procedure Receive (Message : SDL_measurement.T_Measurement;
-                      Info : Chain_Client.Message_Info; User : System.Address) is
+                      Info : Ose_Client.Message_Info; User : System.Address) is
       use type SDL_Runtime.Float64;
       Result : SDL_measurement.T_Measurement := Message;
    begin

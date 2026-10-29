@@ -1,4 +1,4 @@
-#include "chain_component.h"
+#include "ose_component.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,11 +9,11 @@ static uint32_t number(const uint8_t *b) {
 static void header(uint8_t *b, uint32_t n) {
     b[0]=(uint8_t)(n>>24); b[1]=(uint8_t)(n>>16); b[2]=(uint8_t)(n>>8); b[3]=(uint8_t)n;
 }
-int chain_ready(void) {
+int ose_ready(void) {
     const uint8_t capability = 1;
-    return chain_send('R', &capability, 1);
+    return ose_send('R', &capability, 1);
 }
-int chain_tick(const ChainEvent *event, uint64_t *time_ns, uint64_t *tick_index) {
+int ose_tick(const OseEvent *event, uint64_t *time_ns, uint64_t *tick_index) {
     if (event->op != 'T') return 0;
     if (!event->size) { *time_ns = 0; ++*tick_index; return 1; }
     if (event->size != 16) return 0;
@@ -30,7 +30,7 @@ static int read_all(void *data, size_t size) {
     }
     return 1;
 }
-int chain_read(ChainEvent *event) {
+int ose_read(OseEvent *event) {
     uint8_t b[4], *data;
     uint32_t n;
     if (!event || !read_all(b,4)) return 0;
@@ -42,10 +42,10 @@ int chain_read(ChainEvent *event) {
     event->op=(char)data[0]; memmove(data,data+1,n-1); event->data=data; event->size=n-1;
     return 1;
 }
-void chain_release(ChainEvent *event) {
+void ose_release(OseEvent *event) {
     free(event->data); event->data=NULL; event->size=0;
 }
-int chain_send(char op, const void *data, size_t size) {
+int ose_send(char op, const void *data, size_t size) {
     uint8_t b[4];
     if (size>=MAX_SIZE || (size && !data)) return 0;
     header(b,(uint32_t)size+1);
@@ -61,22 +61,22 @@ static int named_send(char op, const char *port, const void *payload, size_t siz
     if (!data) return 0;
     data[0]=(uint8_t)(n>>8); data[1]=(uint8_t)n;
     memcpy(data+2,port,n); memcpy(data+2+n,payload,size);
-    ok=chain_send(op,data,2+n+size); free(data); return ok;
+    ok=ose_send(op,data,2+n+size); free(data); return ok;
 }
-int chain_publish(const char *port, const void *payload, size_t size) {
+int ose_publish(const char *port, const void *payload, size_t size) {
     return named_send('P', port, payload, size);
 }
-int chain_set_parameters(const char *name, const void *payload, size_t size) {
-    ChainEvent result;
+int ose_set_parameters(const char *name, const void *payload, size_t size) {
+    OseEvent result;
     int ok;
-    if (!named_send('S', name, payload, size) || !chain_read(&result)) return 0;
+    if (!named_send('S', name, payload, size) || !ose_read(&result)) return 0;
     ok = result.op == 'A' && result.size == 1 && result.data[0] == 1;
     if (!ok && result.op == 'A' && result.size > 1 && result.data[0] == 0)
         fprintf(stderr, "parameter write: %.*s\n", (int)(result.size - 1), (const char *)result.data + 1);
-    chain_release(&result);
+    ose_release(&result);
     return ok;
 }
-int chain_input(const ChainEvent *event, const uint8_t **port, size_t *port_size,
+int ose_input(const OseEvent *event, const uint8_t **port, size_t *port_size,
                 const uint8_t **catalogue, size_t *catalogue_size,
                 const uint8_t **payload, size_t *payload_size) {
     const uint8_t *data;

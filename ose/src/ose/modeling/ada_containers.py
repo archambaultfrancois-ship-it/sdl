@@ -24,8 +24,8 @@ def literal(text):
 def generate(name, node, handler, sdl_root, schemas, destination, identity):
     destination = Path(destination); sdl_root = Path(sdl_root)
     types = merge_schemas(name, 'ada', schemas, destination / 'types')
-    api = 'Chain_' + name; stem = api.lower(); packages = sorted({p for p, _ in types.values()})
-    if any(p.lower() in (api.lower(), identity.lower(), 'chain_component') for p in packages):
+    api = 'Ose_' + name; stem = api.lower(); packages = sorted({p for p, _ in types.values()})
+    if any(p.lower() in (api.lower(), identity.lower(), 'ose_component') for p in packages):
         raise ValueError('Ada schema package conflicts with component API')
     if handler.name.lower() != identity.lower().replace('.', '-') + '.adb':
         raise ValueError('Ada handler filename must follow GNAT unit naming')
@@ -72,7 +72,7 @@ def generate(name, node, handler, sdl_root, schemas, destination, identity):
     spec += ['   end record;', f'end {api};', '']
     (destination / (stem + '.ads')).write_text('\n'.join(spec))
     body = ['with Ada.Unchecked_Deallocation;', 'with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;',
-            'with Chain_Component; use Chain_Component;', f'package body {api} is',
+            'with Ose_Component; use Ose_Component;', f'package body {api} is',
             '   use type Ada.Task_Identification.Task_Id;',
             f'   function Name (Ctx : Context) return String is ({literal(name)});',
             '   function Config_JSON (Ctx : Context) return String is (To_String (Ctx.Config));',
@@ -197,7 +197,7 @@ end Main;
     objects = destination / 'obj'; objects.mkdir(exist_ok=True)
     sdk = sdk_root(); runtime = sdl_root / 'runtime'
     c_sources = [runtime / 'c' / (n + '.c') for n in ('type_engine', 'type_registry', 'type_codec', 'sdl_wire', 'sdl_dynamic', 'type_display')]
-    c_sources += [runtime / 'ada/sdl_ada_bridge.c', sdk / 'c/chain_component.c']
+    c_sources += [runtime / 'ada/sdl_ada_bridge.c', sdk / 'c/ose_component.c']
     commands, linked = [], []
     for i, src in enumerate(c_sources):
         obj = objects / f'bridge_{i}.o'; linked.append(str(obj))
@@ -213,7 +213,7 @@ def scaffold(node, container):
     handler = Path(container['handler']); spec = handler.with_suffix('.ads')
     if handler.exists() and spec.exists(): return
     if handler.exists() or spec.exists(): raise ValueError('Ada handler requires both .ads and .adb; refusing to overwrite a partial pair')
-    name = Path(node['command'][0]).parent.name; api = 'Chain_' + name; unit = container['unit']
+    name = Path(node['command'][0]).parent.name; api = 'Ose_' + name; unit = container['unit']
     lines = [f'with {api};', f'package {unit} is', f'   type Object is new {api}.Handler with null record;']
     bodies = [f'package body {unit} is']
     for port, desc in node['inputs'].items():

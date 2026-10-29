@@ -1,5 +1,5 @@
-with Chain_Text;
-package body Chain_Parameters.Typed is
+with Ose_Text;
+package body Ose_Parameters.Typed is
    use Ada.Strings.Unbounded;
    procedure Open (Self : in out Block; Owner : Client; Path : String) is
       Reply : constant Packet := Request (Owner, "parameters_describe", Path_Arguments (Path));
@@ -8,7 +8,7 @@ package body Chain_Parameters.Typed is
    begin
       if To_String (Reply.Root) /= Root then raise Parameter_Error with "wrong parameter root"; end if;
       for I in Text'Range loop Text (I) := Character'Val (Bytes (Bytes'First + I - 1)); end loop;
-      if not Chain_Text.Valid_UTF8 (Text) or else
+      if not Ose_Text.Valid_UTF8 (Text) or else
          not SDL_Runtime.Is_Compatible (SDL_Runtime.Compare_Catalogues (Text, Catalogue, Root, True)) then
          raise Parameter_Error with "incompatible parameter catalogue";
       end if;
@@ -28,4 +28,4 @@ package body Chain_Parameters.Typed is
       Reply : constant Packet := Request (Owner, "parameters_set", Path_Arguments (To_String (Self.Path)), Encode (Self.Codec, Value));
       pragma Unreferenced (Reply);
    begin null; end Set;
-end Chain_Parameters.Typed;
+end Ose_Parameters.Typed;
