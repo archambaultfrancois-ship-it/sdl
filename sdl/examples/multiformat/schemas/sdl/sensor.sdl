@@ -1,0 +1,7 @@
+package multiformat;
+
+message Sensor {
+   uint32 id wire(encoding=varint);
+   Position location;
+   optional string label;
+}

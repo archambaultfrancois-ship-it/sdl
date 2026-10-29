@@ -1,0 +1,13 @@
+format: sdl-schema
+package: multiformat
+messages:
+  Reading:
+    fields:
+      - {name: sensor, type: Sensor}
+      - {name: state, type: State}
+      - {name: acceleration, type: Sample, dimensions: [AXES]}
+      - name: samples
+        type: Sample
+        modifier: packed
+        wire: {bits: 12, q: "0.25"}
+      - {name: note, type: string, modifier: optional}

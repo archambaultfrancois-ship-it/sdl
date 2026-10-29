@@ -1,0 +1,2 @@
+# Optional compiler dependency; not used by generated bindings or runtimes.
+PyYAML>=6.0,<7

@@ -623,6 +623,7 @@ typedef struct {
    float complex point;
 } PackedTestRecord;
 typedef struct { char prefix; PackedTestRecord value; } PackedTestRecordAlign;
+typedef struct { char prefix; State value; } PackedTestStateAlign;
 typedef struct { uint32_t count; PackedTestRecord *records; } PackedTestBatch;
 typedef struct { char prefix; PackedTestBatch value; } PackedTestBatchAlign;
 static const SdlEnumValueDesc packed_test_state_values[] = {
@@ -630,7 +631,7 @@ static const SdlEnumValueDesc packed_test_state_values[] = {
 };
 static const SdlTypeDesc packed_test_state_desc = {
    .kind = SDL_TYPE_ENUM, .size = sizeof(State),
-   .alignment = offsetof(struct { char prefix; State value; }, value), .name = "State",
+   .alignment = offsetof(PackedTestStateAlign, value), .name = "State",
    .detail.enumeration = {2, packed_test_state_values}
 };
 static const SdlFieldDesc packed_test_record_fields[] = {

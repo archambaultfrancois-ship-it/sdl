@@ -6,6 +6,7 @@
 - **[Rich data types](schema.md#field-types-and-modifiers)**: exchange numbers, Unicode text, enums, complex values, nested records and arrays.
 - **[Optional fields and collections](schema.md#field-types-and-modifiers)**: represent missing values and variable-length data.
 - **[Reusable schemas](schema.md#packages-and-type-references)**: share packages, aliases and constants across files.
+- **[Alternative source formats](schema_formats.md)**: read and export JSON, YAML and reversible annotated XSD with the same validation and code generators.
 - **[Schema shortcuts](schema.md#automatic-field-numbers)**: omit field numbers and required modifiers when defaults suffice.
 - **[Generated documentation](schema.md#comments-and-generated-documentation)**: carry schema comments into all six languages.
 - **[Binding regeneration](../README.md#generate-bindings)**: update interfaces and remove obsolete generated files.

@@ -1323,6 +1323,8 @@ public final class SdlCodec {
          else if(w.bits==0&&signed&&(n<0||width<64&&n>=(1L<<(width-1))))throw malformed("varint exceeds signed range");plain.bits(width,n);
       }
    }
+   // Keep strict floating-point quantization on Java 7-16; implicit on Java 17+.
+   @SuppressWarnings("strictfp")
    private static strictfp void repQuantizedFloat(WireOptions w,int size,RepStream plain,RepStream custom,boolean encode){
       if(encode){
          long raw=plain.bits(size*8,0);

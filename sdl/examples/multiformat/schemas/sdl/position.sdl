@@ -1,0 +1,6 @@
+package multiformat;
+
+message Position {
+   fl64 x;
+   fl64 y;
+}

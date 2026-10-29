@@ -25,7 +25,7 @@ JAVAC ?= javac
 JAVA ?= java
 JAVA_GENERATED_DIR := $(GENERATED_DIR)/java
 JAVA_TEST_CLASSES := $(BUILD_DIR)/java-test-classes
-SDL_FILES := $(shell find schemas -type f -name '*.sdl')
+SDL_FILES := $(shell find schemas -type f \( -name '*.sdl' -o -name '*.sdl.json' -o -name '*.sdl.yaml' -o -name '*.sdl.yml' -o -name '*.sdl.xsd' \))
 SDL_DIRS := $(shell find schemas -type d)
 CHECK_SILENT := $(findstring s,$(firstword $(MAKEFLAGS)))
 RUN_TEST := $(if $(CHECK_SILENT),$(PYTHON) tests/run_quiet.py --,)
@@ -67,6 +67,16 @@ test-rust: $(GENERATED_DIR)/.stamp
 test-python: $(GENERATED_DIR)/.stamp
 	@if [ -z "$(CHECK_SILENT)" ]; then echo "=== Component Python: runtime, schema/codegen, invalid input, limits ==="; fi
 	$(RUN_TEST) env PYTHONPATH=runtime/python:$(PYTHON_GENERATED_DIR) $(PYTHON) tests/python/run_tests.py
+
+# Optional readers and an independent XSD validator. Core tests need neither.
+SCHEMA_DEPS ?= build/schema-deps
+schema-deps:
+	$(PYTHON) -m pip --disable-pip-version-check install --upgrade --target "$(SCHEMA_DEPS)" -r tests/requirements-schema-formats.txt
+
+test-schema-formats:
+	$(RUN_TEST) env PYTHONPATH="$(SCHEMA_DEPS):runtime/python" $(PYTHON) tests/python/test_schema_formats.py
+
+.PHONY: schema-deps test-schema-formats
 
 # Optional catalogue predicate service and native language gateways.
 filter-native:
@@ -190,7 +200,7 @@ bench-java: $(GENERATED_DIR)/.stamp
 	$(JAVAC) -encoding UTF-8 -Xlint:-options -d $(JAVA_TEST_CLASSES) $$(find $(JAVA_GENERATED_DIR) -name '*.java') tests/java/*.java
 	SDL_BENCH_ITERATIONS=$(BENCH_ITERATIONS) $(JAVA) -cp $(JAVA_TEST_CLASSES) SdlJavaBench
 
-$(GENERATED_DIR)/.stamp: $(SDL_DIRS) $(SDL_FILES) sdlc/generator.py sdlc/c_backend.py sdlc/rust_backend.py sdlc/python_backend.py sdlc/matlab_backend.py sdlc/java_backend.py sdlc/ada_backend.py sdlc/ada_filter.py sdlc/ada_direct.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m runtime/matlab/sdl_mex_context.m runtime/matlab/sdl_representation.m Makefile
+$(GENERATED_DIR)/.stamp: $(SDL_DIRS) $(SDL_FILES) sdlc/generator.py sdlc/schema_formats.py sdlc/c_backend.py sdlc/rust_backend.py sdlc/python_backend.py sdlc/matlab_backend.py sdlc/java_backend.py sdlc/ada_backend.py sdlc/ada_filter.py sdlc/ada_direct.py runtime/java/SdlCodec.java runtime/matlab/sdl_matlab_runtime.m runtime/matlab/sdl_mex_context.m runtime/matlab/sdl_representation.m Makefile
 	mkdir -p $(GENERATED_DIR)
 	$(PYTHON) sdlc/generator.py -c -rust -python -matlab -java -ada schemas $(GENERATED_DIR)
 	touch $@

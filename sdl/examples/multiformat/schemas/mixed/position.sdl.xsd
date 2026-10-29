@@ -1,0 +1,32 @@
+<!-- Maintained SDL annotated XSD source for multiformat.Position. -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:sdl="urn:sdl:schema:1" elementFormDefault="unqualified">
+  <xs:annotation>
+    <xs:appinfo>
+      <sdl:unit>{"format": "sdl-schema", "package": "multiformat", "constants": {}, "aliases": {}}</sdl:unit>
+    </xs:appinfo>
+  </xs:annotation>
+  <xs:complexType name="multiformat.Position">
+    <xs:annotation>
+      <xs:appinfo>
+        <sdl:message>{"name": "multiformat.Position", "owned": true}</sdl:message>
+      </xs:appinfo>
+    </xs:annotation>
+    <xs:sequence>
+      <xs:element name="x" minOccurs="1" maxOccurs="1" type="xs:double">
+        <xs:annotation>
+          <xs:appinfo>
+            <sdl:field>{"id": 1, "name": "x", "type": "fl64", "modifier": "required", "dimensions": [], "wire": {}}</sdl:field>
+          </xs:appinfo>
+        </xs:annotation>
+      </xs:element>
+      <xs:element name="y" minOccurs="1" maxOccurs="1" type="xs:double">
+        <xs:annotation>
+          <xs:appinfo>
+            <sdl:field>{"id": 2, "name": "y", "type": "fl64", "modifier": "required", "dimensions": [], "wire": {}}</sdl:field>
+          </xs:appinfo>
+        </xs:annotation>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="multiformat.Position" type="multiformat.Position" />
+</xs:schema>

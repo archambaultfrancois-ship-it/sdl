@@ -1,0 +1,3 @@
+-r ../sdlc/requirements-yaml.txt
+# Independent XSD validator, used only by the schema format tests.
+xmlschema>=3.4,<5

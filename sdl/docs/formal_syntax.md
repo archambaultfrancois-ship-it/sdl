@@ -6,6 +6,10 @@ runtimes. It covers two texts: the `.sdl` source file and the single-line
 UTF-8 catalogue `SDL2|…`. The catalogue describes how to encode messages;
 message values are transmitted separately as binary data.
 
+The compiler also accepts [JSON, YAML and annotated XSD sources](schema_formats.md)
+representing the same model. Their descriptors and XSD profile are specified
+separately; the source grammar below describes textual `.sdl` only.
+
 A grammar describes the structure of the text. The validation rules that
 follow are also part of the language: a statement can match the grammar and
 still be invalid, for example `int32 x wire(bits=12,q=0.1);`.

@@ -128,13 +128,15 @@ class ExpressionsAliasesTests(unittest.TestCase):
          (root / 'c.sdl').write_text('package radio;const COUNT=2;'
             'alias Coordinate=int16;message Point{Coordinate[COUNT]x;}')
          (root / 'globals.sdl').write_text('const AXES=2;alias GlobalPoint=radio.Point;')
-         schemas = parse_schemas(str(root)); schema = schemas[0][2]
+         schemas = parse_schemas(str(root))
+         schema = next(schema for base, _, schema in schemas if base == 'a')
          self.assertEqual(schema.constants['nav.N'], 6)
          self.assertEqual(schema.messages['nav.Root'].fields[0].type_name, 'radio.Point')
          self.assertEqual(schema.fixed_wire_size('nav.Root'), 24)
          self.assertEqual(schema.dependencies(), [('radio', 'c')])
          (root / 'a.sdl').write_text('package nav;message Root{.GlobalPoint[2]points;}')
-         self.assertEqual(parse_schemas(str(root))[0][2].fixed_wire_size('nav.Root'), 8)
+         schema = next(schema for base, _, schema in parse_schemas(str(root)) if base == 'a')
+         self.assertEqual(schema.fixed_wire_size('nav.Root'), 8)
 
    def test_unqualified_references_never_fall_back_to_global(self):
       with tempfile.TemporaryDirectory() as temporary:

@@ -949,13 +949,15 @@ class MsgParser:
       return total
 
 def parse_schemas(input_path):
+   from schema_formats import SOURCE_SUFFIXES, read_schema
+   input_path = os.fspath(input_path)
    if os.path.isdir(input_path):
       schema_paths = sorted(os.path.join(root, item) for root, dirs, files in os.walk(input_path)
-         for item in files if item.endswith('.sdl'))
+         for item in files if item.endswith(SOURCE_SUFFIXES))
    else:
       schema_paths = [input_path]
    if not schema_paths:
-      raise ValueError('no .sdl files found in ' + input_path)
+      raise ValueError('no SDL schema files found in ' + input_path)
 
    parsed = []
    seen_type_names = set()
@@ -964,10 +966,15 @@ def parse_schemas(input_path):
    seen_symbols = set()
    seen_bases = set()
    for schema_path in schema_paths:
-      base_name = os.path.splitext(os.path.basename(schema_path))[0]
+      suffix = next((suffix for suffix in SOURCE_SUFFIXES if schema_path.endswith(suffix)), None)
+      if suffix is None:
+         raise ValueError('unsupported SDL source suffix: ' + schema_path)
+      base_name = os.path.basename(schema_path)[:-len(suffix)]
       parser = MsgParser()
-      with open(schema_path, 'r', encoding='utf-8') as input_file:
-         parser.parse_text(input_file.read(), validate=False)
+      try:
+         read_schema(schema_path, parser, sys.modules[__name__])
+      except (ValueError, OSError, UnicodeError, RecursionError) as error:
+         raise ValueError(schema_path + ': ' + str(error)) from error
       parser.base_name = base_name
       identifier = c_identifier(parser.package + '.' + base_name if parser.package else base_name)
       if identifier in seen_bases:
@@ -990,6 +997,8 @@ def parse_schemas(input_path):
             raise ValueError('duplicate declaration name across SDL files: ' + name)
          seen_constant_names.add(name)
       parsed.append((base_name, identifier, parser))
+   # Unit order must not depend on the directory layout of a source format.
+   parsed.sort(key=lambda item: (item[2].package, item[0]))
    messages = {name: message for _, _, schema in parsed for name, message in schema.messages.items()}
    enums = {name: enum for _, _, schema in parsed for name, enum in schema.enums.items()}
    constants = {name: value for _, _, schema in parsed for name, value in schema.constants.items()}
@@ -1013,6 +1022,11 @@ def parse_schemas(input_path):
       schema._resolve_dimensions()
    for _, _, schema in parsed:
       schema.validate(source_resolved=True)
+   # Annotated XSDs carry a self-contained copy of referenced declarations.
+   # Check these copies against the resolved input graph as well.
+   from schema_formats import validate_xsd_dependencies
+   for _, _, schema in parsed:
+      validate_xsd_dependencies(schema)
    return parsed
 
 
@@ -1037,21 +1051,32 @@ def clear_generated_outputs(output_dir, extensions, markers):
 
 
 def main():
-   argument_parser = argparse.ArgumentParser(description='Generate code from SDL schemas.')
+   argument_parser = argparse.ArgumentParser(description='Compile or export SDL schemas (text, JSON, YAML, annotated XSD).')
    argument_parser.add_argument('-ada', action='store_true', help='generate Ada 2012 code')
    argument_parser.add_argument('-c', action='store_true', help='generate C code')
    argument_parser.add_argument('-rust', action='store_true', help='generate Rust code')
    argument_parser.add_argument('-python', action='store_true', help='generate Python 3 code')
    argument_parser.add_argument('-matlab', action='store_true', help='generate Matlab/Octave code')
    argument_parser.add_argument('-java', action='store_true', help='generate Java 7 compatible code')
-   argument_parser.add_argument('input', nargs='?', default='schemas', help='SDL file or directory')
+   argument_parser.add_argument('-sdl', action='store_true', help='reconstruct normalized textual SDL schemas')
+   argument_parser.add_argument('-json', action='store_true', help='export SDL schemas as JSON')
+   argument_parser.add_argument('-yaml', action='store_true', help='export SDL schemas as YAML (requires PyYAML)')
+   argument_parser.add_argument('-xsd', action='store_true', help='export annotated XML Schema 1.0')
+   argument_parser.add_argument('input', nargs='?', default='schemas', help='schema file or mixed-format directory')
    argument_parser.add_argument('output', nargs='?', default='build/generated',
-      help='output directory (language subdirectory is added automatically)')
+      help='output directory (language/format subdirectory is added automatically)')
    arguments = argument_parser.parse_args()
-   if not arguments.c and not arguments.rust and not arguments.python and not arguments.matlab and not arguments.java and not arguments.ada:
-      argument_parser.error('select at least one backend with -c, -rust, -python, -matlab -java or -ada')
+   if not any(getattr(arguments, name) for name in
+         ('c', 'rust', 'python', 'matlab', 'java', 'ada', 'sdl', 'json', 'yaml', 'xsd')):
+      argument_parser.error('select a language backend or -sdl, -json, -yaml, -xsd')
    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
    try:
+      from schema_formats import generate_schema_formats, yaml_module
+      if arguments.yaml:
+         yaml_module()
+      formats = [name for name in ('sdl', 'json', 'yaml', 'xsd') if getattr(arguments, name)]
+      if formats:
+         generate_schema_formats(arguments.input, arguments.output, formats)
       if arguments.ada:
          from ada_backend import generate_ada
          generate_ada(arguments.input, os.path.join(arguments.output, 'ada'))
@@ -1070,7 +1095,7 @@ def main():
       if arguments.java:
          from java_backend import generate_java
          generate_java(arguments.input, os.path.join(arguments.output, 'java'))
-   except ValueError as error:
+   except (ValueError, OSError, UnicodeError, RecursionError) as error:
       argument_parser.error(str(error))
 
 

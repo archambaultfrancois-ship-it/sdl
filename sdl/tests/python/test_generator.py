@@ -877,7 +877,7 @@ message Packet {
             (input_path / 'invalid.sdl').unlink()
             (input_path / 'active.sdl').unlink()
             (input_path / 'README.txt').write_text('no SDL files', encoding='utf-8')
-            with self.assertRaisesRegex(ValueError, r'no \.sdl files found'):
+            with self.assertRaisesRegex(ValueError, 'no SDL schema files found'):
                generate(str(input_path), str(output_path))
             self.assertEqual(before_invalid_schema, {path.name: path.read_bytes()
                for path in output_path.iterdir() if path.is_file()})

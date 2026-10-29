@@ -1,0 +1,13 @@
+{
+  "format": "sdl-schema",
+  "package": "multiformat",
+  "messages": {
+    "Sensor": {
+      "fields": [
+        {"name": "id", "type": "uint32", "wire": {"encoding": "varint"}},
+        {"name": "location", "type": "Position"},
+        {"name": "label", "type": "string", "modifier": "optional"}
+      ]
+    }
+  }
+}

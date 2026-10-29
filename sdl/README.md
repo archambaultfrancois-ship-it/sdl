@@ -4,7 +4,7 @@ Run the commands below from this directory (`cd sdl` from the repository root).
 The sibling [OSE project](../ose/README.md) uses these public codecs.
 
 SDL generates message bindings for C99, Rust, Python 3, Java 7+, Ada 2012, and
-Matlab/Octave from `.sdl` schemas.
+Matlab/Octave from SDL schemas written as text, JSON, YAML or annotated XSD.
 
 See the [feature overview](docs/features.md) for the available user-facing services.
 The [graphical design](docs/design.md) covers static architecture and runtime flows, with editable draw.io diagrams.
@@ -38,6 +38,12 @@ The SDL compiler and its language backends live in `sdlc/`.
 python3 sdlc/generator.py -c -rust -python -matlab -java -ada schemas build/generated
 ```
 
+Use `-json`, `-yaml` or `-xsd` to export schemas, and `-sdl` to reconstruct textual
+SDL from alternative or mixed inputs. The compiler also reads
+`.sdl.json`, `.sdl.yaml`/`.sdl.yml` and the supported annotated `.sdl.xsd` profile
+directly, including mixed-format directories. Only YAML requires an optional
+dependency, PyYAML. See [source formats, dependencies and XSD limits](docs/schema_formats.md).
+
 Select any combination of backends. The input can be a file or directory;
 outputs go under `build/generated/<language>`. Regeneration removes stale
 bindings. Edit schemas and regenerate instead of editing generated files.
@@ -58,7 +64,8 @@ their terminator on the same line. See [comments](docs/schema.md#comments-and-ge
 
 ## Build and validation
 
-The generator and Python runtime use Python 3 and its standard library. Other
+The generator's SDL/JSON/XSD paths and Python runtime use Python's standard library;
+YAML support requires optional PyYAML. XSD export uses Python 3.9+. Other
 backends need a C99 compiler, Rust/Cargo, a JDK, GNAT, and Matlab or GNU Octave.
 C requires 8-bit bytes and IEEE-754 binary32/binary64. Java bindings target Java
 7 features; tests use the compiler’s default source/target settings. Java required
@@ -115,6 +122,9 @@ On the Termux development environment, source `~/.bashrc` before using the JDK.
 
 ## Examples
 
+- [Multiformat compilation](examples/multiformat/README.md) checks symmetric
+  SDL → mixed → SDL and mixed → SDL → mixed conversions across all six code
+  generators and Python binary exchanges.
 - [C](examples/abc-c/README.md), [Rust](examples/abc-rust/README.md),
   [Python](examples/abc-python/README.md), [Java](examples/abc-java/README.md),
   and [Ada](examples/abc-ada/README.md)

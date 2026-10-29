@@ -1,5 +1,8 @@
 # SDL examples
 
+- [`multiformat`](multiformat/README.md): symmetric SDL → mixed → SDL and
+  mixed → SDL → mixed round trips, with identical bindings in six languages,
+  SDL2 catalogues and binary exchanges in Python.
 - [`abc-c`](abc-c/README.md), [`abc-rust`](abc-rust/README.md),
   [`abc-java`](abc-java/README.md), and [`abc-python`](abc-python/README.md):
   operationally matching three-thread

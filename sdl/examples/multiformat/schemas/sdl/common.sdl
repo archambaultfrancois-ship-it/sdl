@@ -1,0 +1,9 @@
+package multiformat;
+
+const AXES = 3;
+alias Sample = fl32;
+
+enum State {
+   IDLE = 0;
+   READY = 1;
+}

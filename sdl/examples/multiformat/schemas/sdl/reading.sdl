@@ -1,0 +1,9 @@
+package multiformat;
+
+message Reading {
+   Sensor sensor;
+   State state;
+   Sample[AXES] acceleration;
+   packed Sample samples wire(bits=12,q=0.25);
+   optional string note;
+}
