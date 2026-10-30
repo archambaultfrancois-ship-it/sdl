@@ -7,7 +7,7 @@ import socketserver
 import struct
 import threading
 
-from sdl_runtime import (decode, decode_dynamic, description, encode, prepare,
+from sdl_runtime import (decode_dynamic, description, encode, prepare,
                          catalogue_id as sdl_catalogue_id, message_names, CodecError,
                          pack_envelope as sdl_pack_envelope, unpack_envelope as sdl_unpack_envelope)
 

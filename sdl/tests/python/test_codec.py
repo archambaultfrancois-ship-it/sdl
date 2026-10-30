@@ -8,7 +8,7 @@ from sdl_runtime import (CodecError, Complex32, Complex64, SdlMessage,
 from wire_example import Packet
 from codec_cases import CodecCases, State, EnumRecord, EnumRecordBatch
 from schema import (RootPayload, FixedItem, VarItem, FixedBoard, FixedRow,
-   FixedVector, AnonymousEnvelope)
+   AnonymousEnvelope)
 from empty_message import EmptyMessage
 
 FIXTURES = pathlib.Path(__file__).resolve().parents[1] / 'fixtures'
@@ -42,7 +42,6 @@ class CodecTests(unittest.TestCase):
    def test_01_codec_largest_fixed_message(self):
       import os
       from unittest.mock import patch
-      import sdl_runtime as runtime
       from bench_cases import BenchSmall, BenchRecord, BenchPose, BenchVector
       cases = [
          (BenchSmall(active=True, sequence=123, code=-2), struct.pack('>Bi h', 1, 123, -2)),

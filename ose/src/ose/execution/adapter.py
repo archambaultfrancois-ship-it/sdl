@@ -7,7 +7,6 @@ from ose.codec.sdl2 import SDL2
 from ose.delivery.buffers import Buffer
 from ose.delivery.policies import SubscriptionPolicy
 from ose.delivery.stores import MemoryStore
-from ose.execution import ipc
 from ose.parameters.bindings import RemoteBindings, updates
 from ose.execution.process import start_component, tick_events, stop_component
 from ose.execution.scheduler import Scheduler, reserve_snapshot
@@ -37,7 +36,6 @@ class Adapter:
             self.buffers[sub["to"].split(".")[1]] = Buffer(policy, store)
         self.scheduler = Scheduler(self.node, self.buffers)
         self.timings = TickTimings()
-        self.running = True
         self.started_at = time.monotonic()
         self.timed_ticks, self.tick_index, self.activated_at_ns = False, 0, 0
 
@@ -170,7 +168,7 @@ class Adapter:
                     self.data_clients[identity] = client
                     await client.request("attach", node=self.name, subscription=identity)
             self.parameters = await RemoteBindings(self.node, self.client.request, self.activity).open()
-            self.component_recording = RemoteRecording(self.name, self.codec, self.client.request)
+            self.component_recording = RemoteRecording(self.codec, self.client.request)
             self.process, self.timed_ticks = await start_component(self.node, self.parameters, self.component_recording.endpoint)
             await self.client.request("ready")
             # Supervisor activates delivery only after every component is ready.

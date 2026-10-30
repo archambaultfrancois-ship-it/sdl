@@ -18,7 +18,6 @@ sys.path.insert(0, str(ROOT / 'sdlc'))
 from mcap.data_stream import RecordBuilder
 from mcap.reader import make_reader
 from mcap.records import Channel, Chunk, DataEnd, Footer, Header, Message, Schema
-from mcap.stream_reader import StreamReader
 from mcap.writer import CompressionType, Writer
 from generator import MsgParser
 from python_backend import PythonBackend

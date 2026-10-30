@@ -55,7 +55,7 @@ def main():
     sys.path[:0]=[str(ROOT/'runtime/filter/python'),str(OUT/'release'),str(ROOT/'runtime/python'),str(OUT/'generated/python')]
     cases=json.loads((ROOT/'tests/filter/cases.json').read_text());cases_files(cases)
     from telemetry.model import Sample
-    from sdl_runtime import description,prepare,encode,decode
+    from sdl_runtime import description,prepare,encode
     from sdl_filter import Filter,Status,encode_filtered,decode_filtered
     value=sample();catalogue=description(Sample);context=prepare(catalogue,Sample);wire=encode(context,value);(OUT/'golden.bin').write_bytes(wire)
     for expression,a,b in cases:

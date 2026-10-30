@@ -56,8 +56,8 @@ class ComponentRecording:
 
 class RemoteRecording:
     """Bounded adapter queue and independent control polling for the local broker."""
-    def __init__(self, name, codec, request):
-        self.name, self.codec, self.request = name, codec, request
+    def __init__(self, codec, request):
+        self.request = request
         self.active = set()
         self.queue = asyncio.Queue(maxsize=64)
         self.bytes = 0

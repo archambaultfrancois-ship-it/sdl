@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from sdl_runtime import description
-from contracts import DEFAULT_CONTRACT, TopicContract, load_contract
+from contracts import DEFAULT_CONTRACT, load_contract
 from resolution import IntegrationError
 from temperature_v1 import Temperature as V1
 from temperature_v2 import Temperature as V2

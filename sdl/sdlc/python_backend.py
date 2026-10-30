@@ -68,14 +68,6 @@ class PythonBackend:
                   message_name + ': ' + field.name + ' and ' + generated_fields[generated])
             generated_fields[generated] = field.name
 
-   def _python_type(self, type_name):
-      types = {
-         'bool': 'bool', 'int8': 'int', 'uint8': 'int', 'int16': 'int', 'uint16': 'int', 'int32': 'int', 'uint32': 'int',
-         'int64': 'int', 'uint64': 'int', 'fl32': 'float', 'fl64': 'float',
-         'c32': 'Complex32', 'c64': 'Complex64', 'string': 'str',
-      }
-      return types.get(type_name, c_identifier(type_name))
-
    def generate(self):
       self._validate_python_identifiers()
       output = [

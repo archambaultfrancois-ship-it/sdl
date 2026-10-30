@@ -87,7 +87,7 @@ class ComponentEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("dsp.bad", endpoint.points)
 
     async def test_adapter_queue_is_bounded_without_awaiting_network(self):
-        remote = RemoteRecording("source", None, Mock())
+        remote = RemoteRecording(None, Mock())
         for _ in range(1000):
             remote.emit("dsp.fft", {}, b"value")
         self.assertEqual(remote.queue.qsize(), 64)

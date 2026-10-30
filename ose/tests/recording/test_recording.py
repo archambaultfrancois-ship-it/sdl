@@ -16,7 +16,6 @@ from ose.codec.sdl2 import SDL2
 from ose.execution.broker import Broker
 from ose.recording.recorder import Recorder
 from ose.recording.console import Console
-from ose.transport.secure import connect
 from sdl_recording import RecordingReader
 
 SDL_ROOT = os.environ["SDL_ROOT"]

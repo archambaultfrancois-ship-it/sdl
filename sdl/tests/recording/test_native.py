@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from test_recording import (ROOT, V1, V2, Q, RecordingReader, RecordingWriter, description,
-                            encode, prepare, raw_recording, Header, Schema, Channel, Message, Chunk)
+                            encode, prepare, raw_recording, Schema, Channel, Message, Chunk)
 
 LIBRARY = Path(os.environ.get('SDL_RECORDING_LIBRARY', ROOT / 'build/recording/release/libsdl_recording.so'))
 class Bytes(C.Structure):

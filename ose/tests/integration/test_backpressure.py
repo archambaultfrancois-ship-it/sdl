@@ -14,7 +14,6 @@ from ose.codec.sdl2 import SDL2
 from ose.delivery.policies import SubscriptionPolicy as Policy
 from ose.execution.adapter import Adapter
 from ose.execution.broker import Broker
-from ose.transport.tcp import Client
 
 SDL_ROOT = os.environ.get("SDL_ROOT")
 CATALOGUE = "SDL2|Measurement{1:uint64:sequence;2:fl64:value;}"
@@ -193,7 +192,7 @@ class BackpressureTests(unittest.IsolatedAsyncioTestCase):
             if op == "D":
                 entered.set()
                 await release.wait()
-        with patch("ose.execution.adapter.ipc.send", blocked_send):
+        with patch("ose.execution.process.ipc.send", blocked_send):
             working = self.spawn(adapter._work())
             await asyncio.wait_for(entered.wait(), 1)
             right = adapter.buffers["right"]

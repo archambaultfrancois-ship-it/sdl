@@ -11,7 +11,7 @@ import unittest
 import zlib
 from test_recording import (ROOT, Q, V1, V2, RecordingReader, RecordingWriter, RecordingError,
                            description, encode, prepare, replay, Header, Schema, Channel, Message)
-from test_native import LIBRARY, Bytes, Record, load
+from test_native import LIBRARY, Bytes, load
 from sdl_recording import convert_recording
 
 # Independent encoder of the documented framing; intentionally does not use

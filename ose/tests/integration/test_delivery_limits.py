@@ -8,9 +8,7 @@ import struct
 import socket
 import sys
 import tempfile
-from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
 
 from ose.codec.sdl2 import SDL2
 from ose.delivery.policies import SubscriptionPolicy as Policy

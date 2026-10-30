@@ -3,7 +3,6 @@
 
 import os
 import json
-import re
 
 from generator import (c_identifier, canonical_type_descriptor,
    clear_generated_outputs, parse_schemas, local_type_name, package_output, validate_package_paths,

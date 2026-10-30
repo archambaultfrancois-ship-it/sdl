@@ -7,7 +7,7 @@ import struct
 import subprocess
 import tempfile
 import unittest
-from ose.modeling.compiler import build, compile_plan
+from ose.modeling.compiler import build
 from ose.execution.ipc import frame, port_data, unpack_port
 from ose.codec.sdl2 import SDL2
 from generation_cases import check_generation

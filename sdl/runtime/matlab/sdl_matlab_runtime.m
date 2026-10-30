@@ -297,35 +297,6 @@ end
 if host_little()&&unit>1,b=reshape(b,unit,[]);b=flipud(b);b=b(:);end
 b=uint8(b(:));
 end
-function b=pack_raw(t,x)
-check_unsigned(t,x);
-switch t
-case 'bool',b=uint8(logical(x));
-case {'int8','int16','int32','int64','uint8','uint16','uint32','uint64'},b=typecast(cast(x,t),'uint8');
-case {'fl32','fl64'},if strcmp(t,'fl32'),x=single(x);else,x=double(x);end;b=typecast(x,'uint8');
-case {'c32','c64'},if strcmp(t,'c32'),z=single([real(x),imag(x)]);else,z=double([real(x),imag(x)]);end;b=typecast(z,'uint8');
-end
-if host_little()
- if any(strcmp(t,{'c32','c64'})),unit=type_size(t)/2;else,unit=type_size(t);end
- if unit>1,b=reshape(b,unit,[]);b=flipud(b);b=b(:);end
-end
-b=uint8(b(:));
-end
-function x=unpack_value(t,b,is_enum)
-sz=type_size(t);if (~isempty(sz)&&numel(b)~=sz),error('SDL:Malformed',['invalid scalar size for ' t]);end
-if host_little()
- if any(strcmp(t,{'c32','c64'})),unit=sz/2;else,unit=sz;end
- if unit>1,b=reshape(b,unit,[]);b=flipud(b);b=b(:);end
-end
-switch t
-case 'bool',if b(1)>1,error('SDL:Malformed','invalid bool');end;x=logical(b(1));
-case {'int8','int16','int32','int64','uint8','uint16','uint32','uint64'},x=typecast(uint8(b),t);
-case {'fl32','fl64'},if strcmp(t,'fl32'),x=typecast(uint8(b),'single');else,x=typecast(uint8(b),'double');end
-case {'c32','c64'},if strcmp(t,'c32'),z=typecast(uint8(b),'single');else,z=typecast(uint8(b),'double');end;x=complex(z(1),z(2));
-case 'string',if isempty(b),x='';else,x=native2unicode(uint8(b(:))','UTF-8');end
-otherwise,x=typecast(uint8(b),'int32');
-end
-end
 function out=unpack_packed_field(f,b)
 if ~isempty(f.terminal)
  recsize=0;sizes=zeros(numel(f.terminal),1);for z=1:numel(f.terminal),term=f.terminal{z};sizes(z)=type_size(term.type)*max(1,prod(term.dims));recsize=recsize+sizes(z);end
@@ -338,7 +309,7 @@ if ~isempty(f.terminal)
  end
 else
  sz=type_size(f.type);if isempty(sz)||mod(numel(b),sz),error('SDL:Malformed','invalid packed payload length');end
- count=numel(b)/sz;if any(strcmp(f.type,{'c32','c64'})),column_bytes=reshape(b,sz,count);else,column_bytes=reshape(b,sz,count);end;out=unpack_packed(f.type,column_bytes,f.enum);
+ count=numel(b)/sz;column_bytes=reshape(b,sz,count);out=unpack_packed(f.type,column_bytes,f.enum);
 end
 end
 function values=unpack_packed(t,columns,is_enum)

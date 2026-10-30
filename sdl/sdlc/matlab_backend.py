@@ -231,9 +231,6 @@ class MatlabBackend:
             terminal_meta + '})')
       return '{' + ','.join(entries) + '}'
 
-   def _string_cell(self, values):
-      return '{' + ','.join(_quote(value) for value in values) + '}'
-
    def _terminal_paths(self, type_name, prefix=''):
       paths = []
       for field in sorted(self.schema.messages[type_name].fields,
