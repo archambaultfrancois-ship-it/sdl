@@ -240,7 +240,9 @@ end Main;
         commands.append(tool('CC', 'cc') + ['-std=c99', '-O2', '-I' + str(runtime / 'c'), '-I' + str(sdk / 'c'), '-c', str(src), '-o', str(obj)])
     flags = shlex.split(os.environ.get('ADA_FLAGS', '-gnat2012 -gnata -O2'))
     rts = ['--RTS=' + os.environ['ADA_RTS']] if os.environ.get('ADA_RTS') else []
-    commands.append(tool('GNATMAKE', 'gnatmake') + flags + rts + ['-D', str(objects), '-I' + str(destination), '-I' + str(destination / 'types'),
+    # GNAT timestamps have second precision: rapid regeneration can otherwise
+    # reuse a body compiled against an older spec and leave callbacks undefined.
+    commands.append(tool('GNATMAKE', 'gnatmake') + flags + rts + ['-f', '-D', str(objects), '-I' + str(destination), '-I' + str(destination / 'types'),
                     '-I' + str(handler.parent), '-I' + str(runtime / 'ada'), '-I' + str(sdk / 'ada'), str(destination / 'main.adb'), '-o', str(destination / 'component'), '-largs'] + linked + ['-lm'])
     return {'types': types, 'command': [str(destination / 'component')], 'build': commands}
 

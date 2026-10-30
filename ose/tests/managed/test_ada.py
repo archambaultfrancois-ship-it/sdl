@@ -7,6 +7,8 @@ import struct
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
+from ose.modeling import ada_containers
 from ose.modeling.compiler import build
 from ose.execution.ipc import frame, port_data, unpack_port
 from ose.codec.sdl2 import SDL2
@@ -75,6 +77,9 @@ end Sink_Handler;
             self.assertNotEqual(result.returncode, 0); self.assertEqual([op for op, _ in frames], ['R'])
 
     def test_snapshot_override_and_failed_callback_do_not_finish(self):
+        api = self.root / 'build/components/sink'
+        timestamps = {api / ('ose_sink' + suffix): (api / ('ose_sink' + suffix)).stat().st_mtime_ns
+                      for suffix in ('.ads', '.adb')}
         model = json.loads((self.root / 'model.json').read_text())
         model['components']['sink']['inputs'].update(second={'root': 'Measurement'}, optional={'root': 'Measurement', 'required': False})
         model['subscriptions'].append({'id': 'second', 'from': 'source.value', 'to': 'sink.second'})
@@ -97,7 +102,16 @@ end Sink_Handler;
  end;
 end Sink_Handler;
 """)
-        path = build(self.root / 'model.json', self.root / 'deployment.json', SDL, self.root / 'build')
+        generate = ada_containers.generate
+        def regenerate_with_same_timestamps(*args, **kwargs):
+            generated = generate(*args, **kwargs)
+            # Reproduce a rebuild within GNAT's timestamp resolution regardless
+            # of compiler speed or scheduling on the CI runner.
+            for source, timestamp in timestamps.items():
+                os.utime(source, ns=(timestamp, timestamp))
+            return generated
+        with patch.object(ada_containers, 'generate', side_effect=regenerate_with_same_timestamps):
+            path = build(self.root / 'model.json', self.root / 'deployment.json', SDL, self.root / 'build')
         self.plan = json.loads(path.read_text())
         _, source = self.run_node('source', frame('T'))
         payload = unpack_port(source[1][1])[1]; cat = self.plan['components']['source']['outputs']['value']['catalogue']
